@@ -1,0 +1,38 @@
+# Build
+build/
+bin/
+out/
+cmake-build-*/
+
+# IDE
+.vs/
+.vscode/
+*.user
+*.suo
+*.sln
+*.vcxproj*
+.idea/
+*.swp
+*~
+CMakeSettings.json
+
+# Compiled
+*.o
+*.obj
+*.exe
+*.dll
+*.lib
+*.a
+*.so
+*.dylib
+*.pdb
+*.ilk
+*.exp
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# vcpkg
+vcpkg_installed/
