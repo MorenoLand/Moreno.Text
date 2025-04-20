@@ -1,0 +1,34 @@
+#pragma once
+#include <SDL2/SDL.h>
+#include <string>
+
+struct TitlebarButton {
+    float x, y, w, h;
+    enum Type { CLOSE, MAXIMIZE, MINIMIZE } type;
+    bool hovered = false;
+};
+
+class Titlebar {
+public:
+    Titlebar() = default;
+    void init(int windowWidth);
+    void layout(int windowWidth);
+    void draw(class FontAtlas& font, float r, float g, float b, float a);
+    bool handleEvent(const SDL_Event& e, SDL_Window* window);
+    float height() const { return height_; }
+    bool isCustom() const { return custom_; }
+    void setCustom(bool c) { custom_ = c; }
+    void setTitle(const std::string& t) { title_ = t; }
+    SDL_HitTestResult hitTest(int mx, int my, SDL_Window* window);
+private:
+    float height_ = 32.f;
+    float buttonSize_ = 46.f;
+    float resizeEdge_ = 6.f;
+    TitlebarButton buttons_[3];
+    bool dragging_ = false;
+    bool custom_ = true;
+    int dragStartX_ = 0, dragStartY_ = 0;
+    int winStartX_ = 0, winStartY_ = 0;
+    std::string title_ = "Moreno Text";
+    void updateButtonPositions(int windowWidth);
+};

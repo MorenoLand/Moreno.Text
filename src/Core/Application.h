@@ -2,6 +2,8 @@
 #include <SDL2/SDL.h>
 #include <string>
 
+class Titlebar;
+
 struct AppPaths {
     std::string exeDir;
     std::string dataDir;
@@ -33,4 +35,6 @@ private:
     AppPaths paths_;
     bool running_ = true;
     std::string textBuffer;
+    Titlebar* titlebar_ = nullptr;
+    friend SDL_HitTestResult hitTestCallback(SDL_Window*, const SDL_Point*, void*);
 };

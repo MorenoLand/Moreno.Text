@@ -1,6 +1,7 @@
 #include "Core/Application.h"
 #include "Renderer/FontAtlas.h"
 #include "Renderer/GLRenderer.h"
+#include "UI/Titlebar.h"
 #include <SDL2/SDL.h>
 #include <GL/glew.h>
 #include <cstdio>
@@ -12,6 +13,12 @@
 #endif
 
 namespace fs = std::filesystem;
+
+static SDL_HitTestResult hitTestCallback(SDL_Window* win, const SDL_Point* area, void* userdata) {
+    auto* app = static_cast<Application*>(userdata);
+    auto* tb = app->titlebar_;
+    return tb ? tb->hitTest(area->x, area->y, win) : SDL_HITTEST_NORMAL;
+}
 
 Application& Application::instance() {
     static Application app;
@@ -70,7 +77,7 @@ bool Application::init(int argc, char** argv) {
         "Moreno Text",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         1280, 720,
-        SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI
+        SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_BORDERLESS
     );
     if (!window_) {
         fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
@@ -103,6 +110,9 @@ bool Application::init(int argc, char** argv) {
         fprintf(stderr, "Font atlas init failed\n");
         return false;
     }
+    titlebar_ = new Titlebar();
+    titlebar_->init(w);
+    SDL_SetWindowHitTest(window_, hitTestCallback, this);
     SDL_StartTextInput();
     return true;
 }
@@ -150,10 +160,12 @@ void Application::handleEvents() {
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
         if (e.type == SDL_QUIT) running_ = false;
+        else if (titlebar_->handleEvent(e, window_)) continue;
         else if (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
             int w, h;
             SDL_GL_GetDrawableSize(window_, &w, &h);
             GLRenderer::resize(w, h);
+            titlebar_->layout(w);
         } else if (e.type == SDL_TEXTINPUT) {
             textBuffer += e.text.text;
         } else if (e.type == SDL_KEYDOWN) {
@@ -175,7 +187,9 @@ void Application::update() {}
 
 void Application::render() {
     GLRenderer::beginFrame();
-    float y = 10.0f;
+    titlebar_->draw(fontAtlas(), 0, 0, 0, 0);
+    float tbH = titlebar_->height();
+    float y = tbH + 10.0f;
     size_t lineStart = 0;
     while (lineStart <= textBuffer.size()) {
         size_t lineEnd = textBuffer.find('\n', lineStart);
