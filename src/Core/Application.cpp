@@ -4,15 +4,31 @@
 #include "UI/Titlebar.h"
 #include <SDL2/SDL.h>
 #include <GL/glew.h>
+#include <GL/glew.h>
 #include <cstdio>
 #include <filesystem>
 #include <cstdlib>
+#include <vector>
+#include <algorithm>
+
+extern GLuint gl_shaderProgram();
+extern GLuint gl_vao();
+extern GLuint gl_vbo();
 
 #ifdef _WIN32
 #include <windows.h>
 #endif
 
 namespace fs = std::filesystem;
+
+static uint32_t decodeUtf8Static(std::string_view t, size_t& i) {
+    uint32_t cp = static_cast<uint8_t>(t[i]);
+    if (cp >= 0xF0 && i+3 < t.size()) { cp = (cp&0x07)<<18 | (t[i+1]&0x3F)<<12 | (t[i+2]&0x3F)<<6 | (t[i+3]&0x3F); i+=4; }
+    else if (cp >= 0xE0 && i+2 < t.size()) { cp = (cp&0x0F)<<12 | (t[i+1]&0x3F)<<6 | (t[i+2]&0x3F); i+=3; }
+    else if (cp >= 0xC0 && i+1 < t.size()) { cp = (cp&0x1F)<<6 | (t[i+1]&0x3F); i+=2; }
+    else { ++i; }
+    return cp;
+}
 
 static SDL_HitTestResult hitTestCallback(SDL_Window* win, const SDL_Point* area, void* userdata) {
     auto* app = static_cast<Application*>(userdata);
@@ -189,18 +205,44 @@ void Application::render() {
     GLRenderer::beginFrame();
     titlebar_->draw(fontAtlas(), 0, 0, 0, 0);
     float tbH = titlebar_->height();
-    float y = tbH + 10.0f;
+    float y = tbH + fontAtlas().ascent() + 4.0f;
+    float lineStep = fontAtlas().lineHeight();
     size_t lineStart = 0;
     while (lineStart <= textBuffer.size()) {
         size_t lineEnd = textBuffer.find('\n', lineStart);
         if (lineEnd == std::string::npos) lineEnd = textBuffer.size();
         std::string_view line(textBuffer.data() + lineStart, lineEnd - lineStart);
         fontAtlas().drawText(line, 10.0f, y, 0.85f, 0.85f, 0.85f, 1.0f);
-        y += fontAtlas().lineHeight();
+        y += lineStep;
         lineStart = lineEnd + 1;
         if (y > 720) break;
     }
-    fontAtlas().drawText("|", 10.0f, y, 0.5f, 0.8f, 1.0f, 1.0f);
+    // cursor at end of last line
+    float cursorX = 10.0f;
+    size_t lastLineStart = textBuffer.rfind('\n');
+    if (lastLineStart != std::string::npos) {
+        std::string_view lastLine(textBuffer.data() + lastLineStart + 1);
+        for (size_t i = 0; i < lastLine.size();) cursorX += fontAtlas().getGlyph(decodeUtf8Static(lastLine, i)).advance;
+    } else {
+        for (size_t i = 0; i < textBuffer.size();) cursorX += fontAtlas().getGlyph(decodeUtf8Static(textBuffer, i)).advance;
+    }
+    // draw thin cursor bar
+    float curH = fontAtlas().lineHeight() - 4;
+    float curY = y;
+    std::vector<float> cv = {
+        cursorX, curY, 0, 0, 0.5f, 0.8f, 1.0f, 1.0f,
+        cursorX, curY + curH, 0, 0, 0.5f, 0.8f, 1.0f, 1.0f,
+        cursorX + 2, curY + curH, 0, 0, 0.5f, 0.8f, 1.0f, 1.0f,
+        cursorX, curY, 0, 0, 0.5f, 0.8f, 1.0f, 1.0f,
+        cursorX + 2, curY + curH, 0, 0, 0.5f, 0.8f, 1.0f, 1.0f,
+        cursorX + 2, curY, 0, 0, 0.5f, 0.8f, 1.0f, 1.0f
+    };
+    glBindVertexArray(gl_vao());
+    glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
+    glBufferData(GL_ARRAY_BUFFER, cv.size() * sizeof(float), cv.data(), GL_DYNAMIC_DRAW);
+    glBindTexture(GL_TEXTURE_2D, fontAtlas().atlasTexture());
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glBindVertexArray(0);
     GLRenderer::endFrame();
     SDL_GL_SwapWindow(window_);
 }
