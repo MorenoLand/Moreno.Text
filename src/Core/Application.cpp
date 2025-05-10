@@ -226,16 +226,16 @@ void Application::render() {
     } else {
         for (size_t i = 0; i < textBuffer.size();) cursorX += fontAtlas().getGlyph(decodeUtf8Static(textBuffer, i)).advance;
     }
-    // draw thin cursor bar
-    float curH = fontAtlas().lineHeight() - 4;
-    float curY = y;
+    // draw thin cursor bar — baseline-anchored, spanning ascent to descent
+    float curTop = y - fontAtlas().ascent();
+    float curBot = y - fontAtlas().descent();
     std::vector<float> cv = {
-        cursorX, curY, 0, 0, 0.5f, 0.8f, 1.0f, 1.0f,
-        cursorX, curY + curH, 0, 0, 0.5f, 0.8f, 1.0f, 1.0f,
-        cursorX + 2, curY + curH, 0, 0, 0.5f, 0.8f, 1.0f, 1.0f,
-        cursorX, curY, 0, 0, 0.5f, 0.8f, 1.0f, 1.0f,
-        cursorX + 2, curY + curH, 0, 0, 0.5f, 0.8f, 1.0f, 1.0f,
-        cursorX + 2, curY, 0, 0, 0.5f, 0.8f, 1.0f, 1.0f
+        cursorX, curTop, 0, 0, 0.5f, 0.8f, 1.0f, 1.0f,
+        cursorX, curBot, 0, 0, 0.5f, 0.8f, 1.0f, 1.0f,
+        cursorX + 2, curBot, 0, 0, 0.5f, 0.8f, 1.0f, 1.0f,
+        cursorX, curTop, 0, 0, 0.5f, 0.8f, 1.0f, 1.0f,
+        cursorX + 2, curBot, 0, 0, 0.5f, 0.8f, 1.0f, 1.0f,
+        cursorX + 2, curTop, 0, 0, 0.5f, 0.8f, 1.0f, 1.0f
     };
     glBindVertexArray(gl_vao());
     glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
