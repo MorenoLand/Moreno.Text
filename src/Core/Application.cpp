@@ -227,8 +227,8 @@ void Application::render() {
         for (size_t i = 0; i < textBuffer.size();) cursorX += fontAtlas().getGlyph(decodeUtf8Static(textBuffer, i)).advance;
     }
     // draw thin cursor bar — baseline-anchored, spanning ascent to descent
-    float curTop = y - fontAtlas().ascent();
-    float curBot = y - fontAtlas().descent();
+    float curTop = y - lineStep - fontAtlas().ascent();
+    float curBot = y - lineStep - fontAtlas().descent();
     std::vector<float> cv = {
         cursorX, curTop, 0, 0, 0.5f, 0.8f, 1.0f, 1.0f,
         cursorX, curBot, 0, 0, 0.5f, 0.8f, 1.0f, 1.0f,
