@@ -21,15 +21,6 @@ extern GLuint gl_vbo();
 
 namespace fs = std::filesystem;
 
-static uint32_t decodeUtf8Static(std::string_view t, size_t& i) {
-    uint32_t cp = static_cast<uint8_t>(t[i]);
-    if (cp >= 0xF0 && i+3 < t.size()) { cp = (cp&0x07)<<18 | (t[i+1]&0x3F)<<12 | (t[i+2]&0x3F)<<6 | (t[i+3]&0x3F); i+=4; }
-    else if (cp >= 0xE0 && i+2 < t.size()) { cp = (cp&0x0F)<<12 | (t[i+1]&0x3F)<<6 | (t[i+2]&0x3F); i+=3; }
-    else if (cp >= 0xC0 && i+1 < t.size()) { cp = (cp&0x1F)<<6 | (t[i+1]&0x3F); i+=2; }
-    else { ++i; }
-    return cp;
-}
-
 static SDL_HitTestResult hitTestCallback(SDL_Window* win, const SDL_Point* area, void* userdata) {
     auto* app = static_cast<Application*>(userdata);
     auto* tb = app->titlebar_;
@@ -217,15 +208,13 @@ void Application::render() {
         lineStart = lineEnd + 1;
         if (y > 720) break;
     }
-    // cursor at end of last line
+    // cursor X — measure exact pixel width of line text up to cursor
     float cursorX = 10.0f;
     size_t lastLineStart = textBuffer.rfind('\n');
-    if (lastLineStart != std::string::npos) {
-        std::string_view lastLine(textBuffer.data() + lastLineStart + 1);
-        for (size_t i = 0; i < lastLine.size();) cursorX += fontAtlas().getGlyph(decodeUtf8Static(lastLine, i)).advance;
-    } else {
-        for (size_t i = 0; i < textBuffer.size();) cursorX += fontAtlas().getGlyph(decodeUtf8Static(textBuffer, i)).advance;
-    }
+    std::string_view cursorLine = (lastLineStart != std::string::npos)
+        ? std::string_view(textBuffer.data() + lastLineStart + 1)
+        : std::string_view(textBuffer);
+    cursorX += fontAtlas().measureText(cursorLine);
     // draw thin cursor bar — baseline-anchored, spanning ascent to descent
     float curTop = y - lineStep - fontAtlas().ascent();
     float curBot = y - lineStep - fontAtlas().descent();

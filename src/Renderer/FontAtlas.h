@@ -24,6 +24,7 @@ public:
     void destroy();
     const AtlasGlyph& getGlyph(uint32_t codepoint);
     void drawText(std::string_view text, float x, float y, float r, float g, float b, float a);
+    float measureText(std::string_view text) const;
     float lineHeight() const { return lineHeight_; }
     float ascent() const { return ascent_; }
     float descent() const { return descent_; }
