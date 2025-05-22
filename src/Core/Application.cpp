@@ -196,8 +196,10 @@ void Application::render() {
     GLRenderer::beginFrame();
     titlebar_->draw(fontAtlas(), 0, 0, 0, 0);
     float tbH = titlebar_->height();
-    float y = tbH + fontAtlas().ascent() + 4.0f;
+    float textOriginY = tbH + fontAtlas().ascent() + 4.0f;
+    float y = textOriginY;
     float lineStep = fontAtlas().lineHeight();
+    size_t lineCount = 0;
     size_t lineStart = 0;
     while (lineStart <= textBuffer.size()) {
         size_t lineEnd = textBuffer.find('\n', lineStart);
@@ -205,6 +207,7 @@ void Application::render() {
         std::string_view line(textBuffer.data() + lineStart, lineEnd - lineStart);
         fontAtlas().drawText(line, 10.0f, y, 0.85f, 0.85f, 0.85f, 1.0f);
         y += lineStep;
+        ++lineCount;
         lineStart = lineEnd + 1;
         if (y > 720) break;
     }
@@ -215,9 +218,10 @@ void Application::render() {
         ? std::string_view(textBuffer.data() + lastLineStart + 1)
         : std::string_view(textBuffer);
     cursorX += fontAtlas().measureText(cursorLine);
-    // draw thin cursor bar — baseline-anchored, spanning ascent to descent
-    float curTop = y - lineStep - fontAtlas().ascent();
-    float curBot = y - lineStep - fontAtlas().descent();
+    // cursor Y = same origin as text, row = lineCount-1 (or 0 if empty)
+    float cursorY = textOriginY + static_cast<float>((lineCount > 0 ? lineCount - 1 : 0)) * lineStep;
+    float curTop = cursorY - fontAtlas().ascent();
+    float curBot = cursorY - fontAtlas().descent();
     std::vector<float> cv = {
         cursorX, curTop, 0, 0, 0.5f, 0.8f, 1.0f, 1.0f,
         cursorX, curBot, 0, 0, 0.5f, 0.8f, 1.0f, 1.0f,
