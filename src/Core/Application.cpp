@@ -218,17 +218,18 @@ void Application::render() {
         ? std::string_view(textBuffer.data() + lastLineStart + 1)
         : std::string_view(textBuffer);
     cursorX += fontAtlas().measureText(cursorLine);
-    // cursor Y = same origin as text, row = lineCount-1 (or 0 if empty)
     float cursorY = textOriginY + static_cast<float>((lineCount > 0 ? lineCount - 1 : 0)) * lineStep;
-    float curTop = cursorY - fontAtlas().ascent();
-    float curBot = cursorY - fontAtlas().descent();
+    // cursor spans line top to line bottom — same Y range as glyph rendering
+    // drawText uses y=lineTop, baseline=y+ascent, glyph top=y+ascent-bearingY
+    float curTop = cursorY;
+    float curBot = cursorY + fontAtlas().ascent() - fontAtlas().descent();
     std::vector<float> cv = {
-        cursorX, curTop, 0, 0, 0.5f, 0.8f, 1.0f, 1.0f,
-        cursorX, curBot, 0, 0, 0.5f, 0.8f, 1.0f, 1.0f,
-        cursorX + 2, curBot, 0, 0, 0.5f, 0.8f, 1.0f, 1.0f,
-        cursorX, curTop, 0, 0, 0.5f, 0.8f, 1.0f, 1.0f,
-        cursorX + 2, curBot, 0, 0, 0.5f, 0.8f, 1.0f, 1.0f,
-        cursorX + 2, curTop, 0, 0, 0.5f, 0.8f, 1.0f, 1.0f
+        cursorX, curTop, 0, 0, 0.0f, 1.0f, 0.0f, 1.0f,
+        cursorX, curBot, 0, 0, 0.0f, 1.0f, 0.0f, 1.0f,
+        cursorX + 3, curBot, 0, 0, 0.0f, 1.0f, 0.0f, 1.0f,
+        cursorX, curTop, 0, 0, 0.0f, 1.0f, 0.0f, 1.0f,
+        cursorX + 3, curBot, 0, 0, 0.0f, 1.0f, 0.0f, 1.0f,
+        cursorX + 3, curTop, 0, 0, 0.0f, 1.0f, 0.0f, 1.0f
     };
     glBindVertexArray(gl_vao());
     glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
