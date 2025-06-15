@@ -3,6 +3,7 @@
 #include <string>
 
 class Titlebar;
+class Gutter;
 
 struct AppPaths {
     std::string exeDir;
@@ -36,5 +37,6 @@ private:
     bool running_ = true;
     std::string textBuffer;
     Titlebar* titlebar_ = nullptr;
+    Gutter* gutter_ = nullptr;
     friend SDL_HitTestResult hitTestCallback(SDL_Window*, const SDL_Point*, void*);
 };

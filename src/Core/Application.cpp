@@ -2,7 +2,10 @@
 #include "Renderer/FontAtlas.h"
 #include "Renderer/GLRenderer.h"
 #include "UI/Titlebar.h"
+#include "UI/Gutter.h"
+#include "Platform/Platform.h"
 #include <SDL2/SDL.h>
+#include <SDL2/SDL_syswm.h>
 #include <GL/glew.h>
 #include <GL/glew.h>
 #include <cstdio>
@@ -118,8 +121,16 @@ bool Application::init(int argc, char** argv) {
         return false;
     }
     titlebar_ = new Titlebar();
+    gutter_ = new Gutter();
     titlebar_->init(w);
     SDL_SetWindowHitTest(window_, hitTestCallback, this);
+    SDL_SysWMinfo wmInfo;
+    SDL_VERSION(&wmInfo.version);
+    if (SDL_GetWindowWMInfo(window_, &wmInfo)) {
+#ifdef _WIN32
+        Platform::setRoundedCorners(reinterpret_cast<void*>(wmInfo.info.win.window), 8);
+#endif
+    }
     SDL_StartTextInput();
     return true;
 }
@@ -196,31 +207,40 @@ void Application::render() {
     GLRenderer::beginFrame();
     titlebar_->draw(fontAtlas(), 0, 0, 0, 0);
     float tbH = titlebar_->height();
+    int ww, wh;
+    SDL_GL_GetDrawableSize(window_, &ww, &wh);
     float textOriginY = tbH + fontAtlas().ascent() + 4.0f;
-    float y = textOriginY;
     float lineStep = fontAtlas().lineHeight();
-    size_t lineCount = 0;
+    // count lines
+    size_t lineCount = 1;
+    for (char c : textBuffer) if (c == '\n') ++lineCount;
+    size_t currentLine = lineCount - 1;
+    // draw gutter
+    gutter_->draw(fontAtlas(), lineCount, currentLine, textOriginY, lineStep, static_cast<float>(wh), tbH);
+    float gutterW = gutter_->width();
+    float textX = gutterW + 8.0f;
+    // draw text lines
+    float y = textOriginY;
+    size_t lineIdx = 0;
     size_t lineStart = 0;
     while (lineStart <= textBuffer.size()) {
         size_t lineEnd = textBuffer.find('\n', lineStart);
         if (lineEnd == std::string::npos) lineEnd = textBuffer.size();
         std::string_view line(textBuffer.data() + lineStart, lineEnd - lineStart);
-        fontAtlas().drawText(line, 10.0f, y, 0.85f, 0.85f, 0.85f, 1.0f);
+        fontAtlas().drawText(line, textX, y, 0.85f, 0.85f, 0.85f, 1.0f);
         y += lineStep;
-        ++lineCount;
+        ++lineIdx;
         lineStart = lineEnd + 1;
-        if (y > 720) break;
+        if (y > wh) break;
     }
-    // cursor X — measure exact pixel width of line text up to cursor
-    float cursorX = 10.0f;
+    // cursor X
+    float cursorX = textX;
     size_t lastLineStart = textBuffer.rfind('\n');
     std::string_view cursorLine = (lastLineStart != std::string::npos)
         ? std::string_view(textBuffer.data() + lastLineStart + 1)
         : std::string_view(textBuffer);
     cursorX += fontAtlas().measureText(cursorLine);
     float cursorY = textOriginY + static_cast<float>((lineCount > 0 ? lineCount - 1 : 0)) * lineStep;
-    // cursor spans line top to line bottom — same Y range as glyph rendering
-    // drawText uses y=lineTop, baseline=y+ascent, glyph top=y+ascent-bearingY
     float curTop = cursorY;
     float curBot = cursorY + fontAtlas().ascent() - fontAtlas().descent();
     std::vector<float> cv = {
