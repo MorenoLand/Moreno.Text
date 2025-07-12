@@ -4,7 +4,7 @@
 
 struct TitlebarButton {
     float x, y, w, h;
-    enum Type { CLOSE, MAXIMIZE, MINIMIZE } type;
+    enum Type { CLOSE, MAXIMIZE, MINIMIZE, MENU } type;
     bool hovered = false;
 };
 
@@ -19,16 +19,19 @@ public:
     bool isCustom() const { return custom_; }
     void setCustom(bool c) { custom_ = c; }
     void setTitle(const std::string& t) { title_ = t; }
+    void loadIcon(const std::string& bmpPath);
     SDL_HitTestResult hitTest(int mx, int my, SDL_Window* window);
 private:
     float height_ = 32.f;
     float buttonSize_ = 46.f;
     float resizeEdge_ = 6.f;
-    TitlebarButton buttons_[3];
+    TitlebarButton buttons_[4];
     bool dragging_ = false;
     bool custom_ = true;
     int dragStartX_ = 0, dragStartY_ = 0;
     int winStartX_ = 0, winStartY_ = 0;
     std::string title_ = "Moreno Text";
+    unsigned int iconTex_ = 0;
+    int iconW_ = 0, iconH_ = 0;
     void updateButtonPositions(int windowWidth);
 };

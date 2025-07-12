@@ -3,10 +3,10 @@
 #include "Renderer/GLRenderer.h"
 #include "UI/Titlebar.h"
 #include "UI/Gutter.h"
+#include "UI/Minimap.h"
 #include "Platform/Platform.h"
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_syswm.h>
-#include <GL/glew.h>
 #include <GL/glew.h>
 #include <cstdio>
 #include <filesystem>
@@ -122,7 +122,18 @@ bool Application::init(int argc, char** argv) {
     }
     titlebar_ = new Titlebar();
     gutter_ = new Gutter();
+    minimap_ = new Minimap();
     titlebar_->init(w);
+    // set window icon from ICO
+    std::string iconPath = (fs::path(paths_.exeDir) / "Assets" / "moreno_text.ico").string();
+    if (!fs::exists(iconPath)) iconPath = (fs::path(paths_.exeDir) / ".." / "Assets" / "moreno_text.ico").string();
+    if (fs::exists(iconPath)) {
+        SDL_RWops* rw = SDL_RWFromFile(iconPath.c_str(), "rb");
+        if (rw) {
+            SDL_Surface* icon = SDL_LoadBMP_RW(rw, 1);
+            if (icon) { SDL_SetWindowIcon(window_, icon); SDL_FreeSurface(icon); }
+        }
+    }
     SDL_SetWindowHitTest(window_, hitTestCallback, this);
     SDL_SysWMinfo wmInfo;
     SDL_VERSION(&wmInfo.version);
@@ -186,6 +197,7 @@ void Application::handleEvents() {
             titlebar_->layout(w);
         } else if (e.type == SDL_TEXTINPUT) {
             textBuffer += e.text.text;
+            dirty_ = true;
         } else if (e.type == SDL_KEYDOWN) {
             auto mod = e.key.keysym.mod;
             auto sym = e.key.keysym.sym;
@@ -194,8 +206,23 @@ void Application::handleEvents() {
                 auto it = textBuffer.end(); --it;
                 while (it != textBuffer.begin() && (*it & 0xC0) == 0x80) { --it; }
                 textBuffer.erase(it, textBuffer.end());
+                dirty_ = true;
             } else if (sym == SDLK_RETURN) {
                 textBuffer += '\n';
+                dirty_ = true;
+            } else if (sym == SDLK_TAB) {
+                if (mod & KMOD_SHIFT) {
+                    // unindent: remove up to 4 leading spaces from current line
+                    size_t lastNL = textBuffer.rfind('\n');
+                    size_t lineStart = (lastNL == std::string::npos) ? 0 : lastNL + 1;
+                    int removed = 0;
+                    while (removed < 4 && lineStart + removed < textBuffer.size() && textBuffer[lineStart + removed] == ' ')
+                        ++removed;
+                    if (removed > 0) textBuffer.erase(lineStart, removed);
+                } else {
+                    textBuffer += "    ";
+                }
+                dirty_ = true;
             }
         }
     }
@@ -203,8 +230,17 @@ void Application::handleEvents() {
 
 void Application::update() {}
 
+void Application::updateTitle() {
+    std::string title = openFile_;
+    if (dirty_) title += "\xe2\x80\xa2";  // bullet dot for unsaved
+    title += " - Moreno Text";
+    titlebar_->setTitle(title);
+    SDL_SetWindowTitle(window_, title.c_str());
+}
+
 void Application::render() {
     GLRenderer::beginFrame();
+    updateTitle();
     titlebar_->draw(fontAtlas(), 0, 0, 0, 0);
     float tbH = titlebar_->height();
     int ww, wh;
@@ -257,6 +293,9 @@ void Application::render() {
     glBindTexture(GL_TEXTURE_2D, fontAtlas().atlasTexture());
     glDrawArrays(GL_TRIANGLES, 0, 6);
     glBindVertexArray(0);
+    // minimap
+    float minimapX = static_cast<float>(ww) - minimap_->width();
+    minimap_->draw(fontAtlas(), textBuffer, minimapX, textOriginY, static_cast<float>(wh), tbH, gutterW, lineStep);
     GLRenderer::endFrame();
     SDL_GL_SwapWindow(window_);
 }

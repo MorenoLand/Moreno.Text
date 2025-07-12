@@ -1,6 +1,7 @@
 #include "UI/Titlebar.h"
 #include "Renderer/FontAtlas.h"
 #include "Renderer/GLRenderer.h"
+#include "icon_data.h"
 #include <GL/glew.h>
 #include <cstdio>
 
@@ -9,10 +10,21 @@ extern GLuint gl_vao();
 extern GLuint gl_vbo();
 
 void Titlebar::init(int windowWidth) {
-    buttons_[0].type = TitlebarButton::MINIMIZE;
-    buttons_[1].type = TitlebarButton::MAXIMIZE;
-    buttons_[2].type = TitlebarButton::CLOSE;
+    buttons_[0].type = TitlebarButton::MENU;
+    buttons_[1].type = TitlebarButton::MINIMIZE;
+    buttons_[2].type = TitlebarButton::MAXIMIZE;
+    buttons_[3].type = TitlebarButton::CLOSE;
     layout(windowWidth);
+    // upload icon texture
+    if (!iconTex_ && icon_width > 0) {
+        glGenTextures(1, &iconTex_);
+        glBindTexture(GL_TEXTURE_2D, iconTex_);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, icon_width, icon_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, icon_data);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        iconW_ = icon_width;
+        iconH_ = icon_height;
+    }
 }
 
 void Titlebar::layout(int windowWidth) { updateButtonPositions(windowWidth); }
@@ -20,9 +32,10 @@ void Titlebar::layout(int windowWidth) { updateButtonPositions(windowWidth); }
 void Titlebar::updateButtonPositions(int ww) {
     float bw = buttonSize_;
     float bh = height_;
-    buttons_[2].x = ww - bw; buttons_[2].y = 0; buttons_[2].w = bw; buttons_[2].h = bh;
-    buttons_[1].x = ww - bw * 2; buttons_[1].y = 0; buttons_[1].w = bw; buttons_[1].h = bh;
-    buttons_[0].x = ww - bw * 3; buttons_[0].y = 0; buttons_[0].w = bw; buttons_[0].h = bh;
+    buttons_[3].x = ww - bw; buttons_[3].y = 0; buttons_[3].w = bw; buttons_[3].h = bh;
+    buttons_[2].x = ww - bw * 2; buttons_[2].y = 0; buttons_[2].w = bw; buttons_[2].h = bh;
+    buttons_[1].x = ww - bw * 3; buttons_[1].y = 0; buttons_[1].w = bw; buttons_[1].h = bh;
+    buttons_[0].x = 0; buttons_[0].y = 0; buttons_[0].w = 36; buttons_[0].h = bh;
 }
 
 void Titlebar::draw(FontAtlas& font, float r, float g, float b, float a) {
@@ -36,9 +49,10 @@ void Titlebar::draw(FontAtlas& font, float r, float g, float b, float a) {
         verts.insert(verts.end(), { x1,y0, 0,0, cr,cg,cb,ca });
     };
     // title bar background
-    addRect(0, 0, buttons_[0].x, height_, 0.16f, 0.16f, 0.19f, 1.f);
-    // buttons
-    for (auto& btn : buttons_) {
+    addRect(0, 0, buttons_[1].x, height_, 0.16f, 0.16f, 0.19f, 1.f);
+    // buttons (min, max, close)
+    for (int i = 1; i < 4; ++i) {
+        auto& btn = buttons_[i];
         if (btn.type == TitlebarButton::CLOSE) {
             float br = btn.hovered ? 0.85f : 0.35f;
             addRect(btn.x, btn.y, btn.x + btn.w, btn.y + btn.h, br, btn.hovered ? 0.15f : 0.15f, btn.hovered ? 0.15f : 0.18f, 1.f);
@@ -47,23 +61,62 @@ void Titlebar::draw(FontAtlas& font, float r, float g, float b, float a) {
             addRect(btn.x, btn.y, btn.x + btn.w, btn.y + btn.h, br, br, br + 0.03f, 1.f);
         }
     }
-    // title text
-    font.drawText(title_, 12.f, 6.f, 0.7f, 0.7f, 0.7f, 1.f);
+    // menu button bg
+    auto& menuBtn = buttons_[0];
+    float mbr = menuBtn.hovered ? 0.28f : 0.16f;
+    addRect(menuBtn.x, menuBtn.y, menuBtn.x + menuBtn.w, menuBtn.y + menuBtn.h, mbr, mbr, mbr + 0.03f, 1.f);
+    // flush non-textured quads
+    if (!verts.empty()) {
+        glBindVertexArray(gl_vao());
+        glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
+        glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(float), verts.data(), GL_DYNAMIC_DRAW);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(verts.size() / 8));
+        glBindVertexArray(0);
+    }
+    // icon (textured quad)
+    if (iconTex_) {
+        float pad = (height_ - iconW_) / 2.f;
+        float ix = pad, iy = pad;
+        std::vector<float> iv = {
+            ix, iy, 0, 0, 1,1,1,1,
+            ix, iy + iconH_, 0, 1, 1,1,1,1,
+            ix + iconW_, iy + iconH_, 1, 1, 1,1,1,1,
+            ix, iy, 0, 0, 1,1,1,1,
+            ix + iconW_, iy + iconH_, 1, 1, 1,1,1,1,
+            ix + iconW_, iy, 1, 0, 1,1,1,1
+        };
+        glBindVertexArray(gl_vao());
+        glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
+        glBufferData(GL_ARRAY_BUFFER, iv.size() * sizeof(float), iv.data(), GL_DYNAMIC_DRAW);
+        glBindTexture(GL_TEXTURE_2D, iconTex_);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+        glBindVertexArray(0);
+    }
+    // title text — centered between menu button and window buttons
+    float titleLeft = buttons_[0].x + buttons_[0].w + 8.f;
+    float titleRight = buttons_[1].x - 8.f;
+    float titleMid = (titleLeft + titleRight) / 2.f;
+    float titleW = font.measureText(title_);
+    float titleX = titleMid - titleW / 2.f;
+    if (titleX < titleLeft) titleX = titleLeft;
+    font.drawText(title_, titleX, 6.f, 0.7f, 0.7f, 0.7f, 1.f);
     // button symbols
     float mid = height_ / 2.f;
-    font.drawText("_", buttons_[0].x + 16.f, mid - 4.f, 0.7f, 0.7f, 0.7f, 1.f);
-    font.drawText("□", buttons_[1].x + 16.f, mid - 8.f, 0.7f, 0.7f, 0.7f, 1.f);
-    font.drawText("×", buttons_[2].x + 16.f, mid - 8.f, 1.f, 1.f, 1.f, 1.f);
+    font.drawText("_", buttons_[1].x + 16.f, mid - 4.f, 0.7f, 0.7f, 0.7f, 1.f);
+    font.drawText("\xe2\x96\xa1", buttons_[2].x + 16.f, mid - 8.f, 0.7f, 0.7f, 0.7f, 1.f);
+    font.drawText("\xc3\x97", buttons_[3].x + 16.f, mid - 8.f, 1.f, 1.f, 1.f, 1.f);
     // separator line
-    addRect(0, height_ - 1, 1280, height_, 0.1f, 0.1f, 0.12f, 1.f);
-    // flush rects
-    if (verts.empty()) return;
-    glBindVertexArray(gl_vao());
-    glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
-    glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(float), verts.data(), GL_DYNAMIC_DRAW);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(verts.size() / 8));
-    glBindVertexArray(0);
+    verts.clear();
+    addRect(0, height_ - 1, buttons_[1].x, height_, 0.1f, 0.1f, 0.12f, 1.f);
+    if (!verts.empty()) {
+        glBindVertexArray(gl_vao());
+        glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
+        glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(float), verts.data(), GL_DYNAMIC_DRAW);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(verts.size() / 8));
+        glBindVertexArray(0);
+    }
 }
 
 SDL_HitTestResult Titlebar::hitTest(int mx, int my, SDL_Window* window) {
@@ -104,11 +157,12 @@ bool Titlebar::handleEvent(const SDL_Event& e, SDL_Window* window) {
             for (auto& btn : buttons_) {
                 if (mx >= static_cast<int>(btn.x) && mx <= static_cast<int>(btn.x + btn.w)) {
                     switch (btn.type) {
-                        case TitlebarButton::CLOSE: SDL_Event q; q.type = SDL_QUIT; SDL_PushEvent(&q); return true;
+                        case TitlebarButton::CLOSE: { SDL_Event q; q.type = SDL_QUIT; SDL_PushEvent(&q); return true; }
                         case TitlebarButton::MAXIMIZE:
                             (SDL_GetWindowFlags(window) & SDL_WINDOW_MAXIMIZED) ? SDL_RestoreWindow(window) : SDL_MaximizeWindow(window);
                             return true;
                         case TitlebarButton::MINIMIZE: SDL_MinimizeWindow(window); return true;
+                        case TitlebarButton::MENU: return true;
                     }
                 }
             }

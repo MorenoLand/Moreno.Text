@@ -4,6 +4,7 @@
 
 class Titlebar;
 class Gutter;
+class Minimap;
 
 struct AppPaths {
     std::string exeDir;
@@ -31,12 +32,16 @@ private:
     void handleEvents();
     void update();
     void render();
+    void updateTitle();
     SDL_Window* window_ = nullptr;
     SDL_GLContext glContext_ = nullptr;
     AppPaths paths_;
     bool running_ = true;
+    bool dirty_ = false;
     std::string textBuffer;
+    std::string openFile_ = "untitled";
     Titlebar* titlebar_ = nullptr;
     Gutter* gutter_ = nullptr;
+    Minimap* minimap_ = nullptr;
     friend SDL_HitTestResult hitTestCallback(SDL_Window*, const SDL_Point*, void*);
 };
