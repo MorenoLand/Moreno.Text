@@ -14,11 +14,10 @@ int Gutter::digitCount(size_t n) { int d = 1; while (n >= 10) { n /= 10; ++d; } 
 void Gutter::draw(FontAtlas& font, size_t totalLines, size_t currentLine,
                   float originY, float lineStep, float windowH, float titlebarH) {
     int digits = digitCount(totalLines);
-    // width = digits * charWidth + left padding + right padding
     float charW = font.measureText("8");
     width_ = digits * charW + padding_ * 2 + 12.f;
     float borderX = width_;
-    // gutter background
+    // gutter background + 1px right border (solid color)
     std::vector<float> verts;
     auto addRect = [&](float x0, float y0, float x1, float y1, float r, float g, float b, float a) {
         verts.insert(verts.end(), { x0,y0, 0,0, r,g,b,a });
@@ -29,9 +28,18 @@ void Gutter::draw(FontAtlas& font, size_t totalLines, size_t currentLine,
         verts.insert(verts.end(), { x1,y0, 0,0, r,g,b,a });
     };
     addRect(0, titlebarH, borderX, windowH, 0.11f, 0.11f, 0.13f, 1.f);
-    // 1px right border
     addRect(borderX - 1, titlebarH, borderX, windowH, 0.08f, 0.08f, 0.10f, 1.f);
-    // draw line numbers — only visible lines
+    if (!verts.empty()) {
+        GLRenderer::setDrawMode(2);
+        glBindVertexArray(gl_vao());
+        glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
+        glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(float), verts.data(), GL_DYNAMIC_DRAW);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(verts.size() / 8));
+        glBindVertexArray(0);
+        GLRenderer::setDrawMode(0);
+    }
+    // line numbers (font atlas mode — drawText handles mode internally)
     float y = originY;
     for (size_t line = 0; line < totalLines; ++line) {
         if (y - font.ascent() > windowH) break;

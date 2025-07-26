@@ -26,8 +26,15 @@ in vec2 vUV;
 in vec4 vColor;
 out vec4 FragColor;
 uniform sampler2D uAtlas;
+uniform int uMode; // 0=font atlas (.r), 1=rgba texture, 2=solid color
 void main() {
-    FragColor = vec4(vColor.rgb, texture(uAtlas, vUV).r * vColor.a);
+    if (uMode == 1) {
+        FragColor = texture(uAtlas, vUV) * vColor;
+    } else if (uMode == 0) {
+        FragColor = vec4(vColor.rgb, texture(uAtlas, vUV).r * vColor.a);
+    } else {
+        FragColor = vColor;
+    }
 }
 )";
 
@@ -106,12 +113,17 @@ void GLRenderer::beginFrame() {
     glUniformMatrix4fv(glGetUniformLocation(s_shaderProgram, "uProjection"), 1, GL_FALSE, proj);
     glActiveTexture(GL_TEXTURE0);
     glUniform1i(glGetUniformLocation(s_shaderProgram, "uAtlas"), 0);
+    setDrawMode(0);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 }
 
 void GLRenderer::endFrame() {
     glUseProgram(0);
+}
+
+void GLRenderer::setDrawMode(int mode) {
+    glUniform1i(glGetUniformLocation(s_shaderProgram, "uMode"), mode);
 }
 
 GLuint gl_shaderProgram() { return s_shaderProgram; }

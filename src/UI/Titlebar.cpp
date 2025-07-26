@@ -15,13 +15,14 @@ void Titlebar::init(int windowWidth) {
     buttons_[2].type = TitlebarButton::MAXIMIZE;
     buttons_[3].type = TitlebarButton::CLOSE;
     layout(windowWidth);
-    // upload icon texture
+    // upload icon as RGBA texture
     if (!iconTex_ && icon_width > 0) {
         glGenTextures(1, &iconTex_);
         glBindTexture(GL_TEXTURE_2D, iconTex_);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, icon_width, icon_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, icon_data);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        // premultiply alpha into RGB so blending works correctly
         iconW_ = icon_width;
         iconH_ = icon_height;
     }
@@ -65,17 +66,20 @@ void Titlebar::draw(FontAtlas& font, float r, float g, float b, float a) {
     auto& menuBtn = buttons_[0];
     float mbr = menuBtn.hovered ? 0.28f : 0.16f;
     addRect(menuBtn.x, menuBtn.y, menuBtn.x + menuBtn.w, menuBtn.y + menuBtn.h, mbr, mbr, mbr + 0.03f, 1.f);
-    // flush non-textured quads
+    // flush non-textured quads (solid color mode)
     if (!verts.empty()) {
+        GLRenderer::setDrawMode(2);
         glBindVertexArray(gl_vao());
         glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
         glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(float), verts.data(), GL_DYNAMIC_DRAW);
         glBindTexture(GL_TEXTURE_2D, 0);
         glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(verts.size() / 8));
         glBindVertexArray(0);
+        GLRenderer::setDrawMode(0);
     }
-    // icon (textured quad)
+    // icon (textured quad — RGBA mode)
     if (iconTex_) {
+        GLRenderer::setDrawMode(1);
         float pad = (height_ - iconW_) / 2.f;
         float ix = pad, iy = pad;
         std::vector<float> iv = {
@@ -92,6 +96,7 @@ void Titlebar::draw(FontAtlas& font, float r, float g, float b, float a) {
         glBindTexture(GL_TEXTURE_2D, iconTex_);
         glDrawArrays(GL_TRIANGLES, 0, 6);
         glBindVertexArray(0);
+        GLRenderer::setDrawMode(0);
     }
     // title text — centered between menu button and window buttons
     float titleLeft = buttons_[0].x + buttons_[0].w + 8.f;
@@ -110,12 +115,14 @@ void Titlebar::draw(FontAtlas& font, float r, float g, float b, float a) {
     verts.clear();
     addRect(0, height_ - 1, buttons_[1].x, height_, 0.1f, 0.1f, 0.12f, 1.f);
     if (!verts.empty()) {
+        GLRenderer::setDrawMode(2);
         glBindVertexArray(gl_vao());
         glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
         glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(float), verts.data(), GL_DYNAMIC_DRAW);
         glBindTexture(GL_TEXTURE_2D, 0);
         glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(verts.size() / 8));
         glBindVertexArray(0);
+        GLRenderer::setDrawMode(0);
     }
 }
 
