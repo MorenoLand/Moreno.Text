@@ -2,8 +2,11 @@
 #include "Renderer/FontAtlas.h"
 #include "Renderer/GLRenderer.h"
 #include "UI/Titlebar.h"
+#include "UI/MenuBar.h"
 #include "UI/Gutter.h"
 #include "UI/Minimap.h"
+#include "UI/StatusBar.h"
+#include "Syntax/SyntaxHighlighter.h"
 #include "Platform/Platform.h"
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_syswm.h>
@@ -29,15 +32,12 @@ extern GLuint gl_vbo();
 
 namespace fs = std::filesystem;
 
-static SDL_HitTestResult hitTestCallback(SDL_Window* win, const SDL_Point* area, void* userdata) {
+static SDL_HitTestResult hitTestCallback(SDL_Window*, const SDL_Point* area, void* userdata) {
     auto* app = static_cast<Application*>(userdata);
-    return app->titlebar_ ? app->titlebar_->hitTest(area->x, area->y, win) : SDL_HITTEST_NORMAL;
+    return app->titlebar_ ? app->titlebar_->hitTest(area->x, area->y, app->window_) : SDL_HITTEST_NORMAL;
 }
 
-Application& Application::instance() {
-    static Application app;
-    return app;
-}
+Application& Application::instance() { static Application app; return app; }
 
 int Application::run(int argc, char** argv) {
     if (!init(argc, argv)) return 1;
@@ -49,13 +49,12 @@ int Application::run(int argc, char** argv) {
 static std::string findMonospaceFont() {
     static const char* candidates[] = {
 #ifdef _WIN32
-        "C:/Windows/Fonts/consola.ttf", "C:/Windows/Fonts/cour.ttf", "C:/Windows/Fonts/lucon.ttf",
+        "C:/Windows/Fonts/consola.ttf","C:/Windows/Fonts/cour.ttf","C:/Windows/Fonts/lucon.ttf",
 #elif __APPLE__
-        "/System/Library/Fonts/SFNSMono.ttf", "/System/Library/Fonts/Menlo.ttc", "/Library/Fonts/Menlo.ttc",
+        "/System/Library/Fonts/SFNSMono.ttf","/System/Library/Fonts/Menlo.ttc",
 #else
         "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
-        "/usr/share/fonts/truetype/ubuntu/UbuntuMono-R.ttf",
 #endif
         nullptr
     };
@@ -77,20 +76,23 @@ bool Application::init(int argc, char** argv) {
         1280, 720, SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_BORDERLESS);
     if (!window_) { fprintf(stderr, "SDL_CreateWindow: %s\n", SDL_GetError()); return false; }
     glContext_ = SDL_GL_CreateContext(window_);
-    if (!glContext_) { fprintf(stderr, "SDL_GL_CreateContext: %s\n", SDL_GetError()); return false; }
+    if (!glContext_) { fprintf(stderr, "GL context: %s\n", SDL_GetError()); return false; }
     SDL_GL_MakeCurrent(window_, glContext_);
     SDL_GL_SetSwapInterval(1);
     glewExperimental = GL_TRUE;
     if (GLenum err = glewInit(); err != GLEW_OK) { fprintf(stderr, "glewInit: %s\n", glewGetErrorString(err)); return false; }
     int w, h;
     SDL_GL_GetDrawableSize(window_, &w, &h);
-    if (!GLRenderer::init(w, h)) { fprintf(stderr, "Renderer init failed\n"); return false; }
+    if (!GLRenderer::init(w, h)) return false;
     std::string fontPath = findMonospaceFont();
     if (fontPath.empty() || !fontAtlas().init(fontPath)) { fprintf(stderr, "Font init failed\n"); return false; }
-    titlebar_ = new Titlebar();
+    titlebar_ = new Titlebar(); titlebar_->init(w);
+    menubar_ = new MenuBar(); menubar_->init();
     gutter_ = new Gutter();
     minimap_ = new Minimap();
-    titlebar_->init(w);
+    statusbar_ = new StatusBar();
+    syntax_ = new SyntaxHighlighter();
+    // window icon
     std::string iconPath = (fs::path(paths_.exeDir) / "Assets" / "moreno_text.ico").string();
     if (!fs::exists(iconPath)) iconPath = (fs::path(paths_.exeDir) / ".." / "Assets" / "moreno_text.ico").string();
     if (fs::exists(iconPath)) {
@@ -105,95 +107,61 @@ bool Application::init(int argc, char** argv) {
 #endif
     }
     SDL_StartTextInput();
-    // open file from command line arg
     if (argc > 1 && fs::exists(argv[1])) openFile(argv[1]);
     return true;
 }
 
 void Application::initPaths() {
 #ifdef _WIN32
-    wchar_t exePath[MAX_PATH]; GetModuleFileNameW(nullptr, exePath, MAX_PATH);
-    paths_.exeDir = fs::path(exePath).parent_path().string();
+    wchar_t ep[MAX_PATH]; GetModuleFileNameW(nullptr, ep, MAX_PATH);
+    paths_.exeDir = fs::path(ep).parent_path().string();
 #else
     paths_.exeDir = fs::canonical("/proc/self/exe").parent_path().string();
 #endif
-    fs::path base(paths_.exeDir), dataPath = base / "Data";
-    if (fs::exists(dataPath)) {
-        paths_.portable = true;
-        paths_.dataDir = dataPath.string();
-        paths_.packagesDir = (dataPath / "Packages").string();
-        paths_.installedPackagesDir = (dataPath / "Installed Packages").string();
-        paths_.cacheDir = (dataPath / "Cache").string();
-        paths_.localDir = (dataPath / "Local").string();
-        paths_.libDir = (dataPath / "Lib").string();
-        paths_.backupDir = (dataPath / "Backup").string();
+    fs::path base(paths_.exeDir), dp = base / "Data";
+    if (fs::exists(dp)) {
+        paths_.portable = true; paths_.dataDir = dp.string();
+        paths_.packagesDir = (dp / "Packages").string(); paths_.installedPackagesDir = (dp / "Installed Packages").string();
+        paths_.cacheDir = (dp / "Cache").string(); paths_.localDir = (dp / "Local").string();
+        paths_.libDir = (dp / "Lib").string(); paths_.backupDir = (dp / "Backup").string();
     } else {
-        std::string configHome;
+        std::string ch;
 #ifdef _WIN32
-        configHome = std::getenv("APPDATA");
+        ch = std::getenv("APPDATA");
 #elif __APPLE__
-        configHome = std::string(std::getenv("HOME")) + "/Library/Application Support";
+        ch = std::string(std::getenv("HOME")) + "/Library/Application Support";
 #else
-        const char* xdg = std::getenv("XDG_CONFIG_HOME");
-        configHome = xdg ? xdg : std::string(std::getenv("HOME")) + "/.config";
+        const char* xdg = std::getenv("XDG_CONFIG_HOME"); ch = xdg ? xdg : std::string(std::getenv("HOME")) + "/.config";
 #endif
-        paths_.dataDir = (fs::path(configHome) / "Moreno Text").string();
-        paths_.packagesDir = (fs::path(paths_.dataDir) / "Packages").string();
-        paths_.installedPackagesDir = (fs::path(paths_.dataDir) / "Installed Packages").string();
-        paths_.cacheDir = (fs::path(paths_.dataDir) / "Cache").string();
-        paths_.localDir = (fs::path(paths_.dataDir) / "Local").string();
-        paths_.libDir = (fs::path(paths_.dataDir) / "Lib").string();
-        paths_.backupDir = (fs::path(paths_.dataDir) / "Backup").string();
+        fs::path p(ch); paths_.dataDir = (p / "Moreno Text").string();
+        paths_.packagesDir = (p / "Moreno Text" / "Packages").string(); paths_.installedPackagesDir = (p / "Moreno Text" / "Installed Packages").string();
+        paths_.cacheDir = (p / "Moreno Text" / "Cache").string(); paths_.localDir = (p / "Moreno Text" / "Local").string();
+        paths_.libDir = (p / "Moreno Text" / "Lib").string(); paths_.backupDir = (p / "Moreno Text" / "Backup").string();
     }
 }
 
 // ── buffer helpers ──
 
-size_t Application::lineStart(size_t pos) const {
-    if (pos == 0) return 0;
-    size_t p = textBuffer.rfind('\n', pos - 1);
-    return p == std::string::npos ? 0 : p + 1;
-}
-
-size_t Application::lineEnd(size_t pos) const {
-    size_t p = textBuffer.find('\n', pos);
-    return p == std::string::npos ? textBuffer.size() : p;
-}
-
+size_t Application::lineStart(size_t pos) const { if (pos == 0) return 0; size_t p = textBuffer.rfind('\n', pos - 1); return p == std::string::npos ? 0 : p + 1; }
+size_t Application::lineEnd(size_t pos) const { size_t p = textBuffer.find('\n', pos); return p == std::string::npos ? textBuffer.size() : p; }
 size_t Application::lineStartForLine(size_t line) const {
     size_t l = 0, pos = 0;
-    while (l < line && pos < textBuffer.size()) {
-        size_t nl = textBuffer.find('\n', pos);
-        if (nl == std::string::npos) break;
-        pos = nl + 1; ++l;
-    }
+    while (l < line && pos < textBuffer.size()) { size_t nl = textBuffer.find('\n', pos); if (nl == std::string::npos) break; pos = nl + 1; ++l; }
     return pos;
 }
+size_t Application::lineOfPos(size_t pos) const { size_t line = 0; for (size_t i = 0; i < pos && i < textBuffer.size(); ++i) if (textBuffer[i] == '\n') ++line; return line; }
+size_t Application::totalLines() const { if (textBuffer.empty()) return 1; size_t n = 1; for (char c : textBuffer) if (c == '\n') ++n; return n; }
+size_t Application::colOfPos(size_t pos) const { size_t ls = lineStart(pos); return pos - ls; }
 
-size_t Application::lineOfPos(size_t pos) const {
-    size_t line = 0;
-    for (size_t i = 0; i < pos && i < textBuffer.size(); ++i)
-        if (textBuffer[i] == '\n') ++line;
-    return line;
-}
-
-size_t Application::totalLines() const {
-    if (textBuffer.empty()) return 1;
-    size_t n = 1;
-    for (char c : textBuffer) if (c == '\n') ++n;
-    return n;
-}
-
-void Application::insertAtCursor(const std::string& text) {
+void Application::insertText(const std::string& text) {
     pushUndo();
     if (selections_[0].hasSelection()) deleteSelection();
     size_t pos = selections_[0].cursor;
     textBuffer.insert(pos, text);
     selections_[0].anchor = selections_[0].cursor = pos + text.size();
-    desiredCursorX_ = -1.f;
-    dirty_ = true;
+    desiredCursorX_ = -1.f; dirty_ = true;
 }
-
+void Application::insertAtCursor(const std::string& text) { insertText(text); }
 void Application::deleteSelection() {
     if (!selections_[0].hasSelection()) return;
     size_t a = selections_[0].min(), b = selections_[0].max();
@@ -202,145 +170,127 @@ void Application::deleteSelection() {
     dirty_ = true;
 }
 
-void Application::insertText(const std::string& text) {
-    pushUndo();
-    if (selections_[0].hasSelection()) deleteSelection();
-    size_t pos = selections_[0].cursor;
-    textBuffer.insert(pos, text);
-    selections_[0].anchor = selections_[0].cursor = pos + text.size();
-    desiredCursorX_ = -1.f;
-    dirty_ = true;
-}
-
 void Application::ensureCursorVisible() {
     size_t curLine = lineOfPos(selections_[0].cursor);
-    int ww, wh;
-    SDL_GL_GetDrawableSize(window_, &ww, &wh);
-    float tbH = titlebar_->height();
+    int ww, wh; SDL_GL_GetDrawableSize(window_, &ww, &wh);
+    float tbH = titlebar_->height() + menubar_->height();
     float lineStep = fontAtlas().lineHeight();
     float textOriginY = tbH + fontAtlas().ascent() + 4.0f;
-    float cursorScreenY = textOriginY + curLine * lineStep - scrollY_;
-    if (cursorScreenY < textOriginY) scrollY_ -= (textOriginY - cursorScreenY);
-    else if (cursorScreenY + lineStep > wh) scrollY_ += (cursorScreenY + lineStep - wh);
+    float cursorY = textOriginY + curLine * lineStep - scrollY_;
+    if (cursorY < textOriginY) scrollY_ -= (textOriginY - cursorY);
+    else if (cursorY + lineStep > wh - statusbar_->height()) scrollY_ += (cursorY + lineStep - (wh - statusbar_->height()));
     if (scrollY_ < 0) scrollY_ = 0;
 }
 
 void Application::findAllMatches() {
-    find_.matches.clear();
-    find_.currentMatch = 0;
+    find_.matches.clear(); find_.currentMatch = 0;
     if (find_.query.empty()) return;
     if (find_.regex) {
         try {
             std::regex re(find_.query, find_.caseSensitive ? std::regex::ECMAScript : (std::regex::ECMAScript | std::regex::icase));
-            auto it = std::sregex_iterator(textBuffer.begin(), textBuffer.end(), re);
-            auto end = std::sregex_iterator();
-            for (; it != end; ++it) find_.matches.push_back(it->position());
-        } catch (...) { return; }
+            for (auto it = std::sregex_iterator(textBuffer.begin(), textBuffer.end(), re); it != std::sregex_iterator(); ++it)
+                find_.matches.push_back((size_t)it->position());
+        } catch (...) {}
     } else {
-        size_t pos = 0;
         std::string hay = find_.caseSensitive ? textBuffer : std::string(textBuffer);
         std::string needle = find_.caseSensitive ? find_.query : std::string(find_.query);
         if (!find_.caseSensitive) {
-            auto toLower = [](std::string& s) { for (auto& c : s) c = static_cast<char>(tolower(static_cast<unsigned char>(c))); };
-            toLower(hay); toLower(needle);
+            auto tl = [](std::string& s) { for (auto& c : s) c = static_cast<char>(tolower(static_cast<unsigned char>(c))); };
+            tl(hay); tl(needle);
         }
+        size_t pos = 0;
         while ((pos = hay.find(needle, pos)) != std::string::npos) {
-            find_.matches.push_back(pos);
-            pos += needle.size();
+            if (find_.wholeWord) {
+                bool lw = (pos == 0 || !isalnum(textBuffer[pos-1]));
+                bool rw = (pos + needle.size() >= textBuffer.size() || !isalnum(textBuffer[pos + needle.size()]));
+                if (!lw || !rw) { pos += needle.size(); continue; }
+            }
+            find_.matches.push_back(pos); pos += needle.size();
         }
     }
+}
+
+void Application::doReplace() {
+    if (find_.currentMatch < find_.matches.size()) {
+        pushUndo();
+        size_t m = find_.matches[find_.currentMatch];
+        textBuffer.replace(m, find_.query.size(), find_.replace);
+        selections_[0].anchor = selections_[0].cursor = m + find_.replace.size();
+        dirty_ = true;
+        findAllMatches();
+    }
+}
+void Application::doReplaceAll() {
+    if (find_.matches.empty()) return;
+    pushUndo();
+    for (int i = (int)find_.matches.size() - 1; i >= 0; --i)
+        textBuffer.replace(find_.matches[i], find_.query.size(), find_.replace);
+    dirty_ = true;
+    findAllMatches();
+}
+
+void Application::detectSyntax() {
+    if (openFilePath_.empty()) { syntax_->setLanguage(""); return; }
+    std::string ext = fs::path(openFilePath_).extension().string();
+    if (!ext.empty() && ext[0] == '.') ext = ext.substr(1);
+    syntax_->setLanguage(ext);
 }
 
 // ── file ops ──
 
 void Application::openFile(const std::string& path) {
-    std::ifstream f(path, std::ios::binary);
-    if (!f) return;
+    std::ifstream f(path, std::ios::binary); if (!f) return;
     std::ostringstream ss; ss << f.rdbuf();
     textBuffer = ss.str();
     openFilePath_ = path;
     openFile_ = fs::path(path).filename().string();
-    dirty_ = false;
-    selections_.clear();
-    selections_.emplace_back(textBuffer.size());
-    scrollY_ = 0;
-    undoStack_.clear();
-    redoStack_.clear();
+    dirty_ = false; selections_.clear(); selections_.emplace_back(textBuffer.size());
+    scrollY_ = 0; undoStack_.clear(); redoStack_.clear();
+    foldedLines_.clear(); detectSyntax();
 }
-
-void Application::saveFile() {
-    if (openFilePath_.empty()) { saveFileAs(); return; }
-    std::ofstream f(openFilePath_, std::ios::binary);
-    if (!f) return;
-    f << textBuffer;
-    dirty_ = false;
-}
-
+void Application::saveFile() { if (openFilePath_.empty()) { saveFileAs(); return; } std::ofstream f(openFilePath_, std::ios::binary); if (!f) return; f << textBuffer; dirty_ = false; }
 void Application::saveFileAs() {
 #ifdef _WIN32
-    char buf[MAX_PATH] = {};
-    OPENFILENAMEA ofn = {};
-    ofn.lStructSize = sizeof(ofn);
-    ofn.hwndOwner = nullptr;
-    ofn.lpstrFilter = "All Files\0*.*\0Text Files\0*.txt\0";
-    ofn.lpstrFile = buf;
-    ofn.nMaxFile = MAX_PATH;
-    ofn.Flags = OFN_OVERWRITEPROMPT;
-    ofn.lpstrDefExt = "txt";
-    if (GetSaveFileNameA(&ofn)) {
-        openFilePath_ = buf;
-        openFile_ = fs::path(buf).filename().string();
-        saveFile();
-    }
+    char buf[MAX_PATH] = {}; OPENFILENAMEA ofn = {}; ofn.lStructSize = sizeof(ofn);
+    ofn.lpstrFilter = "All Files\0*.*\0Text Files\0*.txt\0"; ofn.lpstrFile = buf; ofn.nMaxFile = MAX_PATH;
+    ofn.Flags = OFN_OVERWRITEPROMPT; ofn.lpstrDefExt = "txt";
+    if (GetSaveFileNameA(&ofn)) { openFilePath_ = buf; openFile_ = fs::path(buf).filename().string(); detectSyntax(); saveFile(); }
 #endif
 }
-
-void Application::newBuffer() {
-    textBuffer.clear();
-    openFilePath_.clear();
-    openFile_ = "untitled";
-    dirty_ = false;
-    selections_.clear();
-    selections_.emplace_back(0);
-    scrollY_ = 0;
-    undoStack_.clear();
-    redoStack_.clear();
-}
+void Application::newBuffer() { textBuffer.clear(); openFilePath_.clear(); openFile_ = "untitled"; dirty_ = false; selections_.clear(); selections_.emplace_back(0); scrollY_ = 0; undoStack_.clear(); redoStack_.clear(); foldedLines_.clear(); detectSyntax(); }
 
 // ── undo/redo ──
 
 void Application::pushUndo() {
     auto now = std::chrono::steady_clock::now();
-    if (!undoStack_.empty() && (now - undoStack_.back().time) < undoWindow_) {
-        undoStack_.back().text = textBuffer;
-        undoStack_.back().cursorPos = selections_[0].cursor;
-        return;
-    }
+    if (!undoStack_.empty() && (now - undoStack_.back().time) < undoWindow_) { undoStack_.back().text = textBuffer; undoStack_.back().cursorPos = selections_[0].cursor; return; }
     undoStack_.push_back({textBuffer, selections_[0].cursor, now});
     if (undoStack_.size() > 10000) undoStack_.erase(undoStack_.begin());
     redoStack_.clear();
 }
+void Application::doUndo() { if (undoStack_.empty()) return; redoStack_.push_back({textBuffer, selections_[0].cursor, std::chrono::steady_clock::now()}); textBuffer = undoStack_.back().text; selections_.clear(); selections_.emplace_back(undoStack_.back().cursorPos); undoStack_.pop_back(); dirty_ = true; }
+void Application::doRedo() { if (redoStack_.empty()) return; undoStack_.push_back({textBuffer, selections_[0].cursor, std::chrono::steady_clock::now()}); textBuffer = redoStack_.back().text; selections_.clear(); selections_.emplace_back(redoStack_.back().cursorPos); redoStack_.pop_back(); dirty_ = true; }
 
-void Application::doUndo() {
-    if (undoStack_.empty()) return;
-    redoStack_.push_back({textBuffer, selections_[0].cursor, std::chrono::steady_clock::now()});
-    auto& step = undoStack_.back();
-    textBuffer = step.text;
-    selections_.clear();
-    selections_.emplace_back(step.cursorPos);
-    undoStack_.pop_back();
-    dirty_ = true;
+// ── folding ──
+
+bool Application::isFolded(size_t line) const { return line < foldedLines_.size() && foldedLines_[line]; }
+size_t Application::findFoldEnd(size_t startLine) const {
+    size_t ls = lineStartForLine(startLine), le = lineEnd(ls);
+    if (le >= textBuffer.size()) return startLine;
+    char openCh = textBuffer[le]; // the '{', '[', '(' at end of line
+    char closeCh = (openCh == '{') ? '}' : (openCh == '[') ? ']' : (openCh == '(') ? ')' : 0;
+    if (!closeCh) return startLine;
+    int depth = 1; size_t pos = le + 1;
+    while (pos < textBuffer.size() && depth > 0) {
+        if (textBuffer[pos] == openCh) ++depth;
+        else if (textBuffer[pos] == closeCh) --depth;
+        ++pos;
+    }
+    return lineOfPos(pos);
 }
-
-void Application::doRedo() {
-    if (redoStack_.empty()) return;
-    undoStack_.push_back({textBuffer, selections_[0].cursor, std::chrono::steady_clock::now()});
-    auto& step = redoStack_.back();
-    textBuffer = step.text;
-    selections_.clear();
-    selections_.emplace_back(step.cursorPos);
-    redoStack_.pop_back();
-    dirty_ = true;
+void Application::toggleFold(size_t line) {
+    if (foldedLines_.size() <= line) foldedLines_.resize(line + 20, false);
+    foldedLines_[line] = !foldedLines_[line];
 }
 
 // ── events ──
@@ -349,9 +299,9 @@ void Application::handleEvents() {
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
         if (e.type == SDL_QUIT) { running_ = false; return; }
+        // find mode input
         if (find_.active && e.type == SDL_KEYDOWN) {
-            auto mod = e.key.keysym.mod;
-            auto sym = e.key.keysym.sym;
+            auto mod = e.key.keysym.mod; auto sym = e.key.keysym.sym;
             if (sym == SDLK_ESCAPE) { find_.active = false; continue; }
             if (sym == SDLK_RETURN) {
                 if (!find_.matches.empty()) {
@@ -362,471 +312,440 @@ void Application::handleEvents() {
                 }
                 continue;
             }
-            if ((mod & KMOD_CTRL) && (sym == SDLK_f || sym == SDLK_r)) continue;
-            // let text input fall through to update find query
+            if ((mod & KMOD_CTRL) && (sym == SDLK_f || sym == SDLK_h || sym == SDLK_r)) continue;
+            if (sym == SDLK_BACKSPACE && !find_.query.empty()) {
+                auto it = find_.query.end(); --it;
+                while (it != find_.query.begin() && (*it & 0xC0) == 0x80) --it;
+                find_.query.erase(it, find_.query.end()); findAllMatches(); continue;
+            }
+            if ((mod & KMOD_ALT) && sym == SDLK_r) { find_.regex = !find_.regex; findAllMatches(); continue; }
+            if ((mod & KMOD_ALT) && sym == SDLK_c) { find_.caseSensitive = !find_.caseSensitive; findAllMatches(); continue; }
+            if ((mod & KMOD_ALT) && sym == SDLK_w) { find_.wholeWord = !find_.wholeWord; findAllMatches(); continue; }
+            continue;
         }
+        if (find_.active && e.type == SDL_TEXTINPUT) { find_.query += e.text.text; findAllMatches(); continue; }
+        // goto mode
+        if (goto_.active && e.type == SDL_KEYDOWN) {
+            auto sym = e.key.keysym.sym;
+            if (sym == SDLK_ESCAPE) { goto_.active = false; continue; }
+            if (sym == SDLK_RETURN) {
+                if (!goto_.items.empty() && goto_.selected >= 0 && goto_.selected < (int)goto_.items.size()) {
+                    openFile(goto_.items[goto_.selected]);
+                }
+                goto_.active = false; continue;
+            }
+            if (sym == SDLK_UP) { if (goto_.selected > 0) --goto_.selected; continue; }
+            if (sym == SDLK_DOWN) { if (goto_.selected < (int)goto_.items.size() - 1) ++goto_.selected; continue; }
+            if (sym == SDLK_BACKSPACE && !goto_.query.empty()) {
+                auto it = goto_.query.end(); --it;
+                while (it != goto_.query.begin() && (*it & 0xC0) == 0x80) --it;
+                goto_.query.erase(it, goto_.query.end()); continue;
+            }
+            continue;
+        }
+        if (goto_.active && e.type == SDL_TEXTINPUT) { goto_.query += e.text.text; continue; }
+        // menu bar
+        int ww, wh; SDL_GL_GetDrawableSize(window_, &ww, &wh);
+        if (menubar_->handleEvent(e, (float)ww, titlebar_->height())) continue;
         if (titlebar_->handleEvent(e, window_)) continue;
         if (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
-            int w, h; SDL_GL_GetDrawableSize(window_, &w, &h);
-            GLRenderer::resize(w, h); titlebar_->layout(w);
+            SDL_GL_GetDrawableSize(window_, &ww, &wh); GLRenderer::resize(ww, wh); titlebar_->layout(ww);
         }
         else if (e.type == SDL_MOUSEWHEEL) {
             scrollY_ -= e.wheel.y * fontAtlas().lineHeight() * 3;
-            if (scrollY_ < 0) scrollY_ = 0;
             float lineStep = fontAtlas().lineHeight();
             float contentH = totalLines() * lineStep + 100;
-            int ww, wh; SDL_GL_GetDrawableSize(window_, &ww, &wh);
-            float maxScroll = contentH - (wh - titlebar_->height());
-            if (maxScroll < 0) maxScroll = 0;
-            if (scrollY_ > maxScroll) scrollY_ = maxScroll;
+            SDL_GL_GetDrawableSize(window_, &ww, &wh);
+            float maxS = contentH - (wh - titlebar_->height() - menubar_->height() - statusbar_->height());
+            if (maxS < 0) maxS = 0;
+            if (scrollY_ > maxS) scrollY_ = maxS;
+            if (scrollY_ < 0) scrollY_ = 0;
         }
-        else if (e.type == SDL_MOUSEBUTTONDOWN) {
-            int ww, wh; SDL_GL_GetDrawableSize(window_, &ww, &wh);
-            float mx = static_cast<float>(e.button.x), my = static_cast<float>(e.button.y);
-            float tbH = titlebar_->height();
-            float gutterW = gutter_->width();
-            float textOriginY = tbH + fontAtlas().ascent() + 4.0f;
+        else if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == 1) {
+            SDL_GL_GetDrawableSize(window_, &ww, &wh);
+            float mx = (float)e.button.x, my = (float)e.button.y;
+            float tbH = titlebar_->height() + menubar_->height();
             float lineStep = fontAtlas().lineHeight();
+            float textOriginY = tbH + fontAtlas().ascent() + 4.0f;
+            float gutterW = gutter_->width();
             float textX = gutterW + 8.0f;
-            if (my > tbH && e.button.button == 1) {
-                auto mod = SDL_GetModState();
-                // click in text area
+            // gutter fold click
+            if (my > tbH && mx < gutterW) {
                 float clickY = my + scrollY_ - textOriginY;
-                size_t clickLine = static_cast<size_t>(clickY / lineStep);
+                size_t clickLine = (size_t)(clickY / lineStep);
+                if (clickLine < totalLines()) {
+                    size_t le = lineEnd(lineStartForLine(clickLine));
+                    if (le < textBuffer.size() && (textBuffer[le] == '{' || textBuffer[le] == '[' || textBuffer[le] == '(')) {
+                        toggleFold(clickLine);
+                        continue;
+                    }
+                }
+            }
+            if (my > tbH && mx >= gutterW) {
+                auto mod = SDL_GetModState();
+                float clickY = my + scrollY_ - textOriginY;
+                size_t clickLine = (size_t)(clickY / lineStep);
                 if (clickLine >= totalLines()) clickLine = totalLines() - 1;
-                size_t ls = lineStartForLine(clickLine);
-                size_t le = lineEnd(ls);
-                std::string_view lineText(textBuffer.data() + ls, le - ls);
-                float cx = mx - textX;
-                size_t col = 0;
-                float advance = 0;
-                for (size_t i = 0; i < lineText.size(); ) {
-                    uint32_t cp = static_cast<uint8_t>(lineText[i]);
-                    int bytes = 1;
-                    if (cp >= 0xF0) bytes = 4; else if (cp >= 0xE0) bytes = 3; else if (cp >= 0xC0) bytes = 2;
-                    int charW = 0;
-                    if (cp == '\t') charW = fontAtlas().measureText(" ") * 4;
-                    else { auto it = fontAtlas().getGlyph(cp); charW = it.advance; }
-                    if (advance + charW / 2.f > cx) break;
-                    advance += charW;
-                    col += bytes;
-                    i += bytes;
+                size_t ls = lineStartForLine(clickLine), le = lineEnd(ls);
+                std::string_view lt(textBuffer.data() + ls, le - ls);
+                float cx = mx - textX; size_t col = 0; float advance = 0;
+                for (size_t i = 0; i < lt.size(); ) {
+                    uint32_t cp = (uint8_t)lt[i]; int b = 1;
+                    if (cp >= 0xF0) b = 4; else if (cp >= 0xE0) b = 3; else if (cp >= 0xC0) b = 2;
+                    int cw = (cp == '\t') ? (int)fontAtlas().measureText(" ") * 2 : fontAtlas().getGlyph(cp).advance;
+                    if (advance + cw / 2.f > cx) break;
+                    advance += cw; col += b; i += b;
                 }
                 size_t clickPos = ls + col;
-                if (mod & KMOD_CTRL) {
-                    selections_.emplace_back(clickPos);
-                } else if (mod & KMOD_SHIFT) {
-                    selections_[0].cursor = clickPos;
-                } else {
-                    selections_.clear();
-                    selections_.emplace_back(clickPos);
-                }
+                if (mod & KMOD_CTRL) selections_.emplace_back(clickPos);
+                else if (mod & KMOD_SHIFT) selections_[0].cursor = clickPos;
+                else { selections_.clear(); selections_.emplace_back(clickPos); }
                 desiredCursorX_ = -1.f;
             }
         }
-        else if (e.type == SDL_TEXTINPUT) {
-            if (find_.active) {
-                find_.query += e.text.text;
-                findAllMatches();
-                continue;
-            }
-            insertText(e.text.text);
-        }
         else if (e.type == SDL_KEYDOWN) {
-            auto mod = e.key.keysym.mod;
-            auto sym = e.key.keysym.sym;
-            if (find_.active) {
-                if (sym == SDLK_BACKSPACE && !find_.query.empty()) {
-                    auto it = find_.query.end(); --it;
-                    while (it != find_.query.begin() && (*it & 0xC0) == 0x80) --it;
-                    find_.query.erase(it, find_.query.end());
-                    findAllMatches();
-                }
-                continue;
-            }
+            auto mod = e.key.keysym.mod; auto sym = e.key.keysym.sym;
             auto& sel = selections_[0];
-            bool shift = mod & KMOD_SHIFT;
-            bool ctrl = mod & KMOD_CTRL;
+            bool shift = mod & KMOD_SHIFT, ctrl = mod & KMOD_CTRL;
             if (ctrl && sym == SDLK_q) running_ = false;
             else if (ctrl && sym == SDLK_z) { if (shift) doRedo(); else doUndo(); }
             else if (ctrl && sym == SDLK_y) doRedo();
-            else if (ctrl && sym == SDLK_f) { find_.active = true; find_.query.clear(); find_.matches.clear(); }
-            else if (ctrl && sym == SDLK_s) saveFile();
+            else if (ctrl && sym == SDLK_f) { find_.active = true; find_.replaceActive = false; find_.query.clear(); find_.matches.clear(); }
+            else if (ctrl && sym == SDLK_h) { find_.active = true; find_.replaceActive = true; find_.query.clear(); find_.matches.clear(); }
+            else if (ctrl && sym == SDLK_s) { if (shift) saveFileAs(); else saveFile(); }
+            else if (ctrl && sym == SDLK_p) { goto_.active = true; goto_.query.clear(); goto_.selected = 0; goto_.items.clear(); }
             else if (ctrl && sym == SDLK_o) {
 #ifdef _WIN32
-                char buf[MAX_PATH] = {};
-                OPENFILENAMEA ofn = {};
-                ofn.lStructSize = sizeof(ofn);
-                ofn.lpstrFilter = "All Files\0*.*\0";
-                ofn.lpstrFile = buf; ofn.nMaxFile = MAX_PATH;
-                ofn.Flags = OFN_FILEMUSTEXIST;
+                char buf[MAX_PATH] = {}; OPENFILENAMEA ofn = {}; ofn.lStructSize = sizeof(ofn);
+                ofn.lpstrFilter = "All Files\0*.*\0"; ofn.lpstrFile = buf; ofn.nMaxFile = MAX_PATH; ofn.Flags = OFN_FILEMUSTEXIST;
                 if (GetOpenFileNameA(&ofn)) openFile(buf);
 #endif
             }
             else if (ctrl && sym == SDLK_n) newBuffer();
             else if (ctrl && sym == SDLK_w) { if (dirty_) saveFile(); newBuffer(); }
             else if (ctrl && sym == SDLK_d) {
-                // select next occurrence of current word
-                size_t pos = sel.cursor;
-                size_t ls = lineStart(pos), le = lineEnd(pos);
-                std::string_view lineText(textBuffer.data() + ls, le - ls);
-                size_t col = pos - ls;
-                size_t wordStart = col, wordEnd = col;
-                while (wordStart > 0 && (isalnum(lineText[wordStart-1]) || lineText[wordStart-1] == '_')) --wordStart;
-                while (wordEnd < lineText.size() && (isalnum(lineText[wordEnd]) || lineText[wordEnd] == '_')) ++wordEnd;
-                if (wordEnd > wordStart) {
-                    std::string word(lineText.substr(wordStart, wordEnd - wordStart));
-                    size_t searchFrom = sel.hasSelection() ? sel.max() : (ls + wordEnd);
-                    size_t found = textBuffer.find(word, searchFrom);
+                size_t pos = sel.cursor, ls = lineStart(pos), le = lineEnd(ls);
+                std::string_view lt(textBuffer.data() + ls, le - ls);
+                size_t col = pos - ls, ws = col, we = col;
+                while (ws > 0 && (isalnum(lt[ws-1]) || lt[ws-1] == '_')) --ws;
+                while (we < lt.size() && (isalnum(lt[we]) || lt[we] == '_')) ++we;
+                if (we > ws) {
+                    std::string word(lt.substr(ws, we - ws));
+                    size_t sf = sel.hasSelection() ? sel.max() : (ls + we);
+                    size_t found = textBuffer.find(word, sf);
                     if (found == std::string::npos) found = textBuffer.find(word);
-                    if (found != std::string::npos) {
-                        selections_.emplace_back(found, found + word.size());
-                    }
+                    if (found != std::string::npos) selections_.emplace_back(found, found + word.size());
                 }
             }
-            else if (ctrl && sym == SDLK_l) {
-                size_t ls = lineStart(sel.cursor), le = lineEnd(sel.cursor);
-                sel.anchor = ls;
-                sel.cursor = (le < textBuffer.size()) ? le + 1 : le;
-            }
+            else if (ctrl && sym == SDLK_l) { size_t ls = lineStart(sel.cursor), le = lineEnd(sel.cursor); sel.anchor = ls; sel.cursor = (le < textBuffer.size()) ? le + 1 : le; }
             else if (ctrl && shift && sym == SDLK_l) {
-                // split selection into per-line cursors
                 if (sel.hasSelection()) {
                     size_t a = sel.min(), b = sel.max();
-                    std::vector<SelRange> newSels;
-                    size_t pos = a;
-                    while (pos <= b) {
-                        size_t le = lineEnd(pos);
-                        if (le > b) le = b;
-                        newSels.emplace_back(pos, le);
-                        pos = le + 1;
-                        if (pos > b || pos == 0) break;
-                    }
-                    selections_ = std::move(newSels);
+                    std::vector<SelRange> ns; size_t pos = a;
+                    while (pos <= b) { size_t le = lineEnd(pos); if (le > b) le = b; ns.emplace_back(pos, le); pos = le + 1; if (pos > b || pos == 0) break; }
+                    selections_ = std::move(ns);
                 }
             }
             else if (sym == SDLK_BACKSPACE) {
                 pushUndo();
                 if (sel.hasSelection()) deleteSelection();
                 else if (sel.cursor > 0) {
-                    size_t pos = sel.cursor;
-                    auto it = textBuffer.begin() + pos; --it;
+                    size_t pos = sel.cursor; auto it = textBuffer.begin() + pos; --it;
                     while (it != textBuffer.begin() && (*it & 0xC0) == 0x80) --it;
-                    size_t delStart = it - textBuffer.begin();
-                    textBuffer.erase(delStart, pos - delStart);
-                    sel.anchor = sel.cursor = delStart;
-                    dirty_ = true;
-                    desiredCursorX_ = -1.f;
+                    size_t ds = it - textBuffer.begin();
+                    textBuffer.erase(ds, pos - ds);
+                    sel.anchor = sel.cursor = ds; dirty_ = true; desiredCursorX_ = -1.f;
                 }
             }
             else if (sym == SDLK_DELETE) {
                 pushUndo();
                 if (sel.hasSelection()) deleteSelection();
                 else if (sel.cursor < textBuffer.size()) {
-                    size_t pos = sel.cursor;
-                    auto it = textBuffer.begin() + pos;
-                    size_t delEnd = pos + 1;
-                    while (delEnd < textBuffer.size() && (textBuffer[delEnd] & 0xC0) == 0x80) ++delEnd;
-                    textBuffer.erase(pos, delEnd - pos);
-                    dirty_ = true;
+                    size_t pos = sel.cursor, de = pos + 1;
+                    while (de < textBuffer.size() && (textBuffer[de] & 0xC0) == 0x80) ++de;
+                    textBuffer.erase(pos, de - pos); dirty_ = true;
                 }
             }
-            else if (sym == SDLK_RETURN) { insertText("\n"); }
+            else if (sym == SDLK_RETURN) insertText("\n");
             else if (sym == SDLK_TAB) {
                 if (shift) {
-                    pushUndo();
-                    size_t ls = lineStart(sel.cursor);
-                    int removed = 0;
-                    while (removed < 4 && ls + removed < textBuffer.size() && textBuffer[ls + removed] == ' ') ++removed;
-                    if (removed > 0) {
-                        textBuffer.erase(ls, removed);
-                        sel.anchor = sel.cursor = (sel.cursor > ls + removed) ? sel.cursor - removed : ls;
-                        dirty_ = true;
-                    }
-                } else insertText("    ");
+                    pushUndo(); size_t ls = lineStart(sel.cursor); int rm = 0;
+                    while (rm < 2 && ls + rm < textBuffer.size() && textBuffer[ls + rm] == ' ') ++rm;
+                    if (rm > 0) { textBuffer.erase(ls, rm); sel.anchor = sel.cursor = (sel.cursor > ls + rm) ? sel.cursor - rm : ls; dirty_ = true; }
+                } else insertText("  ");
             }
             else if (sym == SDLK_LEFT) {
                 if (ctrl) {
-                    // word left
                     size_t pos = sel.cursor;
                     if (pos > 0) { --pos; while (pos > 0 && (textBuffer[pos] == ' ' || textBuffer[pos] == '\t')) --pos;
                         while (pos > 0 && (isalnum(textBuffer[pos-1]) || textBuffer[pos-1] == '_')) --pos; }
-                    if (shift) sel.cursor = pos; else { sel.anchor = sel.cursor = pos; }
-                } else {
-                    if (sel.cursor > 0) { if (shift) sel.cursor--; else { sel.anchor = sel.cursor = sel.cursor - 1; } }
-                    desiredCursorX_ = -1.f;
-                }
+                    if (shift) sel.cursor = pos; else sel.anchor = sel.cursor = pos;
+                } else { if (sel.cursor > 0) { if (shift) sel.cursor--; else sel.anchor = sel.cursor = sel.cursor - 1; } desiredCursorX_ = -1.f; }
             }
             else if (sym == SDLK_RIGHT) {
                 if (ctrl) {
                     size_t pos = sel.cursor;
                     while (pos < textBuffer.size() && (textBuffer[pos] == ' ' || textBuffer[pos] == '\t')) ++pos;
                     while (pos < textBuffer.size() && (isalnum(textBuffer[pos]) || textBuffer[pos] == '_')) ++pos;
-                    if (shift) sel.cursor = pos; else { sel.anchor = sel.cursor = pos; }
-                } else {
-                    if (sel.cursor < textBuffer.size()) { if (shift) sel.cursor++; else { sel.anchor = sel.cursor = sel.cursor + 1; } }
-                    desiredCursorX_ = -1.f;
-                }
+                    if (shift) sel.cursor = pos; else sel.anchor = sel.cursor = pos;
+                } else { if (sel.cursor < textBuffer.size()) { if (shift) sel.cursor++; else sel.anchor = sel.cursor = sel.cursor + 1; } desiredCursorX_ = -1.f; }
             }
             else if (sym == SDLK_UP) {
-                size_t curLine = lineOfPos(sel.cursor);
-                if (curLine > 0) {
-                    size_t ls = lineStartForLine(curLine - 1);
-                    size_t le = lineEnd(ls);
+                size_t cl = lineOfPos(sel.cursor); if (cl > 0) {
+                    size_t ls = lineStartForLine(cl - 1), le = lineEnd(ls);
                     std::string_view lt(textBuffer.data() + ls, le - ls);
                     if (desiredCursorX_ < 0) desiredCursorX_ = fontAtlas().measureText(textBuffer.substr(lineStart(sel.cursor), sel.cursor - lineStart(sel.cursor)));
                     size_t col = 0; float adv = 0;
                     for (size_t i = 0; i < lt.size(); ) {
-                        uint32_t cp = static_cast<uint8_t>(lt[i]); int b = 1;
+                        uint32_t cp = (uint8_t)lt[i]; int b = 1;
                         if (cp >= 0xF0) b = 4; else if (cp >= 0xE0) b = 3; else if (cp >= 0xC0) b = 2;
-                        int cw = (cp == '\t') ? fontAtlas().measureText(" ") * 4 : fontAtlas().getGlyph(cp).advance;
-                        if (adv + cw / 2.f > desiredCursorX_) break;
-                        adv += cw; col += b; i += b;
+                        int cw = (cp == '\t') ? (int)fontAtlas().measureText(" ") * 2 : fontAtlas().getGlyph(cp).advance;
+                        if (adv + cw / 2.f > desiredCursorX_) break; adv += cw; col += b; i += b;
                     }
-                    size_t newPos = ls + col;
-                    if (shift) sel.cursor = newPos; else { sel.anchor = sel.cursor = newPos; }
+                    size_t np = ls + col; if (shift) sel.cursor = np; else sel.anchor = sel.cursor = np;
                 }
             }
             else if (sym == SDLK_DOWN) {
-                size_t curLine = lineOfPos(sel.cursor);
-                if (curLine < totalLines() - 1) {
-                    size_t nextLS = lineStartForLine(curLine + 1);
-                    size_t le = lineEnd(nextLS);
-                    std::string_view lt(textBuffer.data() + nextLS, le - nextLS);
+                size_t cl = lineOfPos(sel.cursor); if (cl < totalLines() - 1) {
+                    size_t nls = lineStartForLine(cl + 1), le = lineEnd(nls);
+                    std::string_view lt(textBuffer.data() + nls, le - nls);
                     if (desiredCursorX_ < 0) desiredCursorX_ = fontAtlas().measureText(textBuffer.substr(lineStart(sel.cursor), sel.cursor - lineStart(sel.cursor)));
                     size_t col = 0; float adv = 0;
                     for (size_t i = 0; i < lt.size(); ) {
-                        uint32_t cp = static_cast<uint8_t>(lt[i]); int b = 1;
+                        uint32_t cp = (uint8_t)lt[i]; int b = 1;
                         if (cp >= 0xF0) b = 4; else if (cp >= 0xE0) b = 3; else if (cp >= 0xC0) b = 2;
-                        int cw = (cp == '\t') ? fontAtlas().measureText(" ") * 4 : fontAtlas().getGlyph(cp).advance;
-                        if (adv + cw / 2.f > desiredCursorX_) break;
-                        adv += cw; col += b; i += b;
+                        int cw = (cp == '\t') ? (int)fontAtlas().measureText(" ") * 2 : fontAtlas().getGlyph(cp).advance;
+                        if (adv + cw / 2.f > desiredCursorX_) break; adv += cw; col += b; i += b;
                     }
-                    size_t newPos = nextLS + col;
-                    if (shift) sel.cursor = newPos; else { sel.anchor = sel.cursor = newPos; }
+                    size_t np = nls + col; if (shift) sel.cursor = np; else sel.anchor = sel.cursor = np;
                 }
             }
             else if (sym == SDLK_HOME) {
-                if (ctrl) { if (shift) sel.cursor = 0; else { sel.anchor = sel.cursor = 0; } }
-                else {
-                    size_t ls = lineStart(sel.cursor);
-                    if (shift) sel.cursor = ls; else { sel.anchor = sel.cursor = ls; }
-                }
+                if (ctrl) { if (shift) sel.cursor = 0; else sel.anchor = sel.cursor = 0; }
+                else { size_t ls = lineStart(sel.cursor); if (shift) sel.cursor = ls; else sel.anchor = sel.cursor = ls; }
                 desiredCursorX_ = -1.f;
             }
             else if (sym == SDLK_END) {
-                if (ctrl) { if (shift) sel.cursor = textBuffer.size(); else { sel.anchor = sel.cursor = textBuffer.size(); } }
-                else {
-                    size_t le = lineEnd(sel.cursor);
-                    if (shift) sel.cursor = le; else { sel.anchor = sel.cursor = le; }
-                }
+                if (ctrl) { if (shift) sel.cursor = textBuffer.size(); else sel.anchor = sel.cursor = textBuffer.size(); }
+                else { size_t le = lineEnd(sel.cursor); if (shift) sel.cursor = le; else sel.anchor = sel.cursor = le; }
                 desiredCursorX_ = -1.f;
             }
             else if (sym == SDLK_PAGEUP) {
-                int ww, wh; SDL_GL_GetDrawableSize(window_, &ww, &wh);
-                float visibleLines = (wh - titlebar_->height()) / fontAtlas().lineHeight();
-                size_t curLine = lineOfPos(sel.cursor);
-                size_t targetLine = (curLine > visibleLines) ? curLine - static_cast<size_t>(visibleLines) : 0;
-                size_t pos = lineStartForLine(targetLine);
-                if (shift) sel.cursor = pos; else { sel.anchor = sel.cursor = pos; }
-                desiredCursorX_ = -1.f;
+                int w1, h1; SDL_GL_GetDrawableSize(window_, &w1, &h1);
+                float vl = (h1 - titlebar_->height() - menubar_->height() - statusbar_->height()) / fontAtlas().lineHeight();
+                size_t cl = lineOfPos(sel.cursor), tl = (cl > (size_t)vl) ? cl - (size_t)vl : 0;
+                size_t p = lineStartForLine(tl); if (shift) sel.cursor = p; else sel.anchor = sel.cursor = p; desiredCursorX_ = -1.f;
             }
             else if (sym == SDLK_PAGEDOWN) {
-                int ww, wh; SDL_GL_GetDrawableSize(window_, &ww, &wh);
-                float visibleLines = (wh - titlebar_->height()) / fontAtlas().lineHeight();
-                size_t curLine = lineOfPos(sel.cursor);
-                size_t targetLine = curLine + static_cast<size_t>(visibleLines);
-                size_t total = totalLines();
-                if (targetLine >= total) targetLine = total - 1;
-                size_t pos = lineStartForLine(targetLine);
-                if (shift) sel.cursor = pos; else { sel.anchor = sel.cursor = pos; }
-                desiredCursorX_ = -1.f;
+                int w1, h1; SDL_GL_GetDrawableSize(window_, &w1, &h1);
+                float vl = (h1 - titlebar_->height() - menubar_->height() - statusbar_->height()) / fontAtlas().lineHeight();
+                size_t cl = lineOfPos(sel.cursor), tl = cl + (size_t)vl, tot = totalLines();
+                if (tl >= tot) tl = tot - 1;
+                size_t p = lineStartForLine(tl); if (shift) sel.cursor = p; else sel.anchor = sel.cursor = p; desiredCursorX_ = -1.f;
             }
             ensureCursorVisible();
         }
+        else if (e.type == SDL_TEXTINPUT) { insertText(e.text.text); }
     }
 }
 
 void Application::update() {}
-
 void Application::updateTitle() {
-    std::string title = openFile_;
-    if (dirty_) title += "\xe2\x80\xa2";
-    title += " - Moreno Text";
-    titlebar_->setTitle(title);
-    SDL_SetWindowTitle(window_, title.c_str());
+    std::string t = openFile_; if (dirty_) t += "\xe2\x80\xa2"; t += " - Moreno Text";
+    titlebar_->setTitle(t); SDL_SetWindowTitle(window_, t.c_str());
 }
 
 void Application::render() {
     GLRenderer::beginFrame();
     updateTitle();
+    int ww, wh; SDL_GL_GetDrawableSize(window_, &ww, &wh);
+    float fww = (float)ww, fwh = (float)wh;
     titlebar_->draw(fontAtlas(), 0, 0, 0, 0);
-    float tbH = titlebar_->height();
-    int ww, wh;
-    SDL_GL_GetDrawableSize(window_, &ww, &wh);
+    menubar_->draw(fontAtlas(), fww, titlebar_->height());
+    float tbH = titlebar_->height() + menubar_->height();
+    float sbH = statusbar_->height();
     float lineStep = fontAtlas().lineHeight();
     float textOriginY = tbH + fontAtlas().ascent() + 4.0f;
     size_t lineCount = totalLines();
     size_t currentLine = lineOfPos(selections_[0].cursor);
-    // draw gutter
-    gutter_->draw(fontAtlas(), lineCount, currentLine, textOriginY, lineStep, static_cast<float>(wh), tbH);
+    size_t currentCol = colOfPos(selections_[0].cursor);
+    // gutter
+    size_t visibleCount = lineCount;
+    gutter_->draw(fontAtlas(), visibleCount, currentLine, textOriginY, lineStep, fwh - sbH, tbH);
     float gutterW = gutter_->width();
     float textX = gutterW + 8.0f;
-    // enable scissor to clip editor area
+    float editorRight = fww - minimap_->width();
+    // scissor
     glEnable(GL_SCISSOR_TEST);
-    glScissor(static_cast<int>(gutterW), 0, ww - static_cast<int>(gutterW) - static_cast<int>(minimap_->width()), wh);
-    // draw selection highlights
-    for (auto& sel : selections_) {
-        if (!sel.hasSelection()) continue;
-        size_t a = sel.min(), b = sel.max();
-        size_t lineA = lineOfPos(a), lineB = lineOfPos(b);
+    glScissor((int)gutterW, (int)sbH, ww - (int)gutterW - (int)minimap_->width(), wh - (int)(tbH + sbH));
+    // selection highlights
+    for (auto& s : selections_) {
+        if (!s.hasSelection()) continue;
+        size_t a = s.min(), b = s.max(), la = lineOfPos(a), lb = lineOfPos(b);
         std::vector<float> sv;
-        auto addRect = [&](float x0, float y0, float x1, float y1, float r, float g, float b2, float a2) {
-            sv.insert(sv.end(), { x0,y0, 0,0, r,g,b2,a2 });
-            sv.insert(sv.end(), { x0,y1, 0,0, r,g,b2,a2 });
-            sv.insert(sv.end(), { x1,y1, 0,0, r,g,b2,a2 });
-            sv.insert(sv.end(), { x0,y0, 0,0, r,g,b2,a2 });
-            sv.insert(sv.end(), { x1,y1, 0,0, r,g,b2,a2 });
-            sv.insert(sv.end(), { x1,y0, 0,0, r,g,b2,a2 });
+        auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float bl,float a2) {
+            sv.insert(sv.end(),{x0,y0,0,0,r,g,bl,a2, x0,y1,0,0,r,g,bl,a2, x1,y1,0,0,r,g,bl,a2, x0,y0,0,0,r,g,bl,a2, x1,y1,0,0,r,g,bl,a2, x1,y0,0,0,r,g,bl,a2});
         };
-        for (size_t ln = lineA; ln <= lineB; ++ln) {
-            size_t ls = lineStartForLine(ln);
-            size_t le = lineEnd(ls);
-            size_t selStart = (ln == lineA) ? a : ls;
-            size_t selEnd = (ln == lineB) ? b : le;
+        for (size_t ln = la; ln <= lb; ++ln) {
+            if (isFolded(ln)) continue;
+            size_t ls = lineStartForLine(ln), le = lineEnd(ls);
+            size_t ss = (ln == la) ? a : ls, se = (ln == lb) ? b : le;
             float sy = textOriginY + ln * lineStep - scrollY_;
-            if (sy + lineStep < tbH || sy > wh) continue;
-            float sx = textX + fontAtlas().measureText(std::string_view(textBuffer.data() + ls, selStart - ls));
-            float ex = textX + fontAtlas().measureText(std::string_view(textBuffer.data() + ls, selEnd - ls));
-            addRect(sx, sy, ex, sy + lineStep, 0.2f, 0.4f, 0.7f, 0.4f);
+            if (sy + lineStep < tbH || sy > fwh) continue;
+            float sx = textX + fontAtlas().measureText(std::string_view(textBuffer.data() + ls, ss - ls));
+            float ex = textX + fontAtlas().measureText(std::string_view(textBuffer.data() + ls, se - ls));
+            ar(sx, sy, ex, sy + lineStep, 0.2f, 0.4f, 0.7f, 0.4f);
         }
-        if (!sv.empty()) {
-            GLRenderer::setDrawMode(2);
-            glBindVertexArray(gl_vao());
-            glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
-            glBufferData(GL_ARRAY_BUFFER, sv.size() * sizeof(float), sv.data(), GL_DYNAMIC_DRAW);
-            glBindTexture(GL_TEXTURE_2D, 0);
-            glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(sv.size() / 8));
-            glBindVertexArray(0);
-            GLRenderer::setDrawMode(0);
-        }
+        if (!sv.empty()) { GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo()); glBufferData(GL_ARRAY_BUFFER, sv.size()*sizeof(float), sv.data(), GL_DYNAMIC_DRAW); glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(sv.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0); }
     }
-    // draw find matches
+    // find match highlights
     if (find_.active && !find_.matches.empty()) {
         std::vector<float> fv;
-        auto addRect = [&](float x0, float y0, float x1, float y1, float r, float g, float b, float a) {
-            fv.insert(fv.end(), { x0,y0, 0,0, r,g,b,a });
-            fv.insert(fv.end(), { x0,y1, 0,0, r,g,b,a });
-            fv.insert(fv.end(), { x1,y1, 0,0, r,g,b,a });
-            fv.insert(fv.end(), { x0,y0, 0,0, r,g,b,a });
-            fv.insert(fv.end(), { x1,y1, 0,0, r,g,b,a });
-            fv.insert(fv.end(), { x1,y0, 0,0, r,g,b,a });
+        auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a2) {
+            fv.insert(fv.end(),{x0,y0,0,0,r,g,b,a2, x0,y1,0,0,r,g,b,a2, x1,y1,0,0,r,g,b,a2, x0,y0,0,0,r,g,b,a2, x1,y1,0,0,r,g,b,a2, x1,y0,0,0,r,g,b,a2});
         };
         size_t qLen = find_.query.empty() ? 1 : find_.query.size();
         for (size_t mi = 0; mi < find_.matches.size(); ++mi) {
-            size_t m = find_.matches[mi];
-            size_t ln = lineOfPos(m);
-            size_t ls = lineStartForLine(ln);
+            size_t m = find_.matches[mi]; size_t ln = lineOfPos(m); size_t ls = lineStartForLine(ln);
             float sy = textOriginY + ln * lineStep - scrollY_;
-            if (sy + lineStep < tbH || sy > wh) continue;
-            float sx = textX + fontAtlas().measureText(std::string_view(textBuffer.data() + ls, m - ls));
-            float ex = textX + fontAtlas().measureText(std::string_view(textBuffer.data() + ls, m + qLen - ls));
-            bool isCurrent = (mi == find_.currentMatch);
-            addRect(sx, sy, ex, sy + lineStep, isCurrent ? 0.8f : 0.6f, isCurrent ? 0.7f : 0.6f, 0.2f, 0.5f);
+            if (sy + lineStep < tbH || sy > fwh) continue;
+            float sx = textX + fontAtlas().measureText(std::string_view(textBuffer.data()+ls, m-ls));
+            float ex = textX + fontAtlas().measureText(std::string_view(textBuffer.data()+ls, m+qLen-ls));
+            bool cur = (mi == find_.currentMatch);
+            ar(sx, sy, ex, sy + lineStep, cur?0.8f:0.6f, cur?0.7f:0.6f, 0.2f, 0.5f);
         }
-        if (!fv.empty()) {
-            GLRenderer::setDrawMode(2);
-            glBindVertexArray(gl_vao());
-            glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
-            glBufferData(GL_ARRAY_BUFFER, fv.size() * sizeof(float), fv.data(), GL_DYNAMIC_DRAW);
-            glBindTexture(GL_TEXTURE_2D, 0);
-            glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(fv.size() / 8));
-            glBindVertexArray(0);
-            GLRenderer::setDrawMode(0);
-        }
+        if (!fv.empty()) { GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo()); glBufferData(GL_ARRAY_BUFFER, fv.size()*sizeof(float), fv.data(), GL_DYNAMIC_DRAW); glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(fv.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0); }
     }
-    // draw text lines (scrolled)
+    // text lines with syntax highlighting
     float y = textOriginY - scrollY_;
-    size_t lineStart = 0;
-    size_t lineIdx = 0;
-    while (lineStart <= textBuffer.size()) {
-        size_t lineEnd = textBuffer.find('\n', lineStart);
-        if (lineEnd == std::string::npos) lineEnd = textBuffer.size();
-        if (y + lineStep > tbH && y < wh) {
-            std::string_view line(textBuffer.data() + lineStart, lineEnd - lineStart);
-            fontAtlas().drawText(line, textX, y, 0.85f, 0.85f, 0.85f, 1.0f);
+    size_t lineIdx = 0, lStart = 0;
+    while (lStart <= textBuffer.size()) {
+        size_t lEnd = textBuffer.find('\n', lStart);
+        if (lEnd == std::string::npos) lEnd = textBuffer.size();
+        if (!isFolded(lineIdx) && y + lineStep > tbH && y < fwh - sbH) {
+            std::string_view line(textBuffer.data() + lStart, lEnd - lStart);
+            auto tokens = syntax_->highlightLine(line, lStart);
+            if (tokens.empty()) {
+                auto& c = syntax_->scopeColor(0);
+                fontAtlas().drawText(line, textX, y, c.r, c.g, c.b, 1.0f);
+            } else {
+                float cx = textX;
+                size_t prevEnd = 0;
+                for (auto& tok : tokens) {
+                    if (tok.start > lStart + prevEnd) {
+                        auto& c = syntax_->scopeColor(0);
+                        std::string_view gap(textBuffer.data() + lStart + prevEnd, tok.start - lStart - prevEnd);
+                        fontAtlas().drawText(gap, cx, y, c.r, c.g, c.b, 1.0f);
+                        cx += fontAtlas().measureText(gap);
+                    }
+                    auto& c = syntax_->scopeColor(tok.scope);
+                    std::string_view tokText(textBuffer.data() + tok.start, tok.length);
+                    fontAtlas().drawText(tokText, cx, y, c.r, c.g, c.b, 1.0f);
+                    cx += fontAtlas().measureText(tokText);
+                    prevEnd = (tok.start - lStart) + tok.length;
+                }
+                if (prevEnd < lEnd - lStart) {
+                    auto& c = syntax_->scopeColor(0);
+                    std::string_view rest(textBuffer.data() + lStart + prevEnd, lEnd - lStart - prevEnd);
+                    fontAtlas().drawText(rest, cx, y, c.r, c.g, c.b, 1.0f);
+                }
+            }
         }
-        y += lineStep;
-        ++lineIdx;
-        lineStart = lineEnd + 1;
-        if (y > wh) break;
+        y += isFolded(lineIdx) ? 0 : lineStep;
+        ++lineIdx; lStart = lEnd + 1;
+        if (y > fwh) break;
     }
-    // draw cursors
-    for (auto& sel : selections_) {
-        size_t curLine = lineOfPos(sel.cursor);
-        size_t ls = lineStartForLine(curLine);
-        float cursorX = textX + fontAtlas().measureText(std::string_view(textBuffer.data() + ls, sel.cursor - ls));
-        float cursorY = textOriginY + curLine * lineStep - scrollY_;
-        if (cursorY + lineStep < tbH || cursorY > wh) continue;
-        float curTop = cursorY;
-        float curBot = cursorY + fontAtlas().ascent() - fontAtlas().descent();
-        std::vector<float> cv = {
-            cursorX, curTop, 0, 0, 0.5f, 0.8f, 1.0f, 1.0f,
-            cursorX, curBot, 0, 0, 0.5f, 0.8f, 1.0f, 1.0f,
-            cursorX + 2, curBot, 0, 0, 0.5f, 0.8f, 1.0f, 1.0f,
-            cursorX, curTop, 0, 0, 0.5f, 0.8f, 1.0f, 1.0f,
-            cursorX + 2, curBot, 0, 0, 0.5f, 0.8f, 1.0f, 1.0f,
-            cursorX + 2, curTop, 0, 0, 0.5f, 0.8f, 1.0f, 1.0f
+    // fold indicators in gutter (draw triangles for foldable lines)
+    {
+        std::vector<float> fv;
+        auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
+            fv.insert(fv.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
         };
-        glBindVertexArray(gl_vao());
-        glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
-        glBufferData(GL_ARRAY_BUFFER, cv.size() * sizeof(float), cv.data(), GL_DYNAMIC_DRAW);
-        glBindTexture(GL_TEXTURE_2D, fontAtlas().atlasTexture());
-        glDrawArrays(GL_TRIANGLES, 0, 6);
-        glBindVertexArray(0);
+        float gy = textOriginY - scrollY_;
+        for (size_t ln = 0; ln < totalLines(); ++ln) {
+            if (gy + lineStep < tbH || gy > fwh) { gy += lineStep; continue; }
+            size_t le = lineEnd(lineStartForLine(ln));
+            bool foldable = (le < textBuffer.size() && (textBuffer[le] == '{' || textBuffer[le] == '[' || textBuffer[le] == '('));
+            if (foldable) {
+                float tx = 4.f, ty = gy + lineStep / 2.f - 3.f;
+                if (isFolded(ln)) ar(tx, ty, tx+6, ty+6, 0.6f,0.6f,0.3f,1.f); // right triangle
+                else ar(tx, ty+6, tx+6, ty, 0.5f,0.5f,0.55f,1.f); // down triangle (flattened)
+            }
+            gy += lineStep;
+        }
+        if (!fv.empty()) { GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo()); glBufferData(GL_ARRAY_BUFFER, fv.size()*sizeof(float), fv.data(), GL_DYNAMIC_DRAW); glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(fv.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0); }
+    }
+    // cursors
+    for (auto& s : selections_) {
+        size_t cl = lineOfPos(s.cursor), ls = lineStartForLine(cl);
+        float cx = textX + fontAtlas().measureText(std::string_view(textBuffer.data()+ls, s.cursor-ls));
+        float cy = textOriginY + cl * lineStep - scrollY_;
+        if (cy + lineStep < tbH || cy > fwh) continue;
+        float ct = cy, cb = cy + fontAtlas().ascent() - fontAtlas().descent();
+        std::vector<float> cv = {cx,ct,0,0,.5f,.8f,1.f,1.f, cx,cb,0,0,.5f,.8f,1.f,1.f, cx+2,cb,0,0,.5f,.8f,1.f,1.f, cx,ct,0,0,.5f,.8f,1.f,1.f, cx+2,cb,0,0,.5f,.8f,1.f,1.f, cx+2,ct,0,0,.5f,.8f,1.f,1.f};
+        glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo()); glBufferData(GL_ARRAY_BUFFER, cv.size()*sizeof(float), cv.data(), GL_DYNAMIC_DRAW);
+        glBindTexture(GL_TEXTURE_2D, fontAtlas().atlasTexture()); glDrawArrays(GL_TRIANGLES, 0, 6); glBindVertexArray(0);
     }
     glDisable(GL_SCISSOR_TEST);
     // minimap
-    float minimapX = static_cast<float>(ww) - minimap_->width();
-    minimap_->draw(fontAtlas(), textBuffer, minimapX, textOriginY, static_cast<float>(wh), tbH, gutterW, lineStep);
+    minimap_->draw(fontAtlas(), textBuffer, editorRight, textOriginY, fwh, tbH, gutterW, lineStep);
+    // status bar
+    statusbar_->draw(fontAtlas(), fww, fwh, minimap_->width(), currentLine, currentCol, syntax_->languageName(), syntax_->spaceCount(), "");
     // find bar
     if (find_.active) {
-        float barH = 32.f, barY = static_cast<float>(wh) - barH;
+        float barH = find_.replaceActive ? 64.f : 32.f, barY = fwh - sbH - barH;
         std::vector<float> fbv;
-        auto addRect = [&](float x0, float y0, float x1, float y1, float r, float g, float b, float a) {
-            fbv.insert(fbv.end(), { x0,y0, 0,0, r,g,b,a }); fbv.insert(fbv.end(), { x0,y1, 0,0, r,g,b,a });
-            fbv.insert(fbv.end(), { x1,y1, 0,0, r,g,b,a }); fbv.insert(fbv.end(), { x0,y0, 0,0, r,g,b,a });
-            fbv.insert(fbv.end(), { x1,y1, 0,0, r,g,b,a }); fbv.insert(fbv.end(), { x1,y0, 0,0, r,g,b,a });
+        auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
+            fbv.insert(fbv.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
         };
-        addRect(0, barY, static_cast<float>(ww) - minimap_->width(), barY + barH, 0.18f, 0.18f, 0.21f, 1.f);
-        addRect(0, barY, static_cast<float>(ww) - minimap_->width(), barY + 1, 0.3f, 0.3f, 0.35f, 1.f);
-        GLRenderer::setDrawMode(2);
-        glBindVertexArray(gl_vao());
-        glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
-        glBufferData(GL_ARRAY_BUFFER, fbv.size() * sizeof(float), fbv.data(), GL_DYNAMIC_DRAW);
-        glBindTexture(GL_TEXTURE_2D, 0);
-        glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(fbv.size() / 8));
-        glBindVertexArray(0);
-        GLRenderer::setDrawMode(0);
-        // find label + query
-        std::string findLabel = "Find: " + find_.query + "|";
-        if (find_.regex) findLabel += "  [REGEX]";
-        if (!find_.matches.empty()) findLabel += "  (" + std::to_string(find_.currentMatch + 1) + "/" + std::to_string(find_.matches.size()) + ")";
-        fontAtlas().drawText(findLabel, 12.f, barY + 8.f, 0.8f, 0.8f, 0.8f, 1.f);
+        ar(0, barY, editorRight, barY + barH, 0.18f, 0.18f, 0.21f, 1.f);
+        ar(0, barY, editorRight, barY + 1, 0.3f, 0.3f, 0.35f, 1.f);
+        GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo()); glBufferData(GL_ARRAY_BUFFER, fbv.size()*sizeof(float), fbv.data(), GL_DYNAMIC_DRAW); glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(fbv.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0);
+        std::string fl = "Find: " + find_.query + "|";
+        if (find_.regex) fl += "  [REGEX]"; if (find_.caseSensitive) fl += "  [CASE]"; if (find_.wholeWord) fl += "  [WORD]";
+        if (!find_.matches.empty()) fl += "  (" + std::to_string(find_.currentMatch+1) + "/" + std::to_string(find_.matches.size()) + ")";
+        fontAtlas().drawText(fl, 12.f, barY + 6.f, 0.8f, 0.8f, 0.8f, 1.f);
+        if (find_.replaceActive) {
+            std::string rl = "Replace: " + find_.replace + "|";
+            fontAtlas().drawText(rl, 12.f, barY + 28.f, 0.7f, 0.7f, 0.7f, 1.f);
+            // buttons
+            float bx = editorRight - 280.f;
+            fontAtlas().drawText("[Replace]", bx, barY + 28.f, 0.6f, 0.7f, 0.6f, 1.f);
+            fontAtlas().drawText("[Replace All]", bx + 80.f, barY + 28.f, 0.6f, 0.7f, 0.6f, 1.f);
+        }
+        // toggles
+        float tx = editorRight - 240.f;
+        fontAtlas().drawText(find_.regex ? "[.*]" : ".*", tx, barY + 6.f, find_.regex ? 0.9f : 0.4f, find_.regex ? 0.8f : 0.4f, 0.3f, 1.f);
+        fontAtlas().drawText(find_.caseSensitive ? "[Aa]" : "Aa", tx + 40.f, barY + 6.f, find_.caseSensitive ? 0.9f : 0.4f, find_.caseSensitive ? 0.8f : 0.4f, 0.3f, 1.f);
+        fontAtlas().drawText(find_.wholeWord ? "[\\b]" : "\\b", tx + 80.f, barY + 6.f, find_.wholeWord ? 0.9f : 0.4f, find_.wholeWord ? 0.8f : 0.4f, 0.3f, 1.f);
+    }
+    // goto overlay
+    if (goto_.active) {
+        float ow = 400.f, oh = 200.f, ox = (fww - ow) / 2.f, oy = tbH + 20.f;
+        std::vector<float> gv;
+        auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
+            gv.insert(gv.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
+        };
+        ar(ox, oy, ox + ow, oy + oh, 0.15f, 0.15f, 0.18f, 0.97f);
+        ar(ox, oy, ox + ow, oy + 28, 0.12f, 0.12f, 0.14f, 1.f);
+        // selected item highlight
+        if (goto_.selected >= 0 && goto_.selected < (int)goto_.items.size())
+            ar(ox, oy + 28 + goto_.selected * 22, ox + ow, oy + 28 + (goto_.selected + 1) * 22, 0.22f, 0.28f, 0.42f, 1.f);
+        GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo()); glBufferData(GL_ARRAY_BUFFER, gv.size()*sizeof(float), gv.data(), GL_DYNAMIC_DRAW); glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(gv.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0);
+        fontAtlas().drawText("Goto: " + goto_.query + "|", ox + 8, oy + 6, 0.8f, 0.8f, 0.8f, 1.f);
+        for (int i = 0; i < (int)goto_.items.size() && i < 7; ++i) {
+            float ib = (i == goto_.selected) ? 1.f : 0.7f;
+            fontAtlas().drawText(goto_.items[i], ox + 8, oy + 30 + i * 22, ib, ib, ib, 1.f);
+        }
     }
     GLRenderer::endFrame();
     SDL_GL_SwapWindow(window_);
 }
 
 void Application::shutdown() {
-    fontAtlas().destroy();
-    GLRenderer::destroy();
-    SDL_StopTextInput();
-    SDL_GL_DeleteContext(glContext_);
-    SDL_DestroyWindow(window_);
-    SDL_Quit();
+    delete syntax_; delete statusbar_; delete minimap_; delete gutter_; delete menubar_; delete titlebar_;
+    fontAtlas().destroy(); GLRenderer::destroy();
+    SDL_StopTextInput(); SDL_GL_DeleteContext(glContext_); SDL_DestroyWindow(window_); SDL_Quit();
 }
 
-int main(int argc, char** argv) {
-    return Application::instance().run(argc, argv);
-}
+int main(int argc, char** argv) { return Application::instance().run(argc, argv); }
