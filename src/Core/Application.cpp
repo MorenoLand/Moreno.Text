@@ -293,6 +293,83 @@ void Application::toggleFold(size_t line) {
     foldedLines_[line] = !foldedLines_[line];
 }
 
+void Application::convertIndentation(bool toSpaces) {
+    pushUndo();
+    std::string result; result.reserve(textBuffer.size());
+    size_t i = 0;
+    while (i < textBuffer.size()) {
+        if (i == 0 || textBuffer[i-1] == '\n') {
+            int spaces = 0;
+            while (i < textBuffer.size() && textBuffer[i] == ' ') { ++spaces; ++i; }
+            int tabs = 0;
+            while (i < textBuffer.size() && textBuffer[i] == '\t') { ++tabs; ++i; }
+            if (toSpaces) {
+                int totalSpaces = spaces + tabs * tabSize_;
+                result.append(totalSpaces, ' ');
+            } else {
+                int totalCols = spaces + tabs * tabSize_;
+                int fullTabs = totalCols / tabSize_;
+                int rem = totalCols % tabSize_;
+                result.append(fullTabs, '\t');
+                result.append(rem, ' ');
+            }
+        } else {
+            result += textBuffer[i]; ++i;
+        }
+    }
+    textBuffer = std::move(result);
+    dirty_ = true;
+}
+
+void Application::guessIndent() {
+    size_t i = 0, spaceLines = 0, tabLines = 0, totalSpaceWidth = 0, spaceWidthCount = 0;
+    while (i < textBuffer.size()) {
+        if (i == 0 || textBuffer[i-1] == '\n') {
+            if (i < textBuffer.size() && textBuffer[i] == '\t') { ++tabLines; ++i; }
+            else {
+                int sp = 0;
+                while (i < textBuffer.size() && textBuffer[i] == ' ') { ++sp; ++i; }
+                if (sp > 0) { ++spaceLines; totalSpaceWidth += sp; ++spaceWidthCount; }
+            }
+        } else ++i;
+    }
+    if (spaceLines == 0 && tabLines == 0) return;
+    useTabs_ = (tabLines > spaceLines);
+    if (spaceWidthCount > 0) {
+        int avg = (int)(totalSpaceWidth / spaceWidthCount);
+        // snap to nearest common indent size
+        int best = 2;
+        for (int c : {2,3,4,8}) { if (abs(c - avg) < abs(best - avg)) best = c; }
+        tabSize_ = best;
+    }
+    syntax_->setTabSize(tabSize_);
+    syntax_->setUseTabs(useTabs_);
+}
+
+void Application::computeLineIndents() {
+    lineIndents_.resize(totalLines(), 0);
+    size_t li = 0, pos = 0;
+    while (pos <= textBuffer.size() && li < lineIndents_.size()) {
+        int indent = 0;
+        while (pos + indent < textBuffer.size() && textBuffer[pos + indent] == ' ') ++indent;
+        int extra = indent;
+        while (pos + extra < textBuffer.size() && textBuffer[pos + extra] == '\t') ++extra;
+        lineIndents_[li] = (extra > indent) ? (indent + (extra - indent) * tabSize_) : indent;
+        ++li;
+        size_t nl = textBuffer.find('\n', pos);
+        if (nl == std::string::npos) break;
+        pos = nl + 1;
+    }
+}
+
+// ── static data ──
+
+const char* Application::syntaxLanguages[] = {
+    "ActionScript","AppleScript","ASP","Batch","C","C#","C++","CSS","Go","HTML",
+    "Java","JavaScript","JSON","Lua","Markdown","Objective-C","PHP","Python","Ruby","Rust",
+    "SQL","Swift","TOML","XML","YAML","Plain Text"
+};
+
 // ── events ──
 
 void Application::handleEvents() {
@@ -351,6 +428,13 @@ void Application::handleEvents() {
         if (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
             SDL_GL_GetDrawableSize(window_, &ww, &wh); GLRenderer::resize(ww, wh); titlebar_->layout(ww);
         }
+        else if (e.type == SDL_MOUSEMOTION && statusPopup_ != StatusPopup::None) {
+            int itemCount = (statusPopup_ == StatusPopup::Indent) ? 12 : syntaxLangCount;
+            float popW = 240.f, popH = itemCount * 24.f + 4.f;
+            if (e.motion.x >= popupX_ && e.motion.x <= popupX_ + popW && e.motion.y >= popupY_ && e.motion.y <= popupY_ + popH)
+                popupSelected_ = (int)((e.motion.y - popupY_ - 2) / 24.f);
+            else popupSelected_ = -1;
+        }
         else if (e.type == SDL_MOUSEWHEEL) {
             scrollY_ -= e.wheel.y * fontAtlas().lineHeight() * 3;
             float lineStep = fontAtlas().lineHeight();
@@ -369,16 +453,64 @@ void Application::handleEvents() {
             float textOriginY = tbH + fontAtlas().ascent() + 4.0f;
             float gutterW = gutter_->width();
             float textX = gutterW + 8.0f;
+            float sbH = statusbar_->height();
+            float fww = (float)ww, fwh = (float)wh;
+            // status bar popup click
+            if (statusPopup_ != StatusPopup::None) {
+                int itemCount = (statusPopup_ == StatusPopup::Indent) ? 12 : syntaxLangCount;
+                float popW = 240.f, popH = itemCount * 24.f + 4.f;
+                if (mx >= popupX_ && mx <= popupX_ + popW && my >= popupY_ && my <= popupY_ + popH) {
+                    int idx = (int)((my - popupY_ - 2) / 24.f);
+                    if (idx >= 0) {
+                        if (statusPopup_ == StatusPopup::Indent) {
+                            if (idx == 0) { useTabs_ = false; syntax_->setUseTabs(false); }
+                            else if (idx >= 1 && idx <= 8) { tabSize_ = idx; syntax_->setTabSize(idx); }
+                            else if (idx == 9) guessIndent();
+                            else if (idx == 10) convertIndentation(true);
+                            else if (idx == 11) convertIndentation(false);
+                        } else {
+                            if (idx < syntaxLangCount) {
+                                syntax_->setLanguageByName(syntaxLanguages[idx]);
+                                syntaxLangIndex_ = idx;
+                            }
+                        }
+                    }
+                    statusPopup_ = StatusPopup::None;
+                    continue;
+                }
+                statusPopup_ = StatusPopup::None;
+                continue;
+            }
+            // status bar click
+            if (my >= fwh - sbH && my < fwh) {
+                float editorRight = fww - minimap_->width();
+                std::string indentLabel = useTabs_ ? ("Tab Size: " + std::to_string(tabSize_)) : ("Spaces: " + std::to_string(tabSize_));
+                float indentW = fontAtlas().measureText(indentLabel);
+                std::string synLabel = syntax_->languageName();
+                float synW = fontAtlas().measureText(synLabel);
+                float indentX = editorRight - indentW - synW - 32.f - 12.f;
+                float synX = editorRight - synW - 12.f;
+                if (mx >= indentX && mx <= indentX + indentW + 10.f) {
+                    statusPopup_ = StatusPopup::Indent; popupX_ = indentX; popupY_ = fwh - sbH - 12 * 24.f - 4.f; popupSelected_ = 0; continue;
+                }
+                if (mx >= synX && mx <= synX + synW + 10.f) {
+                    statusPopup_ = StatusPopup::Syntax; popupX_ = synX; popupY_ = fwh - sbH - syntaxLangCount * 24.f - 4.f; popupSelected_ = 0; continue;
+                }
+            }
             // gutter fold click
             if (my > tbH && mx < gutterW) {
                 float clickY = my + scrollY_ - textOriginY;
                 size_t clickLine = (size_t)(clickY / lineStep);
                 if (clickLine < totalLines()) {
                     size_t le = lineEnd(lineStartForLine(clickLine));
-                    if (le < textBuffer.size() && (textBuffer[le] == '{' || textBuffer[le] == '[' || textBuffer[le] == '(')) {
-                        toggleFold(clickLine);
-                        continue;
+                    bool bracketFold = (le < textBuffer.size() && (textBuffer[le] == '{' || textBuffer[le] == '[' || textBuffer[le] == '('));
+                    bool indentFold = false;
+                    if (!bracketFold && clickLine + 1 < totalLines()) {
+                        int curInd = (clickLine < lineIndents_.size()) ? lineIndents_[clickLine] : 0;
+                        int nxtInd = (clickLine + 1 < lineIndents_.size()) ? lineIndents_[clickLine+1] : 0;
+                        indentFold = (nxtInd > curInd);
                     }
+                    if (bracketFold || indentFold) { toggleFold(clickLine); continue; }
                 }
             }
             if (my > tbH && mx >= gutterW) {
@@ -470,9 +602,9 @@ void Application::handleEvents() {
             else if (sym == SDLK_TAB) {
                 if (shift) {
                     pushUndo(); size_t ls = lineStart(sel.cursor); int rm = 0;
-                    while (rm < 2 && ls + rm < textBuffer.size() && textBuffer[ls + rm] == ' ') ++rm;
+                    while (rm < tabSize_ && ls + rm < textBuffer.size() && textBuffer[ls + rm] == ' ') ++rm;
                     if (rm > 0) { textBuffer.erase(ls, rm); sel.anchor = sel.cursor = (sel.cursor > ls + rm) ? sel.cursor - rm : ls; dirty_ = true; }
-                } else insertText("  ");
+                } else insertText(useTabs_ ? "\t" : std::string(tabSize_, ' '));
             }
             else if (sym == SDLK_LEFT) {
                 if (ctrl) {
@@ -617,8 +749,45 @@ void Application::render() {
         if (!fv.empty()) { GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo()); glBufferData(GL_ARRAY_BUFFER, fv.size()*sizeof(float), fv.data(), GL_DYNAMIC_DRAW); glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(fv.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0); }
     }
     // text lines with syntax highlighting
+    // indent guides + fold ... + whitespace dots
+    std::vector<float> guideVerts;
+    auto addGuideRect = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
+        guideVerts.insert(guideVerts.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
+    };
+    float spaceWidth = fontAtlas().measureText(" ");
     float y = textOriginY - scrollY_;
     size_t lineIdx = 0, lStart = 0;
+    // build indent guide data: track per-line indent
+    computeLineIndents();
+    // draw indent guides (vertical 1px lines at each indent level)
+    {
+        float gy = textOriginY - scrollY_;
+        for (size_t ln = 0; ln < totalLines(); ++ln) {
+            if (isFolded(ln)) continue;
+            if (gy + lineStep < tbH) { gy += lineStep; continue; }
+            if (gy > fwh) break;
+            int indent = (ln < lineIndents_.size()) ? lineIndents_[ln] : 0;
+            for (int lvl = tabSize_; lvl < indent; lvl += tabSize_) {
+                float gx = textX + lvl * spaceWidth;
+                // only draw if next line has same or deeper indent
+                bool draw = (ln + 1 < totalLines() && lineIndents_[ln+1] > lvl);
+                // or previous line has deeper indent
+                draw = draw || (ln > 0 && lineIndents_[ln-1] >= lvl);
+                if (draw) addGuideRect(gx, gy, gx + 1, gy + lineStep, 0.3f, 0.3f, 0.35f, 0.5f);
+            }
+            gy += lineStep;
+        }
+    }
+    // flush indent guides
+    if (!guideVerts.empty()) {
+        GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
+        glBufferData(GL_ARRAY_BUFFER, guideVerts.size()*sizeof(float), guideVerts.data(), GL_DYNAMIC_DRAW);
+        glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(guideVerts.size()/8));
+        glBindVertexArray(0); GLRenderer::setDrawMode(0);
+    }
+    // text lines
+    y = textOriginY - scrollY_;
+    lineIdx = 0; lStart = 0;
     while (lStart <= textBuffer.size()) {
         size_t lEnd = textBuffer.find('\n', lStart);
         if (lEnd == std::string::npos) lEnd = textBuffer.size();
@@ -655,7 +824,49 @@ void Application::render() {
         ++lineIdx; lStart = lEnd + 1;
         if (y > fwh) break;
     }
-    // fold indicators in gutter (draw triangles for foldable lines)
+    // folded line ... indicators
+    {
+        float fy = textOriginY - scrollY_;
+        for (size_t ln = 0; ln < totalLines(); ++ln) {
+            if (isFolded(ln) && fy + lineStep > tbH && fy < fwh) {
+                fontAtlas().drawText("\xe2\x80\xa6", textX, fy, 0.5f, 0.5f, 0.3f, 1.f); // \u2026 ellipsis
+            }
+            fy += lineStep;
+        }
+    }
+    // whitespace dots in selection
+    {
+        for (auto& s : selections_) {
+            if (!s.hasSelection()) continue;
+            size_t sa = s.min(), sb = s.max();
+            std::vector<float> wv;
+            auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
+                wv.insert(wv.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
+            };
+            for (size_t pos = sa; pos < sb; ++pos) {
+                char c = textBuffer[pos];
+                if (c != ' ' && c != '\t') continue;
+                size_t ln = lineOfPos(pos), ls = lineStartForLine(ln);
+                float wy = textOriginY + ln * lineStep - scrollY_;
+                if (wy + lineStep < tbH || wy > fwh) continue;
+                float colOff = 0;
+                // calculate pixel X for this position
+                std::string_view before(textBuffer.data() + ls, pos - ls);
+                float wx = textX + fontAtlas().measureText(before);
+                if (c == ' ') {
+                    float cx = wx + spaceWidth / 2.f, cy = wy + lineStep / 2.f, r = 1.2f;
+                    ar(cx-r, cy-r, cx+r, cy+r, 0.45f, 0.45f, 0.5f, 0.6f);
+                } else {
+                    // tab arrow: small right-pointing triangle
+                    float cx = wx + 2.f, cy = wy + lineStep * 0.3f;
+                    ar(cx, cy, cx+5, cy+lineStep*0.2f, 0.45f, 0.45f, 0.5f, 0.6f);
+                    ar(cx, cy+lineStep*0.4f, cx+5, cy+lineStep*0.2f, 0.45f, 0.45f, 0.5f, 0.6f);
+                }
+            }
+            if (!wv.empty()) { GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo()); glBufferData(GL_ARRAY_BUFFER, wv.size()*sizeof(float), wv.data(), GL_DYNAMIC_DRAW); glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(wv.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0); }
+        }
+    }
+    // fold indicators in gutter (triangles for foldable lines)
     {
         std::vector<float> fv;
         auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
@@ -665,11 +876,18 @@ void Application::render() {
         for (size_t ln = 0; ln < totalLines(); ++ln) {
             if (gy + lineStep < tbH || gy > fwh) { gy += lineStep; continue; }
             size_t le = lineEnd(lineStartForLine(ln));
-            bool foldable = (le < textBuffer.size() && (textBuffer[le] == '{' || textBuffer[le] == '[' || textBuffer[le] == '('));
+            bool bracketFold = (le < textBuffer.size() && (textBuffer[le] == '{' || textBuffer[le] == '[' || textBuffer[le] == '('));
+            bool indentFold = false;
+            if (!bracketFold && ln + 1 < totalLines()) {
+                int curInd = (ln < lineIndents_.size()) ? lineIndents_[ln] : 0;
+                int nxtInd = (ln + 1 < lineIndents_.size()) ? lineIndents_[ln+1] : 0;
+                indentFold = (nxtInd > curInd);
+            }
+            bool foldable = bracketFold || indentFold;
             if (foldable) {
                 float tx = 4.f, ty = gy + lineStep / 2.f - 3.f;
-                if (isFolded(ln)) ar(tx, ty, tx+6, ty+6, 0.6f,0.6f,0.3f,1.f); // right triangle
-                else ar(tx, ty+6, tx+6, ty, 0.5f,0.5f,0.55f,1.f); // down triangle (flattened)
+                if (isFolded(ln)) { ar(tx, ty, tx+6, ty+6, 0.6f,0.6f,0.3f,1.f); }
+                else { ar(tx, ty+6, tx+3, ty, 0.5f,0.5f,0.55f,1.f); ar(tx+3, ty, tx+6, ty+6, 0.5f,0.5f,0.55f,1.f); }
             }
             gy += lineStep;
         }
@@ -690,7 +908,7 @@ void Application::render() {
     // minimap
     minimap_->draw(fontAtlas(), textBuffer, editorRight, textOriginY, fwh, tbH, gutterW, lineStep);
     // status bar
-    statusbar_->draw(fontAtlas(), fww, fwh, minimap_->width(), currentLine, currentCol, syntax_->languageName(), syntax_->spaceCount(), "");
+    statusbar_->draw(fontAtlas(), fww, fwh, minimap_->width(), currentLine, currentCol, syntax_->languageName(), useTabs_, tabSize_, "");
     // find bar
     if (find_.active) {
         float barH = find_.replaceActive ? 64.f : 32.f, barY = fwh - sbH - barH;
@@ -736,6 +954,37 @@ void Application::render() {
         for (int i = 0; i < (int)goto_.items.size() && i < 7; ++i) {
             float ib = (i == goto_.selected) ? 1.f : 0.7f;
             fontAtlas().drawText(goto_.items[i], ox + 8, oy + 30 + i * 22, ib, ib, ib, 1.f);
+        }
+    }
+    // status bar popup (indent settings or syntax picker)
+    if (statusPopup_ != StatusPopup::None) {
+        int itemCount = (statusPopup_ == StatusPopup::Indent) ? 12 : syntaxLangCount;
+        float popW = 240.f, popH = itemCount * 24.f + 4.f;
+        std::vector<float> pv;
+        auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
+            pv.insert(pv.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
+        };
+        ar(popupX_, popupY_, popupX_ + popW, popupY_ + popH, 0.18f, 0.18f, 0.21f, 0.98f);
+        ar(popupX_, popupY_, popupX_ + popW, popupY_ + 1, 0.3f, 0.3f, 0.35f, 1.f);
+        if (popupSelected_ >= 0 && popupSelected_ < itemCount)
+            ar(popupX_ + 2, popupY_ + 2 + popupSelected_ * 24.f, popupX_ + popW - 2, popupY_ + 2 + (popupSelected_ + 1) * 24.f, 0.25f, 0.30f, 0.45f, 1.f);
+        GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo()); glBufferData(GL_ARRAY_BUFFER, pv.size()*sizeof(float), pv.data(), GL_DYNAMIC_DRAW); glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(pv.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0);
+        if (statusPopup_ == StatusPopup::Indent) {
+            fontAtlas().drawText(useTabs_ ? "  \xe2\x80\xa2  Indent Using Spaces" : "  \xe2\x80\xa2  Indent Using Spaces", popupX_ + 8, popupY_ + 6, 0.75f, 0.75f, 0.78f, 1.f);
+            for (int i = 1; i <= 8; ++i) {
+                char tb[32]; snprintf(tb, sizeof(tb), "  %s  Tab Width: %d", (tabSize_ == i && !useTabs_) ? "\xe2\x80\xa2" : " ", i);
+                fontAtlas().drawText(tb, popupX_ + 8, popupY_ + 6 + i * 24.f, (tabSize_ == i && !useTabs_) ? 0.9f : 0.7f, (tabSize_ == i && !useTabs_) ? 0.9f : 0.7f, (tabSize_ == i && !useTabs_) ? 1.f : 0.75f, 1.f);
+            }
+            fontAtlas().drawText("Guess Settings From Buffer", popupX_ + 24, popupY_ + 6 + 9 * 24.f, 0.7f, 0.7f, 0.75f, 1.f);
+            fontAtlas().drawText("Convert Indentation to Spaces", popupX_ + 24, popupY_ + 6 + 10 * 24.f, 0.7f, 0.7f, 0.75f, 1.f);
+            fontAtlas().drawText("Convert Indentation to Tabs", popupX_ + 24, popupY_ + 6 + 11 * 24.f, 0.7f, 0.7f, 0.75f, 1.f);
+        } else {
+            for (int i = 0; i < syntaxLangCount; ++i) {
+                float b = (syntax_->languageName() == syntaxLanguages[i]) ? 1.f : 0.7f;
+                if (syntax_->languageName() == syntaxLanguages[i])
+                    fontAtlas().drawText("\xe2\x80\xa2", popupX_ + 8, popupY_ + 6 + i * 24.f, 0.9f, 0.9f, 1.f, 1.f);
+                fontAtlas().drawText(syntaxLanguages[i], popupX_ + 24, popupY_ + 6 + i * 24.f, b, b, b, 1.f);
+            }
         }
     }
     GLRenderer::endFrame();

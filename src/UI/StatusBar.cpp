@@ -8,7 +8,7 @@ extern GLuint gl_vao();
 extern GLuint gl_vbo();
 
 void StatusBar::draw(FontAtlas& font, float windowW, float windowH, float minimapW,
-                     size_t line, size_t col, const std::string& syntaxName, int spaces, const std::string& branch) {
+                     size_t line, size_t col, const std::string& syntaxName, bool useTabs, int tabSize, const std::string& branch) {
     float barY = windowH - height_;
     std::vector<float> verts;
     auto addRect = [&](float x0, float y0, float x1, float y1, float r, float g, float b, float a) {
@@ -25,18 +25,24 @@ void StatusBar::draw(FontAtlas& font, float windowW, float windowH, float minima
     glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(verts.size() / 8));
     glBindVertexArray(0);
     GLRenderer::setDrawMode(0);
-    // left side: line/col
-    char buf[128];
+    char buf[64];
     snprintf(buf, sizeof(buf), "Line %zu, Col %zu", line + 1, col + 1);
     font.drawText(buf, 12.f, barY + 3.f, 0.7f, 0.7f, 0.7f, 1.f);
-    // middle: branch
     if (!branch.empty()) {
         float bw = font.measureText(branch);
         font.drawText(branch, (windowW - minimapW) / 2.f - bw / 2.f, barY + 3.f, 0.5f, 0.7f, 0.5f, 1.f);
     }
-    // right side: spaces + syntax
-    char rightBuf[128];
-    snprintf(rightBuf, sizeof(rightBuf), "Spaces: %d | %s", spaces, syntaxName.c_str());
-    float rw = font.measureText(rightBuf);
-    font.drawText(rightBuf, windowW - minimapW - rw - 12.f, barY + 3.f, 0.65f, 0.65f, 0.68f, 1.f);
+    // right side: indent mode + syntax name
+    char indentBuf[64];
+    snprintf(indentBuf, sizeof(indentBuf), useTabs ? "Tab Size: %d" : "Spaces: %d", tabSize);
+    float synW = font.measureText(syntaxName);
+    float indW = font.measureText(indentBuf);
+    float rightEdge = windowW - minimapW - 12.f;
+    syntaxLabelX_ = rightEdge - synW;
+    syntaxLabelW_ = synW + 6.f;
+    indentLabelX_ = syntaxLabelX_ - indW - 24.f;
+    indentLabelW_ = indW + 6.f;
+    font.drawText(indentBuf, indentLabelX_ + 3.f, barY + 3.f, 0.65f, 0.65f, 0.68f, 1.f);
+    font.drawText("|", indentLabelX_ + indW + 10.f, barY + 3.f, 0.3f, 0.3f, 0.33f, 1.f);
+    font.drawText(syntaxName, syntaxLabelX_ + 3.f, barY + 3.f, 0.65f, 0.65f, 0.68f, 1.f);
 }

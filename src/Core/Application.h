@@ -53,6 +53,8 @@ struct GotoState {
     int selected = 0;
 };
 
+enum class StatusPopup { None, Indent, Syntax };
+
 class Application {
 public:
     static Application& instance();
@@ -109,6 +111,20 @@ private:
     void toggleFold(size_t line);
     bool isFolded(size_t line) const;
     size_t findFoldEnd(size_t startLine) const;
+    std::vector<int> lineIndents_;
+    void computeLineIndents();
+    // indent / tab config
+    bool useTabs_ = false;
+    int tabSize_ = 2;
+    void convertIndentation(bool toSpaces);
+    void guessIndent();
+    // status bar popups
+    StatusPopup statusPopup_ = StatusPopup::None;
+    int popupSelected_ = 0;
+    float popupX_ = 0, popupY_ = 0;
+    int syntaxLangIndex_ = -1;
+    static const char* syntaxLanguages[];
+    static constexpr int syntaxLangCount = 24;
     // UI components
     Titlebar* titlebar_ = nullptr;
     MenuBar* menubar_ = nullptr;

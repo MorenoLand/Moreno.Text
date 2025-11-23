@@ -12,6 +12,17 @@ void SyntaxHighlighter::setLanguage(const std::string& ext) {
     else setupPlainText();
 }
 
+void SyntaxHighlighter::setLanguageByName(const std::string& name) {
+    static const struct { const char* name; const char* ext; } map[] = {
+        {"JavaScript","js"},{"Python","py"},{"C++","cpp"},{"C","c"},{"HTML","html"},{"CSS","css"},
+        {"JSON","json"},{"Java","java"},{"Go","go"},{"Rust","rs"},{"Ruby","rb"},{"PHP","php"},
+        {"SQL","sql"},{"Lua","lua"},{"Markdown","md"},{"XML","xml"},{"YAML","yml"},{"TOML","toml"},
+        {"C#","cs"},{"Objective-C","m"},{"Swift","swift"},{"TypeScript","ts"},{"Shell","sh"},{"Plain Text",""},
+    };
+    for (auto& m : map) if (name == m.name) { setLanguage(m.ext); return; }
+    setupPlainText();
+}
+
 void SyntaxHighlighter::setupJS() {
     langName_ = "JavaScript";
     static const char* kw[] = {"break","case","catch","class","const","continue","debugger","default","delete","do","else","export","extends","finally","for","function","if","import","in","instanceof","let","new","return","static","super","switch","this","throw","try","typeof","var","void","while","with","yield","async","await","from","of",nullptr};

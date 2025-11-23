@@ -19,13 +19,18 @@ class SyntaxHighlighter {
 public:
     SyntaxHighlighter();
     void setLanguage(const std::string& ext);
+    void setLanguageByName(const std::string& name);
     const std::string& languageName() const { return langName_; }
     std::vector<SyntaxToken> highlightLine(std::string_view line, size_t lineOffset) const;
     const SyntaxColor& scopeColor(int scope) const;
     int spaceCount() const { return tabSize_; }
+    void setTabSize(int sz) { tabSize_ = sz; }
+    bool useTabs() const { return useTabs_; }
+    void setUseTabs(bool t) { useTabs_ = t; }
 private:
     std::string langName_ = "Plain Text";
     int tabSize_ = 2;
+    bool useTabs_ = false;
     std::unordered_set<std::string> keywords_;
     std::unordered_set<std::string> builtins_;
     std::unordered_set<std::string> types_;
