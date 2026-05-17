@@ -75,6 +75,8 @@ struct TabBuffer {
     std::vector<UndoStep> undoStack, redoStack;
     std::set<std::pair<int,int>> foldedRegions;
     bool dirty = false;
+    bool largeFilePreview = false;
+    uintmax_t largeFileSize = 0;
     float desiredCursorX = -1.f;
 };
 
@@ -204,6 +206,8 @@ private:
     float scrollX_ = 0.f;
     float maxLineWidth_ = 0.f;
     bool maxLineWidthDirty_ = true;
+    bool largeFilePreview_ = false;
+    uintmax_t largeFileSize_ = 0;
     bool selecting_ = false;
     bool minimapDragging_ = false;
     bool minimapPendingJump_ = false;

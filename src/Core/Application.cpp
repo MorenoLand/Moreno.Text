@@ -289,11 +289,23 @@ bool Application::loadSession() {
             if (path.empty() || !fs::exists(path)) continue;
             std::ifstream tf(path, std::ios::binary);
             if (!tf) continue;
-            std::ostringstream ss; ss << tf.rdbuf();
+            uintmax_t fileSize = 0;
+            try { fileSize = fs::file_size(path); } catch (...) {}
+            constexpr uintmax_t previewLimit = 16ull * 1024ull * 1024ull;
+            std::string text;
+            if (fileSize > previewLimit) {
+                text.resize((size_t)previewLimit);
+                tf.read(text.data(), (std::streamsize)text.size());
+                text.resize((size_t)tf.gcount());
+            } else {
+                std::ostringstream ss; ss << tf.rdbuf(); text = ss.str();
+            }
             TabBuffer tab;
-            tab.text = ss.str();
+            tab.text = std::move(text);
             tab.filePath = path;
             tab.fileName = fs::path(path).filename().string();
+            tab.largeFilePreview = fileSize > previewLimit;
+            tab.largeFileSize = fileSize;
             tab.scrollY = item.value("scrollY", 0.f);
             size_t cursor = item.value("cursor", 0ull);
             if (cursor > tab.text.size()) cursor = tab.text.size();
@@ -523,18 +535,32 @@ void Application::updateGitBranch() {
 void Application::openFile(const std::string& path) {
     saveCurrentTab();
     std::ifstream f(path, std::ios::binary); if (!f) return;
-    std::ostringstream ss; ss << f.rdbuf();
     std::string absPath;
     try { absPath = fs::absolute(path).string(); } catch (...) { absPath = path; }
-    TabBuffer tab; tab.text = ss.str(); tab.filePath = absPath; tab.fileName = fs::path(absPath).filename().string();
-    tab.selections.emplace_back(tab.text.size());
+    uintmax_t fileSize = 0;
+    try { fileSize = fs::file_size(absPath); } catch (...) {}
+    constexpr uintmax_t previewLimit = 16ull * 1024ull * 1024ull;
+    std::string text;
+    if (fileSize > previewLimit) {
+        text.resize((size_t)previewLimit);
+        f.read(text.data(), (std::streamsize)text.size());
+        text.resize((size_t)f.gcount());
+    } else {
+        std::ostringstream ss; ss << f.rdbuf(); text = ss.str();
+    }
+    TabBuffer tab; tab.text = std::move(text); tab.filePath = absPath; tab.fileName = fs::path(absPath).filename().string();
+    tab.largeFilePreview = fileSize > previewLimit;
+    tab.largeFileSize = fileSize;
+    tab.selections.emplace_back(0);
     tabs_.push_back(std::move(tab)); activeTab_ = tabs_.size()-1;
     textBuffer = tabs_[activeTab_].text; openFilePath_ = absPath; openFile_ = tabs_[activeTab_].fileName;
-    dirty_ = false; selections_.clear(); selections_.emplace_back(textBuffer.size());
-    scrollY_ = 0; undoStack_.clear(); redoStack_.clear(); foldedRegions_.clear(); detectSyntax(); updateGitBranch();
+    largeFilePreview_ = tabs_[activeTab_].largeFilePreview; largeFileSize_ = tabs_[activeTab_].largeFileSize;
+    dirty_ = false; selections_.clear(); selections_.emplace_back(0);
+    scrollY_ = 0; scrollX_ = 0; maxLineWidthDirty_ = true; undoStack_.clear(); redoStack_.clear(); foldedRegions_.clear(); detectSyntax(); updateGitBranch();
     rememberRecentFile(absPath);
+    saveSession();
 }
-void Application::saveFile() { if (openFilePath_.empty()) { saveFileAs(); return; } std::ofstream f(openFilePath_, std::ios::binary); if (!f) return; f << textBuffer; dirty_ = false; rememberRecentFile(openFilePath_); updateGitBranch(); }
+void Application::saveFile() { if (largeFilePreview_) return; if (openFilePath_.empty()) { saveFileAs(); return; } std::ofstream f(openFilePath_, std::ios::binary); if (!f) return; f << textBuffer; dirty_ = false; rememberRecentFile(openFilePath_); saveSession(); updateGitBranch(); }
 void Application::saveFileAs() {
 #ifdef _WIN32
     closeAllPopups();
@@ -551,7 +577,7 @@ void Application::saveAll() {
     for (auto& tab : tabs_) {
         if (tab.filePath.empty() || !tab.dirty) continue;
         std::ofstream f(tab.filePath, std::ios::binary);
-        if (f) { f << tab.text; tab.dirty = false; rememberRecentFile(tab.filePath); }
+        if (f && !tab.largeFilePreview) { f << tab.text; tab.dirty = false; rememberRecentFile(tab.filePath); }
     }
     loadTab(activeTab_);
 }
@@ -560,7 +586,7 @@ void Application::revertFile() {
     std::ifstream f(openFilePath_, std::ios::binary);
     if (!f) return;
     std::ostringstream ss; ss << f.rdbuf();
-    textBuffer = ss.str(); dirty_ = false; selections_.clear(); selections_.emplace_back(std::min(selections_.empty() ? 0 : selections_[0].cursor, textBuffer.size()));
+    textBuffer = ss.str(); dirty_ = false; largeFilePreview_ = false; largeFileSize_ = 0; maxLineWidthDirty_ = true; selections_.clear(); selections_.emplace_back(std::min(selections_.empty() ? 0 : selections_[0].cursor, textBuffer.size()));
 }
 void Application::openFileDialog() {
 #ifdef _WIN32
@@ -577,7 +603,7 @@ void Application::newBuffer() {
     TabBuffer tab; tab.fileName = "untitled"; tab.selections.emplace_back(0);
     tabs_.push_back(std::move(tab)); activeTab_ = tabs_.size()-1;
     textBuffer.clear(); openFilePath_.clear(); openFile_ = "untitled"; dirty_ = false;
-    selections_.clear(); selections_.emplace_back(0); scrollY_ = 0; undoStack_.clear(); redoStack_.clear(); foldedRegions_.clear(); detectSyntax();
+    selections_.clear(); selections_.emplace_back(0); scrollY_ = 0; scrollX_ = 0; largeFilePreview_ = false; largeFileSize_ = 0; maxLineWidthDirty_ = true; undoStack_.clear(); redoStack_.clear(); foldedRegions_.clear(); detectSyntax(); saveSession();
 }
 
 void Application::toggleFullscreen() {
@@ -1031,7 +1057,7 @@ void Application::saveCurrentTab() {
     tab.text = textBuffer; tab.filePath = openFilePath_; tab.fileName = openFile_;
     tab.selections = selections_; tab.scrollY = scrollY_;
     tab.undoStack = std::move(undoStack_); tab.redoStack = std::move(redoStack_);
-    tab.foldedRegions = foldedRegions_; tab.dirty = dirty_; tab.desiredCursorX = desiredCursorX_;
+    tab.foldedRegions = foldedRegions_; tab.dirty = dirty_; tab.largeFilePreview = largeFilePreview_; tab.largeFileSize = largeFileSize_; tab.desiredCursorX = desiredCursorX_;
 }
 
 void Application::loadTab(size_t index) {
@@ -1041,12 +1067,13 @@ void Application::loadTab(size_t index) {
     selections_ = tab.selections; scrollY_ = tab.scrollY;
     undoStack_ = std::move(tab.undoStack); redoStack_ = std::move(tab.redoStack);
     foldedRegions_ = tab.foldedRegions; dirty_ = tab.dirty; desiredCursorX_ = tab.desiredCursorX;
-    activeTab_ = index; detectSyntax(); updateGitBranch();
+    largeFilePreview_ = tab.largeFilePreview; largeFileSize_ = tab.largeFileSize;
+    activeTab_ = index; scrollX_ = 0; maxLineWidthDirty_ = true; detectSyntax(); updateGitBranch();
 }
 
 void Application::switchToTab(size_t index) {
     if (index >= tabs_.size() || index == activeTab_) return;
-    saveCurrentTab(); loadTab(index);
+    saveCurrentTab(); loadTab(index); saveSession();
 }
 
 void Application::closeTabNow(size_t index) {
@@ -1059,6 +1086,7 @@ void Application::closeTabNow(size_t index) {
     if (tabs_.empty()) { newBuffer(); return; }
     if (activeTab_ >= tabs_.size()) activeTab_ = tabs_.size()-1;
     loadTab(activeTab_);
+    saveSession();
 }
 
 void Application::closeTab(size_t index) {
@@ -2159,7 +2187,7 @@ void Application::handleEvents() {
             computeMaxLineWidth();
             float maxScrollX = (!wordWrap_ && editorW > 0.f) ? std::max(0.f, maxLineWidth_ - editorW) : 0.f;
             bool hVisible = maxScrollX > 0.f;
-            horizontalScrollbarHovered_ = hVisible && e.motion.x >= (int)editorLeft && e.motion.x < (int)editorRight && e.motion.y >= wh - (int)(sbH + findPanelH) - 10 && e.motion.y < wh - (int)(sbH + findPanelH);
+            horizontalScrollbarHovered_ = hVisible && e.motion.x >= (int)editorLeft && e.motion.x < (int)editorRight && e.motion.y >= wh - (int)(sbH + findPanelH) - 12 && e.motion.y < wh - (int)(sbH + findPanelH);
             if (scrollbarDragging_) {
                 float thumbH = contentH > 0.f ? viewH * (viewH / contentH) : viewH;
                 if (thumbH > viewH) thumbH = viewH;
@@ -2313,7 +2341,7 @@ void Application::handleEvents() {
             float editorW = editorRight - editorLeft;
             computeMaxLineWidth();
             float maxScrollX = (!wordWrap_ && editorW > 0.f) ? std::max(0.f, maxLineWidth_ - editorW) : 0.f;
-            if (maxScrollX > 0.f && mx >= editorLeft && mx < editorRight && my >= fwh - sbH - findPanelH - 10.f && my < fwh - sbH - findPanelH) {
+            if (maxScrollX > 0.f && mx >= editorLeft && mx < editorRight && my >= fwh - sbH - findPanelH - 12.f && my < fwh - sbH - findPanelH) {
                 float thumbW = std::max(20.f, editorW * (editorW / maxLineWidth_));
                 if (thumbW > editorW) thumbW = editorW;
                 float thumbX = editorLeft + (scrollX_ / maxScrollX) * (editorW - thumbW);
@@ -2716,7 +2744,7 @@ void Application::handleEvents() {
                 if (tl >= tot) tl = tot - 1;
                 size_t p = lineStartForLine(tl); if (shift) sel.cursor = p; else sel.anchor = sel.cursor = p; desiredCursorX_ = -1.f;
             }
-            if (dirty_) syntaxDirty_ = true; indentsDirty_ = true;
+            if (dirty_) { syntaxDirty_ = true; indentsDirty_ = true; maxLineWidthDirty_ = true; }
             ensureCursorVisible();
         }
         else if (e.type == SDL_TEXTINPUT) { handleAutoPair(e.text.text); }
@@ -2735,6 +2763,7 @@ void Application::update() {
 }
 void Application::updateTitle() {
     std::string t = openFile_; if (dirty_) t += "\xe2\x80\xa2"; t += " - Moreno Text";
+    if (largeFilePreview_) t = openFile_ + " [preview] - Moreno Text";
     titlebar_->setTitle(t); SDL_SetWindowTitle(window_, t.c_str());
 }
 
@@ -2797,7 +2826,7 @@ void Application::render() {
     if (scrollX_ > maxScrollX) scrollX_ = maxScrollX;
     if (scrollX_ < 0.f || wordWrap_) scrollX_ = 0.f;
     bool horizontalScrollbarVisible = !wordWrap_ && maxScrollX > 0.f;
-    float hScrollbarH = horizontalScrollbarVisible ? 10.f : 0.f;
+    float hScrollbarH = horizontalScrollbarVisible ? 12.f : 0.f;
     float editorBottom = fwh - sbH - findPanelH - hScrollbarH;
     float drawTextX = textX - scrollX_;
 
@@ -3063,7 +3092,8 @@ void Application::render() {
         if (thumbW > regionW) thumbW = regionW;
         float thumbX = textX + (maxScrollX > 0.f ? (scrollX_ / maxScrollX) * (regionW - thumbW) : 0.f);
         float c = horizontalScrollbarDragging_ ? 0.416f : (horizontalScrollbarHovered_ ? 0.353f : 0.290f);
-        addSolid(thumbX, trackY + 3.f, thumbX + thumbW, trackY + 9.f, c, c, c, 1.f);
+        addSolid(textX, trackY, textX + regionW, trackY + hScrollbarH, 0.105f, 0.105f, 0.125f, 1.f);
+        addSolid(thumbX, trackY + 3.f, thumbX + thumbW, trackY + 9.f, c + 0.08f, c + 0.08f, c + 0.08f, 1.f);
         flushSolid();
     }
     // minimap
