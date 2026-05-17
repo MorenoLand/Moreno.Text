@@ -36,15 +36,15 @@ private:
     std::unordered_set<std::string> types_;
     // scope indices: 0=plain, 1=keyword, 2=string, 3=comment, 4=number, 5=type, 6=builtin, 7=operator, 8=punctuation
     SyntaxColor colors_[9] = {
-        {0.85f, 0.85f, 0.85f}, // plain
-        {0.68f, 0.46f, 0.85f}, // keyword (purple)
-        {0.66f, 0.85f, 0.46f}, // string (green)
-        {0.50f, 0.55f, 0.50f}, // comment (muted green)
-        {0.68f, 0.75f, 0.85f}, // number (light blue)
-        {0.46f, 0.68f, 0.85f}, // type (cyan)
-        {0.55f, 0.75f, 0.70f}, // builtin (teal)
-        {0.85f, 0.65f, 0.45f}, // operator (orange)
-        {0.75f, 0.75f, 0.75f}, // punctuation (gray)
+        {0.671f, 0.698f, 0.749f}, // plain #abb2bf
+        {0.776f, 0.471f, 0.867f}, // keyword #c678dd
+        {0.596f, 0.765f, 0.475f}, // string #98c379
+        {0.361f, 0.388f, 0.439f}, // comment #5c6370
+        {0.820f, 0.604f, 0.400f}, // number #d19a66
+        {0.898f, 0.753f, 0.482f}, // type #e5c07b
+        {0.380f, 0.686f, 0.937f}, // builtin/function #61afef
+        {0.337f, 0.714f, 0.761f}, // operator #56b6c2
+        {0.671f, 0.698f, 0.749f}, // punctuation
     };
     bool isKeyword(const std::string& w) const { return keywords_.count(w); }
     bool isBuiltin(const std::string& w) const { return builtins_.count(w); }

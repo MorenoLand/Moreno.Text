@@ -111,6 +111,7 @@ private:
     void findAllMatches();
     void ensureCursorVisible();
     void detectSyntax();
+    void updateGitBranch();
     void pushUndo();
     void doUndo();
     void doRedo();
@@ -172,15 +173,19 @@ private:
     void computeLineIndents();
     bool useTabs_ = false;
     int tabSize_ = 2;
+    struct UiColor { float r, g, b, a; };
+    UiColor accentColor_{0.306f, 0.788f, 0.690f, 1.f};
+    std::string gitBranch_;
     std::string menuStyle_ = "icon";
     void convertIndentation(bool toSpaces);
     void guessIndent();
     StatusPopup statusPopup_ = StatusPopup::None;
     int popupSelected_ = 0;
+    int popupScroll_ = 0;
     float popupX_ = 0, popupY_ = 0;
     int syntaxLangIndex_ = -1;
     static const char* syntaxLanguages[];
-    static constexpr int syntaxLangCount = 26;
+    static constexpr int syntaxLangCount = 44;
     Titlebar* titlebar_ = nullptr;
     Gutter* gutter_ = nullptr;
     Minimap* minimap_ = nullptr;

@@ -32,7 +32,7 @@ public:
     SDL_HitTestResult hitTest(int mx, int my, SDL_Window* window);
     bool isMenuOpen() const { return menuOpen_; }
 private:
-    float height_ = 32.f;
+    float height_ = 30.f;
     float buttonSize_ = 46.f;
     float resizeEdge_ = 6.f;
     TitlebarButton buttons_[4];

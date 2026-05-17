@@ -181,7 +181,8 @@ void Titlebar::draw(FontAtlas& font, float, float, float, float) {
     float titleW = font.measureText(title_);
     float titleX = (titleLeft + titleRight) / 2.f - titleW / 2.f;
     if (titleX < titleLeft) titleX = titleLeft;
-    font.drawText(title_, titleX, 6.f, 0.7f, 0.7f, 0.7f, 1.f);
+    float titleY = (height_ - font.lineHeight()) / 2.f + font.ascent();
+    font.drawText(title_, titleX, titleY, 0.7f, 0.7f, 0.7f, 1.f);
     float mid = height_ / 2.f;
     font.drawText("_", buttons_[1].x + 16.f, mid - 4.f, 0.7f, 0.7f, 0.7f, 1.f);
     font.drawText("\xe2\x96\xa1", buttons_[2].x + 16.f, mid - 8.f, 0.7f, 0.7f, 0.7f, 1.f);

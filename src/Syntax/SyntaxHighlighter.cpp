@@ -9,6 +9,13 @@ void SyntaxHighlighter::setLanguage(const std::string& ext) {
     if (ext == "js" || ext == "jsx" || ext == "ts" || ext == "tsx" || ext == "mjs") setupJS();
     else if (ext == "py" || ext == "pyw") setupPython();
     else if (ext == "c" || ext == "cpp" || ext == "cc" || ext == "cxx" || ext == "h" || ext == "hpp" || ext == "hxx") setupCPP();
+    else if (ext == "json") { setupPlainText(); langName_ = "JSON"; }
+    else if (ext == "md" || ext == "markdown") { setupPlainText(); langName_ = "Markdown"; }
+    else if (ext == "xml") { setupPlainText(); langName_ = "XML"; }
+    else if (ext == "yml" || ext == "yaml") { setupPlainText(); langName_ = "YAML"; }
+    else if (ext == "toml") { setupPlainText(); langName_ = "TOML"; }
+    else if (ext == "html" || ext == "htm") { setupPlainText(); langName_ = "HTML"; }
+    else if (ext == "css") { setupPlainText(); langName_ = "CSS"; }
     else setupPlainText();
 }
 
@@ -17,10 +24,11 @@ void SyntaxHighlighter::setLanguageByName(const std::string& name) {
         {"JavaScript","js"},{"Python","py"},{"C++","cpp"},{"C","c"},{"HTML","html"},{"CSS","css"},
         {"JSON","json"},{"Java","java"},{"Go","go"},{"Rust","rs"},{"Ruby","rb"},{"PHP","php"},
         {"SQL","sql"},{"Lua","lua"},{"Markdown","md"},{"XML","xml"},{"YAML","yml"},{"TOML","toml"},
-        {"C#","cs"},{"Objective-C","m"},{"Swift","swift"},{"TypeScript","ts"},{"Shell","sh"},{"Plain Text",""},
+        {"C#","cs"},{"Objective-C","m"},{"Swift","swift"},{"TypeScript","ts"},{"ShellScript","sh"},{"Batch File","bat"},{"Plain Text",""},
     };
     for (auto& m : map) if (name == m.name) { setLanguage(m.ext); return; }
-    setupPlainText();
+    keywords_.clear(); builtins_.clear(); types_.clear();
+    langName_ = name;
 }
 
 void SyntaxHighlighter::setupJS() {

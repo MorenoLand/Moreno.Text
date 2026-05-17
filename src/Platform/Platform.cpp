@@ -2,6 +2,8 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <dwmapi.h>
+#include <objbase.h>
+#include <shobjidl.h>
 #pragma comment(lib, "dwmapi.lib")
 
 namespace Platform {
@@ -24,10 +26,50 @@ namespace Platform {
         RtlGetVersion(&vi);
         return vi.dwBuildNumber >= 22000;
     }
+    bool pickFolder(std::string& outPath) {
+        outPath.clear();
+        HRESULT init = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+        bool shouldUninit = SUCCEEDED(init);
+        if (FAILED(init) && init != RPC_E_CHANGED_MODE) return false;
+
+        IFileDialog* dialog = nullptr;
+        HRESULT hr = CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog));
+        if (SUCCEEDED(hr) && dialog) {
+            DWORD options = 0;
+            if (SUCCEEDED(dialog->GetOptions(&options))) {
+                dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST);
+            }
+            if (SUCCEEDED(dialog->Show(nullptr))) {
+                IShellItem* item = nullptr;
+                if (SUCCEEDED(dialog->GetResult(&item)) && item) {
+                    PWSTR widePath = nullptr;
+                    if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &widePath)) && widePath) {
+                        int len = WideCharToMultiByte(CP_UTF8, 0, widePath, -1, nullptr, 0, nullptr, nullptr);
+                        if (len > 1) {
+                            outPath.resize((size_t)len - 1);
+                            WideCharToMultiByte(CP_UTF8, 0, widePath, -1, outPath.data(), len, nullptr, nullptr);
+                        }
+                        CoTaskMemFree(widePath);
+                    }
+                    item->Release();
+                }
+            }
+            dialog->Release();
+        }
+
+        if (shouldUninit) CoUninitialize();
+        return !outPath.empty();
+    }
 }
 #else
+#include <iostream>
 namespace Platform {
     void setRoundedCorners(void*, int) {}
     bool isWindows11OrLater() { return false; }
+    bool pickFolder(std::string& outPath) {
+        std::cout << "Open folder path: ";
+        std::getline(std::cin, outPath);
+        return !outPath.empty();
+    }
 }
 #endif

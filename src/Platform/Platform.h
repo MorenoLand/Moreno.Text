@@ -4,4 +4,5 @@
 namespace Platform {
     void setRoundedCorners(void* nativeHandle, int radius = 8);
     bool isWindows11OrLater();
+    bool pickFolder(std::string& outPath);
 }
