@@ -51,6 +51,7 @@ struct GotoState {
     bool active = false;
     std::string query;
     std::vector<std::string> items;
+    std::vector<std::string> subtexts;
     std::vector<float> scores;
     int selected = 0;
 };
@@ -192,6 +193,8 @@ private:
     std::chrono::milliseconds undoWindow_{500};
     FindState find_;
     GotoState goto_;
+    enum GotoMode { Files, Symbols, Lines, Words } gotoMode_ = Files;
+    void updateGotoResults();
     std::vector<bool> foldedLines_;
     void toggleFold(size_t line);
     bool isFolded(size_t line) const;

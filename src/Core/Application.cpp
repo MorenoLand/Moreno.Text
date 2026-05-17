@@ -865,6 +865,65 @@ const char* Application::syntaxLanguages[] = {
     "TCL","TOML","XML","YAML"
 };
 
+void Application::updateGotoResults() {
+    goto_.items.clear(); goto_.subtexts.clear(); goto_.scores.clear();
+    const std::string& q = goto_.query;
+    if (q.empty()) return;
+    if (q[0] == '@') {
+        gotoMode_ = Symbols;
+        std::string pat = q.substr(1);
+        std::regex re(R"((?:function|def|class|struct|void|int|string|var|let|const|async)\s+(\w+))", std::regex::icase);
+        for (auto it = std::sregex_iterator(textBuffer.begin(), textBuffer.end(), re); it != std::sregex_iterator(); ++it) {
+            std::string name = (*it)[1].str();
+            size_t pos = (size_t)it->position() + (*it)[0].str().find(name);
+            size_t ln = lineOfPos(pos) + 1;
+            if (pat.empty() || name.find(pat) != std::string::npos) {
+                goto_.items.push_back(name);
+                goto_.subtexts.push_back("line " + std::to_string(ln));
+            }
+        }
+    } else if (q[0] == ':') {
+        gotoMode_ = Lines;
+        int ln = 0; for (char c : q.substr(1)) if (isdigit(c)) ln = ln * 10 + (c - '0');
+        if (ln > 0 && ln <= (int)totalLines()) {
+            size_t p = lineStartForLine(ln - 1);
+            selections_[0].anchor = selections_[0].cursor = p;
+            ensureCursorVisible();
+        }
+    } else if (q[0] == '#') {
+        gotoMode_ = Words;
+        std::string pat = q.substr(1);
+        if (pat.empty()) return;
+        std::unordered_set<std::string> seen;
+        std::string word;
+        for (size_t i = 0; i < textBuffer.size(); ++i) {
+            char c = textBuffer[i];
+            if (isalnum(c) || c == '_') word += c;
+            else { if (word.size() >= 2 && word.find(pat) != std::string::npos && seen.insert(word).second) goto_.items.push_back(word); word.clear(); }
+        }
+        if (word.size() >= 2 && word.find(pat) != std::string::npos && seen.insert(word).second) goto_.items.push_back(word);
+    } else {
+        gotoMode_ = Files;
+        for (auto& tab : tabs_) {
+            if (tab.fileName.find(q) != std::string::npos) goto_.items.push_back(tab.fileName);
+        }
+        if (!sidebarRoot_.empty()) {
+            try {
+                for (auto& entry : fs::recursive_directory_iterator(sidebarRoot_)) {
+                    if (entry.is_directory()) continue;
+                    std::string name = entry.path().filename().string();
+                    if (name.find(q) != std::string::npos) {
+                        goto_.items.push_back(name);
+                        goto_.subtexts.push_back(fs::relative(entry.path(), sidebarRoot_).string());
+                    }
+                    if (goto_.items.size() >= 20) break;
+                }
+            } catch (...) {}
+        }
+    }
+    goto_.selected = goto_.items.empty() ? -1 : 0;
+}
+
 // ── events ──
 
 void Application::handleEvents() {
@@ -925,7 +984,37 @@ void Application::handleEvents() {
             if (sym == SDLK_ESCAPE) { goto_.active = false; continue; }
             if (sym == SDLK_RETURN) {
                 if (!goto_.items.empty() && goto_.selected >= 0 && goto_.selected < (int)goto_.items.size()) {
-                    openFile(goto_.items[goto_.selected]);
+                    if (gotoMode_ == Lines) { goto_.active = false; ensureCursorVisible(); continue; }
+                    if (gotoMode_ == Symbols) {
+                        // jump to the symbol line
+                        goto_.active = false; ensureCursorVisible(); continue;
+                    }
+                    if (gotoMode_ == Words) {
+                        // jump to word occurrence
+                        size_t pos = textBuffer.find(goto_.items[goto_.selected]);
+                        if (pos != std::string::npos) { selections_[0].anchor = selections_[0].cursor = pos; ensureCursorVisible(); }
+                        goto_.active = false; continue;
+                    }
+                    // files — check if it's an open tab or sidebar file
+                    bool goto_next = false;
+                    for (auto& tab : tabs_) {
+                        if (tab.fileName == goto_.items[goto_.selected]) {
+                            size_t idx = &tab - tabs_.data();
+                            switchToTab(idx);
+                            goto_.active = false;
+                            goto_next = true; break;
+                        }
+                    }
+                    if (goto_next) { goto_next = false; continue; }
+                    if (!sidebarRoot_.empty()) {
+                        try {
+                            for (auto& entry : fs::recursive_directory_iterator(sidebarRoot_)) {
+                                if (!entry.is_directory() && entry.path().filename().string() == goto_.items[goto_.selected]) {
+                                    openFile(entry.path().string()); break;
+                                }
+                            }
+                        } catch (...) {}
+                    }
                 }
                 goto_.active = false; continue;
             }
@@ -934,11 +1023,11 @@ void Application::handleEvents() {
             if (sym == SDLK_BACKSPACE && !goto_.query.empty()) {
                 auto it = goto_.query.end(); --it;
                 while (it != goto_.query.begin() && (*it & 0xC0) == 0x80) --it;
-                goto_.query.erase(it, goto_.query.end()); continue;
+                goto_.query.erase(it, goto_.query.end()); updateGotoResults(); continue;
             }
             continue;
         }
-        if (goto_.active && e.type == SDL_TEXTINPUT) { goto_.query += e.text.text; continue; }
+        if (goto_.active && e.type == SDL_TEXTINPUT) { goto_.query += e.text.text; updateGotoResults(); continue; }
         // menu bar
         int ww, wh; SDL_GL_GetDrawableSize(window_, &ww, &wh);
         if (titlebar_->handleEvent(e, window_)) continue;
@@ -1663,9 +1752,14 @@ void Application::render() {
             ar(ox, oy + 28 + goto_.selected * 22, ox + ow, oy + 28 + (goto_.selected + 1) * 22, 0.22f, 0.28f, 0.42f, 1.f);
         GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo()); glBufferData(GL_ARRAY_BUFFER, gv.size()*sizeof(float), gv.data(), GL_DYNAMIC_DRAW); glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(gv.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0);
         fontAtlas().drawText("Goto: " + goto_.query + "|", ox + 8, oy + 6, 0.8f, 0.8f, 0.8f, 1.f);
-        for (int i = 0; i < (int)goto_.items.size() && i < 7; ++i) {
+        const char* modeLabel = gotoMode_ == Symbols ? "Symbols" : gotoMode_ == Lines ? "Go to Line" : gotoMode_ == Words ? "Words" : "Files";
+        float mlW = fontAtlas().measureText(modeLabel);
+        fontAtlas().drawText(modeLabel, ox + ow - mlW - 12, oy + 6, 0.45f, 0.45f, 0.5f, 1.f);
+        for (int i = 0; i < (int)goto_.items.size() && i < 10; ++i) {
             float ib = (i == goto_.selected) ? 1.f : 0.7f;
             fontAtlas().drawText(goto_.items[i], ox + 8, oy + 30 + i * 22, ib, ib, ib, 1.f);
+            if (i < (int)goto_.subtexts.size() && !goto_.subtexts[i].empty())
+                fontAtlas().drawText(goto_.subtexts[i], ox + 200, oy + 30 + i * 22, 0.4f, 0.4f, 0.45f, 1.f);
         }
     }
 
