@@ -934,6 +934,32 @@ bool Application::handleTabBarEvent(const SDL_Event& e, float windowW, float tit
         totalTabsW += std::clamp(fontAtlas().measureText(label) + 32.f, 48.f, 180.f);
     }
     float maxTabScroll = totalTabsW > visibleW ? totalTabsW - visibleW : 0.f;
+    if (e.type == SDL_MOUSEMOTION && tabDragging_) {
+        float dx = (float)e.motion.x - tabDragStartX_;
+        if (std::abs(dx) > 4.f) {
+            float dropX = (float)e.motion.x + tabScrollX_;
+            float tx = 0.f;
+            size_t newIdx = tabs_.size();
+            for (size_t i = 0; i < tabs_.size(); ++i) {
+                std::string label = tabs_[i].fileName.empty() ? "untitled" : tabs_[i].fileName;
+                if (tabs_[i].dirty) label += "\xe2\x80\xa2";
+                float tw = std::clamp(fontAtlas().measureText(label) + 32.f, 48.f, 180.f);
+                if (dropX < tx + tw / 2.f) { newIdx = i; break; }
+                tx += tw;
+            }
+            if (newIdx != tabDragIndex_ && newIdx < tabs_.size()) {
+                auto tab = std::move(tabs_[tabDragIndex_]);
+                tabs_.erase(tabs_.begin() + tabDragIndex_);
+                if (newIdx > tabDragIndex_) --newIdx;
+                tabs_.insert(tabs_.begin() + newIdx, std::move(tab));
+                activeTab_ = newIdx;
+                tabDragIndex_ = newIdx;
+                tabDragStartX_ = (float)e.motion.x;
+            }
+        }
+        return true;
+    }
+    if (e.type == SDL_MOUSEBUTTONUP && e.button.button == 1 && tabDragging_) { tabDragging_ = false; return true; }
     if (e.type == SDL_MOUSEMOTION && tabContextOpen_) {
         float mx = (float)e.motion.x, my = (float)e.motion.y, itemH = 24.f, popW = 260.f;
         int itemCount = tabContextIndex_ != activeTab_ ? 13 : 12;
@@ -995,7 +1021,9 @@ bool Application::handleTabBarEvent(const SDL_Event& e, float windowW, float tit
             if (mx >= tx && mx < tx + tw) {
                 if (e.button.button == 3) { tabContextOpen_ = true; tabContextIndex_ = i; tabContextX_ = mx; tabContextY_ = barY + tabBarH_ + 2.f; tabContextHover_ = -1; return true; }
                 if (e.button.button == 2 || mx >= tx + tw - 20.f) { closeTab(i); return true; }
-                switchToTab(i); return true;
+                switchToTab(i);
+                if (e.button.button == 1 && mx < tx + tw - 20.f) { tabDragging_ = true; tabDragIndex_ = i; tabDragStartX_ = mx; }
+                return true;
             }
             tx += tw;
         }
