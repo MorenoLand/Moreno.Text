@@ -94,8 +94,8 @@ void Titlebar::getMenuPanelRects(FontAtlas& font, int windowW, int windowH, SDL_
     float sw = 180.f;
     for (auto& item : sm) {
         float w = font.measureText(item.label);
-        if (!item.shortcut.empty()) w += font.measureText(item.shortcut) + 30.f;
-        if (w + 32.f > sw) sw = w + 32.f;
+        if (!item.shortcut.empty()) w += font.measureText(item.shortcut) + 36.f;
+        if (w + 48.f > sw) sw = w + 48.f;
     }
     float sx = ddW + 2.f, sy = 2.f + submenuOpen_ * itemH;
     float maxH = windowH * 0.8f, sh = 2.f + sm.size() * itemH;
@@ -163,8 +163,8 @@ void Titlebar::drawMenuPopup(FontAtlas& font, float ox, float oy) {
         float sw = 180.f;
         for (auto& item : sm) {
             float w = font.measureText(item.label);
-            if (!item.shortcut.empty()) w += font.measureText(item.shortcut) + 30.f;
-            if (w + 32.f > sw) sw = w + 32.f;
+            if (!item.shortcut.empty()) w += font.measureText(item.shortcut) + 36.f;
+            if (w + 48.f > sw) sw = w + 48.f;
         }
         float maxH = wh * 0.8f, sh = 2.f + sm.size() * itemH;
         if (sy + sh > wh - 8.f) sy = wh - sh - 8.f;
@@ -174,7 +174,9 @@ void Titlebar::drawMenuPopup(FontAtlas& font, float ox, float oy) {
         lastHasSubmenu_ = true; lastSubmenuX_ = sx + ox; lastSubmenuY_ = sy + oy; lastSubmenuW_ = sw; lastSubmenuH_ = sh;
         v.clear();
         ar(sx, sy, sx + sw, sy + sh, 0.17f, 0.17f, 0.20f, 0.98f);
-        if (submenuHovered_ >= 0 && submenuHovered_ < (int)sm.size() && !sm[submenuHovered_].separator)
+        if (submenuHovered_ >= (int)sm.size() || (submenuHovered_ >= 0 && sm[submenuHovered_].separator))
+            submenuHovered_ = -1;
+        if (submenuHovered_ >= 0 && submenuHovered_ < (int)sm.size())
             ar(sx + 2, sy + 2 + submenuHovered_ * itemH, sx + sw - 2, sy + 2 + (submenuHovered_ + 1) * itemH, 0.25f, 0.30f, 0.45f, 1.f);
         flushSolid(v);
         glEnable(GL_SCISSOR_TEST);
@@ -281,12 +283,15 @@ bool Titlebar::handleMenuEvent(const SDL_Event& e) {
     if (e.type == SDL_MOUSEMOTION) {
         float mx = (float)e.motion.x, my = (float)e.motion.y;
         menuHovered_ = -1;
-        if (mx >= ddX && mx <= ddX + ddW && my >= ddY && my <= ddY + ddH) {
+        if (mx >= ddX && mx < ddX + ddW && my >= ddY && my < ddY + ddH) {
             int idx = menuScroll_ + (int)((my - ddY - arrowH - 2) / itemH);
             if (idx >= 0 && idx < (int)menuItems_.size() && !menuItems_[idx].separator) { menuHovered_ = idx; submenuOpen_ = menuItems_[idx].submenu; submenuHovered_ = -1; }
         } else if (lastHasSubmenu_) {
-            float sx = lastSubmenuX_, sy = lastSubmenuY_, sw = lastSubmenuW_, sh = lastSubmenuH_;
-            if (mx >= sx && mx <= sx + sw && my >= sy && my <= sy + sh) submenuHovered_ = (int)((my - sy - 2.f) / itemH);
+            float sx = lastSubmenuX_, sy = lastSubmenuY_, sw = lastSubmenuW_;
+            if (mx >= sx && mx < sx + sw && my >= sy + 2.f && my < sy + 2.f + submenus_[submenuOpen_].size() * itemH) {
+                int idx = (int)((my - sy - 2.f) / itemH);
+                submenuHovered_ = (idx >= 0 && submenuOpen_ >= 0 && submenuOpen_ < (int)submenus_.size() && idx < (int)submenus_[submenuOpen_].size() && !submenus_[submenuOpen_][idx].separator) ? idx : -1;
+            }
             else submenuHovered_ = -1;
         }
         return true;
@@ -304,15 +309,15 @@ bool Titlebar::handleMenuEvent(const SDL_Event& e) {
     if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == 1) {
         float mx = (float)e.button.x, my = (float)e.button.y;
         if (lastHasSubmenu_) {
-            float sx = lastSubmenuX_, sy = lastSubmenuY_, sw = lastSubmenuW_, sh = lastSubmenuH_;
-            if (mx >= sx && mx <= sx + sw && my >= sy && my <= sy + sh) {
+            float sx = lastSubmenuX_, sy = lastSubmenuY_, sw = lastSubmenuW_;
+            if (mx >= sx && mx < sx + sw && my >= sy + 2.f && my < sy + 2.f + submenus_[submenuOpen_].size() * itemH) {
                 int idx = (int)((my - sy - 2.f) / itemH);
                 auto& sm = submenus_[submenuOpen_];
                 if (idx >= 0 && idx < (int)sm.size() && !sm[idx].separator && sm[idx].action) { sm[idx].action(); closeMenu(); submenuOpen_ = -1; return true; }
                 return true;
             }
         }
-        if (mx >= ddX && mx <= ddX + ddW && my >= ddY && my <= ddY + ddH) {
+        if (mx >= ddX && mx < ddX + ddW && my >= ddY && my < ddY + ddH) {
             int idx = menuScroll_ + (int)((my - ddY - arrowH - 2) / itemH);
             if (idx >= 0 && idx < (int)menuItems_.size() && !menuItems_[idx].separator && menuItems_[idx].action) {
                 menuItems_[idx].action();
