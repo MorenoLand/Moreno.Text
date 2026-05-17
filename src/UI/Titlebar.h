@@ -31,6 +31,7 @@ public:
     void setTitle(const std::string& t) { title_ = t; }
     SDL_HitTestResult hitTest(int mx, int my, SDL_Window* window);
     bool isMenuOpen() const { return menuOpen_; }
+    void closeMenuPopup() { closeMenu(); }
     void deferMenuDraw() { menuDeferred_ = true; }
     void getMenuBounds(float& x, float& y, float& w, float& h) const;
     void drawMenuPopup(FontAtlas& font, float ox, float oy);

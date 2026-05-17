@@ -58,6 +58,7 @@ private:
     void setupJS();
     void setupPython();
     void setupCPP();
+    void setupGenericCode(const std::string& name);
     void setupPlainText();
     void setTreeSitterLanguage(const std::string& name, const void* language);
 };

@@ -14,6 +14,7 @@ extern "C" const TSLanguage *tree_sitter_markdown(void);
 
 void SyntaxHighlighter::setLanguage(const std::string& ext) {
     keywords_.clear(); builtins_.clear(); types_.clear();
+    treeTokens_.clear(); language_ = nullptr;
     if (ext == "js" || ext == "jsx" || ext == "ts" || ext == "tsx" || ext == "mjs") { setupJS(); setTreeSitterLanguage("JavaScript", tree_sitter_javascript()); }
     else if (ext == "py" || ext == "pyw") { setupPython(); setTreeSitterLanguage("Python", tree_sitter_python()); }
     else if (ext == "c") { setupCPP(); setTreeSitterLanguage("C", tree_sitter_c()); }
@@ -37,7 +38,8 @@ void SyntaxHighlighter::setLanguageByName(const std::string& name) {
     };
     for (auto& m : map) if (name == m.name) { setLanguage(m.ext); return; }
     keywords_.clear(); builtins_.clear(); types_.clear();
-    langName_ = name;
+    treeTokens_.clear(); language_ = nullptr;
+    setupGenericCode(name);
 }
 
 void SyntaxHighlighter::setTreeSitterLanguage(const std::string& name, const void* language) {
@@ -85,6 +87,19 @@ void SyntaxHighlighter::parse(const std::string& text) {
         for (uint32_t i = 0; i < childCount; ++i) stack.push_back(ts_node_child(node, childCount - 1 - i));
     }
     std::sort(treeTokens_.begin(), treeTokens_.end(), [](const SyntaxToken& a, const SyntaxToken& b) { return a.start < b.start; });
+    std::vector<SyntaxToken> nonOverlapping;
+    size_t coveredEnd = 0;
+    for (auto tok : treeTokens_) {
+        if (tok.start < coveredEnd) {
+            size_t tokEnd = tok.start + tok.length;
+            if (tokEnd <= coveredEnd) continue;
+            tok.length = tokEnd - coveredEnd;
+            tok.start = coveredEnd;
+        }
+        coveredEnd = tok.start + tok.length;
+        nonOverlapping.push_back(tok);
+    }
+    treeTokens_ = std::move(nonOverlapping);
 }
 
 void SyntaxHighlighter::setupJS() {
@@ -114,6 +129,15 @@ void SyntaxHighlighter::setupCPP() {
     for (int i = 0; bi[i]; ++i) builtins_.insert(bi[i]);
     for (int i = 0; tp[i]; ++i) types_.insert(tp[i]);
 }
+void SyntaxHighlighter::setupGenericCode(const std::string& name) {
+    langName_ = name;
+    static const char* kw[] = {"and","as","async","await","break","case","catch","class","const","continue","def","default","do","else","enum","export","extends","false","for","from","func","function","if","import","in","interface","let","module","namespace","new","nil","none","not","null","or","package","private","protected","public","return","static","struct","switch","this","throw","true","try","type","using","var","while","with",nullptr};
+    static const char* tp[] = {"bool","boolean","byte","char","double","float","int","integer","long","number","object","short","string","void",nullptr};
+    static const char* bi[] = {"print","printf","echo","console","log","len","length","size","map","set","list","dict","array",nullptr};
+    for (int i = 0; kw[i]; ++i) keywords_.insert(kw[i]);
+    for (int i = 0; tp[i]; ++i) types_.insert(tp[i]);
+    for (int i = 0; bi[i]; ++i) builtins_.insert(bi[i]);
+}
 void SyntaxHighlighter::setupPlainText() { langName_ = "Plain Text"; }
 
 static bool isWordChar(char c) { return isalnum(static_cast<unsigned char>(c)) || c == '_'; }
@@ -125,6 +149,10 @@ std::vector<SyntaxToken> SyntaxHighlighter::highlightLine(std::string_view line,
         auto it = std::lower_bound(treeTokens_.begin(), treeTokens_.end(), lineOffset, [](const SyntaxToken& tok, size_t pos) { return tok.start + tok.length <= pos; });
         for (; it != treeTokens_.end() && it->start < lineEnd; ++it) {
             size_t s = std::max(it->start, lineOffset), e = std::min(it->start + it->length, lineEnd);
+            if (!out.empty()) {
+                size_t prevEnd = out.back().start + out.back().length;
+                if (s < prevEnd) s = prevEnd;
+            }
             if (e > s) out.push_back({s, e - s, it->scope});
         }
         return out;

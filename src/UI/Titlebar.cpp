@@ -53,7 +53,7 @@ void Titlebar::getMenuBounds(float& x, float& y, float& w, float& h) const {
     w = 150.f;
     h = 2.f + static_cast<float>(menuItems_.size()) * itemH;
     if (submenuOpen_ >= 0 && submenuOpen_ < static_cast<int>(submenus_.size())) {
-        w += 322.f;
+        w = 480.f;
         float sy = 2.f + static_cast<float>(submenuOpen_) * itemH;
         float sh = sy + 2.f + static_cast<float>(submenus_[submenuOpen_].size()) * itemH;
         if (sh > h) h = sh;
@@ -122,6 +122,7 @@ void Titlebar::drawMenuPopup(FontAtlas& font, float ox, float oy) {
         float maxH = wh * 0.8f, sh = 2.f + sm.size() * itemH;
         if (sy + sh > wh - 8.f) sy = wh - sh - 8.f;
         if (sh > maxH) sh = maxH;
+        if (sx + sw > ww - 4.f) sx = std::max(0.f, ddX - sw - 2.f);
         v.clear();
         ar(sx, sy, sx + sw, sy + sh, 0.17f, 0.17f, 0.20f, 0.98f);
         if (submenuHovered_ >= 0 && submenuHovered_ < (int)sm.size() && !sm[submenuHovered_].separator)
