@@ -2787,7 +2787,9 @@ void Application::render() {
     }
 
     if (titlebar_->isMenuOpen() && deferPopupDraw_) titlebar_->deferMenuDraw();
-    titlebar_->draw(fontAtlas(), 0, 0, 0, 0);
+    titlebar_->appendSolidRects(solidVerts_);
+    flushSolid();
+    titlebar_->drawForeground(fontAtlas());
     if (closeConfirmOpen_) {
         float mw = 420.f, mh = 118.f, mx = (fww - mw) / 2.f, my = (fwh - mh) / 2.f;
         std::vector<float> mv;

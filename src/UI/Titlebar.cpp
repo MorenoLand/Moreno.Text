@@ -224,8 +224,7 @@ void Titlebar::updateButtonPositions(int ww) {
     buttons_[0].x = 0; buttons_[0].y = 0; buttons_[0].w = 36; buttons_[0].h = bh;
 }
 
-void Titlebar::draw(FontAtlas& font, float, float, float, float) {
-    std::vector<float> v;
+void Titlebar::appendSolidRects(std::vector<float>& v) {
     auto ar = [&](float x0,float y0,float x1,float y1,float cr,float cg,float cb,float ca) {
         v.insert(v.end(),{x0,y0,0,0,cr,cg,cb,ca, x0,y1,0,0,cr,cg,cb,ca, x1,y1,0,0,cr,cg,cb,ca, x0,y0,0,0,cr,cg,cb,ca, x1,y1,0,0,cr,cg,cb,ca, x1,y0,0,0,cr,cg,cb,ca});
     };
@@ -243,7 +242,9 @@ void Titlebar::draw(FontAtlas& font, float, float, float, float) {
     auto& mb = buttons_[0];
     float mbr = (mb.hovered || menuOpen_) ? 0.28f : 0.16f;
     ar(mb.x, mb.y, mb.x+mb.w, mb.y+mb.h, mbr, mbr, mbr+0.03f, 1.f);
-    flushSolid(v);
+}
+
+void Titlebar::drawForeground(FontAtlas& font) {
     if (iconTex_) {
         GLRenderer::setDrawMode(1);
         float pad = (height_ - iconW_) / 2.f;
@@ -264,6 +265,13 @@ void Titlebar::draw(FontAtlas& font, float, float, float, float) {
     font.drawText("\xe2\x96\xa1", buttons_[2].x + 16.f, mid - 8.f, 0.7f, 0.7f, 0.7f, 1.f);
     font.drawText("\xc3\x97", buttons_[3].x + 16.f, mid - 8.f, 1.f, 1.f, 1.f, 1.f);
     drawMenu(font);
+}
+
+void Titlebar::draw(FontAtlas& font, float, float, float, float) {
+    std::vector<float> v;
+    appendSolidRects(v);
+    flushSolid(v);
+    drawForeground(font);
 }
 
 bool Titlebar::handleMenuEvent(const SDL_Event& e) {

@@ -23,6 +23,8 @@ public:
     Titlebar() = default;
     void init(int windowWidth);
     void layout(int windowWidth);
+    void appendSolidRects(std::vector<float>& verts);
+    void drawForeground(class FontAtlas& font);
     void draw(class FontAtlas& font, float r, float g, float b, float a);
     bool handleEvent(const SDL_Event& e, SDL_Window* window);
     float height() const { return height_; }
