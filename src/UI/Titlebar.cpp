@@ -71,10 +71,10 @@ void Titlebar::getMenuPopupBounds(FontAtlas& font, float& x, float& y, float& w,
         maxX = std::max(maxX, submenuRect.x + submenuRect.w);
         maxY = std::max(maxY, submenuRect.y + submenuRect.h);
     }
-    x = static_cast<float>(minX) - 2.f;
-    y = height_ + static_cast<float>(minY) - 2.f;
-    w = static_cast<float>(maxX - minX) + 4.f;
-    h = static_cast<float>(maxY - minY) + 4.f;
+    x = static_cast<float>(minX) - 3.f;
+    y = height_ + static_cast<float>(minY) - 3.f;
+    w = static_cast<float>(maxX - minX) + 6.f;
+    h = static_cast<float>(maxY - minY) + 6.f;
 }
 
 void Titlebar::getMenuPanelRects(FontAtlas& font, int windowW, int windowH, SDL_Rect& mainRect, SDL_Rect& submenuRect, bool& hasSubmenu) const {

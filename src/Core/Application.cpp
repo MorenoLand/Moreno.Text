@@ -664,9 +664,9 @@ void Application::shapePopupWindowForMenu() {
     if (!SDL_GetWindowWMInfo(popupWin_, &wmInfo)) return;
     SDL_Rect mainRect{}, submenuRect{}; bool hasSubmenu = false;
     titlebar_->getMenuPanelRects(fontAtlas(), 32000, 32000, mainRect, submenuRect, hasSubmenu);
-    HRGN region = CreateRectRgn(mainRect.x + 2, mainRect.y + 2, mainRect.x + mainRect.w + 2, mainRect.y + mainRect.h + 2);
+    HRGN region = CreateRectRgn(mainRect.x + 3, mainRect.y + 3, mainRect.x + mainRect.w + 3, mainRect.y + mainRect.h + 3);
     if (hasSubmenu && submenuRect.w > 0 && submenuRect.h > 0) {
-        HRGN submenu = CreateRectRgn(submenuRect.x + 2, submenuRect.y + 2, submenuRect.x + submenuRect.w + 2, submenuRect.y + submenuRect.h + 2);
+        HRGN submenu = CreateRectRgn(submenuRect.x + 3, submenuRect.y + 3, submenuRect.x + submenuRect.w + 3, submenuRect.y + submenuRect.h + 3);
         CombineRgn(region, region, submenu, RGN_OR);
         DeleteObject(submenu);
     }
