@@ -1339,6 +1339,11 @@ void Application::updateCommandPalette() {
     }
     if (commandPalette_.selected >= (int)commandPalette_.results.size()) commandPalette_.selected = (int)commandPalette_.results.size() - 1;
     if (commandPalette_.selected < 0) commandPalette_.selected = commandPalette_.results.empty() ? -1 : 0;
+    int maxScroll = std::max(0, (int)commandPalette_.results.size() - 12);
+    if (commandPalette_.scroll > maxScroll) commandPalette_.scroll = maxScroll;
+    if (commandPalette_.selected >= 0 && commandPalette_.selected < commandPalette_.scroll) commandPalette_.scroll = commandPalette_.selected;
+    if (commandPalette_.selected >= commandPalette_.scroll + 12) commandPalette_.scroll = commandPalette_.selected - 11;
+    if (commandPalette_.scroll < 0) commandPalette_.scroll = 0;
 }
 
 void Application::executePaletteCommand(int commandIndex) {
@@ -1825,7 +1830,9 @@ void Application::handleEvents() {
             if (sym == SDLK_ESCAPE) { find_.active = false; acActive_ = false; continue; }
             if (sym == SDLK_TAB && find_.replaceActive) { findFocus_ = 1 - findFocus_; continue; }
             if (sym == SDLK_RETURN) {
-                if (!find_.matches.empty()) {
+                if (findFocus_ == 1 && find_.replaceActive) {
+                    doReplace();
+                } else if (!find_.matches.empty()) {
                     if (mod & KMOD_SHIFT) find_.currentMatch = (find_.currentMatch + find_.matches.size() - 1) % find_.matches.size();
                     else find_.currentMatch = (find_.currentMatch + 1) % find_.matches.size();
                     selections_[0].anchor = selections_[0].cursor = find_.matches[find_.currentMatch];
@@ -1852,6 +1859,13 @@ void Application::handleEvents() {
         if (commandPalette_.active && e.type == SDL_KEYDOWN) {
             auto sym = e.key.keysym.sym;
             if (sym == SDLK_ESCAPE) { commandPalette_.active = false; continue; }
+            auto scrollPaletteSelection = [&]() {
+                if (commandPalette_.selected < commandPalette_.scroll) commandPalette_.scroll = commandPalette_.selected;
+                if (commandPalette_.selected >= commandPalette_.scroll + 12) commandPalette_.scroll = commandPalette_.selected - 11;
+                int maxScroll = std::max(0, (int)commandPalette_.results.size() - 12);
+                if (commandPalette_.scroll < 0) commandPalette_.scroll = 0;
+                if (commandPalette_.scroll > maxScroll) commandPalette_.scroll = maxScroll;
+            };
             if (sym == SDLK_RETURN) {
                 if (commandPalette_.selected >= 0 && commandPalette_.selected < (int)commandPalette_.results.size()) {
                     int idx = commandPalette_.results[commandPalette_.selected];
@@ -1860,8 +1874,8 @@ void Application::handleEvents() {
                 }
                 continue;
             }
-            if (sym == SDLK_UP) { if (commandPalette_.selected > 0) --commandPalette_.selected; continue; }
-            if (sym == SDLK_DOWN) { if (commandPalette_.selected < (int)commandPalette_.results.size() - 1) ++commandPalette_.selected; continue; }
+            if (sym == SDLK_UP) { if (commandPalette_.selected > 0) --commandPalette_.selected; scrollPaletteSelection(); continue; }
+            if (sym == SDLK_DOWN) { if (commandPalette_.selected < (int)commandPalette_.results.size() - 1) ++commandPalette_.selected; scrollPaletteSelection(); continue; }
             if (sym == SDLK_BACKSPACE && !commandPalette_.query.empty()) {
                 auto it = commandPalette_.query.end(); --it;
                 while (it != commandPalette_.query.begin() && (*it & 0xC0) == 0x80) --it;
@@ -1924,6 +1938,46 @@ void Application::handleEvents() {
         int ww, wh; SDL_GL_GetDrawableSize(window_, &ww, &wh);
         if (titlebar_->handleEvent(e, window_)) continue;
         { int tbww,tbwh; SDL_GL_GetDrawableSize(window_,&tbww,&tbwh); if (handleTabBarEvent(e,(float)tbww,titlebar_->height())) continue; }
+        if (commandPalette_.active) {
+            float ow = 560.f, ox = ((float)ww - ow) / 2.f, oy = titlebar_->height() + tabBarH_ + 36.f;
+            float rowH = 24.f, listY = oy + 38.f, listH = 12.f * rowH;
+            int maxScroll = std::max(0, (int)commandPalette_.results.size() - 12);
+            if (e.type == SDL_MOUSEMOTION) {
+                float mx = (float)e.motion.x, my = (float)e.motion.y;
+                commandPalette_.hover = -1;
+                if (mx >= ox && mx <= ox + ow && my >= listY && my < listY + listH) {
+                    int row = (int)((my - listY) / rowH);
+                    int idx = commandPalette_.scroll + row;
+                    if (idx >= 0 && idx < (int)commandPalette_.results.size()) {
+                        commandPalette_.hover = idx;
+                        commandPalette_.selected = idx;
+                    }
+                }
+                continue;
+            }
+            if (e.type == SDL_MOUSEWHEEL) {
+                commandPalette_.scroll -= e.wheel.y * 3;
+                if (commandPalette_.scroll < 0) commandPalette_.scroll = 0;
+                if (commandPalette_.scroll > maxScroll) commandPalette_.scroll = maxScroll;
+                continue;
+            }
+            if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == 1) {
+                float mx = (float)e.button.x, my = (float)e.button.y;
+                if (mx >= ox && mx <= ox + ow && my >= listY && my < listY + listH) {
+                    int row = (int)((my - listY) / rowH);
+                    int resultIndex = commandPalette_.scroll + row;
+                    if (resultIndex >= 0 && resultIndex < (int)commandPalette_.results.size()) {
+                        int commandIndex = commandPalette_.results[resultIndex];
+                        commandPalette_.active = false;
+                        executePaletteCommand(commandIndex);
+                    }
+                } else if (mx < ox || mx > ox + ow || my < oy || my > oy + 330.f) {
+                    commandPalette_.active = false;
+                }
+                continue;
+            }
+            if (e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_MOUSEBUTTONUP || e.type == SDL_MOUSEMOTION || e.type == SDL_MOUSEWHEEL) continue;
+        }
         auto statusPopupWidth = [&]() {
             float popW = 240.f;
             if (statusPopup_ == StatusPopup::Indent) {
@@ -1993,6 +2047,57 @@ void Application::handleEvents() {
             (e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_MOUSEBUTTONUP || e.type == SDL_MOUSEMOTION || e.type == SDL_MOUSEWHEEL)) {
             continue;
         }
+        if (find_.active && e.type == SDL_MOUSEBUTTONDOWN && e.button.button == 1) {
+            float sbH = statusbar_->height();
+            float rowH = 30.f, barH = find_.replaceActive ? rowH * 2.f + 2.f : rowH;
+            float barY = (float)wh - sbH - barH;
+            float mx = (float)e.button.x, my = (float)e.button.y;
+            if (my >= barY && my < barY + barH) {
+                float panelW = (float)ww;
+                float fieldX = 108.f;
+                float rightButtonsW = find_.replaceActive ? 286.f : 164.f;
+                float fieldW = std::max(120.f, panelW - fieldX - rightButtonsW);
+                float fieldH = 22.f;
+                float fy = barY + (rowH - fieldH) / 2.f;
+                auto inRect = [&](float x, float y, float w, float h) { return mx >= x && mx < x + w && my >= y && my < y + h; };
+                if (inRect(8.f, fy, 28.f, fieldH)) { find_.regex = !find_.regex; findAllMatches(); continue; }
+                if (inRect(40.f, fy, 28.f, fieldH)) { find_.caseSensitive = !find_.caseSensitive; findAllMatches(); continue; }
+                if (inRect(72.f, fy, 28.f, fieldH)) { find_.wholeWord = !find_.wholeWord; findAllMatches(); continue; }
+                if (inRect(fieldX, fy, fieldW, fieldH)) { findFocus_ = 0; continue; }
+                float prevX = fieldX + fieldW + 8.f;
+                float nextX = prevX + 62.f;
+                float closeX = panelW - 30.f;
+                if (inRect(prevX, fy, 56.f, fieldH)) {
+                    if (!find_.matches.empty()) {
+                        find_.currentMatch = (find_.currentMatch + find_.matches.size() - 1) % find_.matches.size();
+                        selections_[0].anchor = selections_[0].cursor = find_.matches[find_.currentMatch];
+                        ensureCursorVisible();
+                    }
+                    continue;
+                }
+                if (inRect(nextX, fy, 56.f, fieldH)) {
+                    if (!find_.matches.empty()) {
+                        find_.currentMatch = (find_.currentMatch + 1) % find_.matches.size();
+                        selections_[0].anchor = selections_[0].cursor = find_.matches[find_.currentMatch];
+                        ensureCursorVisible();
+                    }
+                    continue;
+                }
+                if (inRect(closeX, fy, 22.f, fieldH)) { find_.active = false; continue; }
+                if (find_.replaceActive) {
+                    float ry = barY + rowH + 2.f;
+                    float rfy = ry + (rowH - fieldH) / 2.f;
+                    if (inRect(8.f, rfy, 28.f, fieldH)) continue;
+                    if (inRect(40.f, rfy, 28.f, fieldH)) continue;
+                    if (inRect(fieldX, rfy, fieldW, fieldH)) { findFocus_ = 1; continue; }
+                    float replaceX = fieldX + fieldW + 8.f;
+                    float replaceAllX = replaceX + 82.f;
+                    if (inRect(replaceX, rfy, 76.f, fieldH)) { doReplace(); continue; }
+                    if (inRect(replaceAllX, rfy, 96.f, fieldH)) { doReplaceAll(); continue; }
+                }
+                continue;
+            }
+        }
         if (handleSidebarEvent(e, (float)wh, titlebar_->height() + tabBarH_, statusbar_->height())) continue;
         // find bar click handling
         if (find_.active && e.type == SDL_MOUSEBUTTONDOWN && e.button.button == 1) {
@@ -2038,14 +2143,15 @@ void Application::handleEvents() {
             mouseX_ = e.motion.x; mouseY_ = e.motion.y;
             float tbH = titlebar_->height() + tabBarH_;
             float sbH = statusbar_->height();
+            float findPanelH = find_.active ? (find_.replaceActive ? 62.f : 30.f) : 0.f;
             float lineStep = fontAtlas().lineHeight();
-            float viewH = (float)wh - tbH - sbH;
+            float viewH = (float)wh - tbH - sbH - findPanelH;
             float contentH = totalLines() * lineStep;
             float scrollPad = scrollPastEnd_ ? lineStep * 5.f : 0.f;
             float maxScroll = contentH + scrollPad > viewH ? contentH + scrollPad - viewH : 0.f;
             float mmX = (float)ww - (minimapVisible_ ? minimap_->width() : 0.f);
             float sbX = mmX - 10.f;
-            scrollbarHovered_ = !minimapVisible_ && e.motion.x >= (int)sbX && e.motion.x < (int)mmX && e.motion.y >= (int)tbH && e.motion.y < wh - (int)sbH;
+            scrollbarHovered_ = !minimapVisible_ && e.motion.x >= (int)sbX && e.motion.x < (int)mmX && e.motion.y >= (int)tbH && e.motion.y < wh - (int)(sbH + findPanelH);
             auto clampScroll = [&] { if (scrollY_ < 0.f) scrollY_ = 0.f; if (scrollY_ > maxScroll) scrollY_ = maxScroll; };
             float editorLeft = (sidebarVisible_ ? sidebarWidth_ : 0.f) + gutter_->width() + 8.f;
             float editorRight = mmX - (!minimapVisible_ ? 10.f : 0.f);
@@ -2053,7 +2159,7 @@ void Application::handleEvents() {
             computeMaxLineWidth();
             float maxScrollX = (!wordWrap_ && editorW > 0.f) ? std::max(0.f, maxLineWidth_ - editorW) : 0.f;
             bool hVisible = maxScrollX > 0.f;
-            horizontalScrollbarHovered_ = hVisible && e.motion.x >= (int)editorLeft && e.motion.x < (int)editorRight && e.motion.y >= wh - (int)sbH - 10 && e.motion.y < wh - (int)sbH;
+            horizontalScrollbarHovered_ = hVisible && e.motion.x >= (int)editorLeft && e.motion.x < (int)editorRight && e.motion.y >= wh - (int)(sbH + findPanelH) - 10 && e.motion.y < wh - (int)(sbH + findPanelH);
             if (scrollbarDragging_) {
                 float thumbH = contentH > 0.f ? viewH * (viewH / contentH) : viewH;
                 if (thumbH > viewH) thumbH = viewH;
@@ -2182,15 +2288,16 @@ void Application::handleEvents() {
             float gutterW = sidebarOffset + gutter_->width();
             float textX = gutterW + 8.0f;
             float sbH = statusbar_->height();
+            float findPanelH = find_.active ? (find_.replaceActive ? 62.f : 30.f) : 0.f;
             float fww = (float)ww, fwh = (float)wh;
             float mmX = fww - (minimapVisible_ ? minimap_->width() : 0.f);
             float sbX = mmX - 10.f;
-            float viewH = fwh - tbH - sbH;
+            float viewH = fwh - tbH - sbH - findPanelH;
             float contentH = totalLines() * lineStep;
             float scrollPad = scrollPastEnd_ ? lineStep * 5.f : 0.f;
             float maxScroll = contentH + scrollPad > viewH ? contentH + scrollPad - viewH : 0.f;
             auto clampScroll = [&] { if (scrollY_ < 0.f) scrollY_ = 0.f; if (scrollY_ > maxScroll) scrollY_ = maxScroll; };
-            if (!minimapVisible_ && mx >= sbX && mx < mmX && my >= tbH && my < fwh - sbH) {
+            if (!minimapVisible_ && mx >= sbX && mx < mmX && my >= tbH && my < fwh - sbH - findPanelH) {
                 float thumbH = contentH > 0.f ? viewH * (viewH / contentH) : viewH;
                 if (thumbH > viewH) thumbH = viewH;
                 if (thumbH < 20.f) thumbH = 20.f;
@@ -2206,7 +2313,7 @@ void Application::handleEvents() {
             float editorW = editorRight - editorLeft;
             computeMaxLineWidth();
             float maxScrollX = (!wordWrap_ && editorW > 0.f) ? std::max(0.f, maxLineWidth_ - editorW) : 0.f;
-            if (maxScrollX > 0.f && mx >= editorLeft && mx < editorRight && my >= fwh - sbH - 10.f && my < fwh - sbH) {
+            if (maxScrollX > 0.f && mx >= editorLeft && mx < editorRight && my >= fwh - sbH - findPanelH - 10.f && my < fwh - sbH - findPanelH) {
                 float thumbW = std::max(20.f, editorW * (editorW / maxLineWidth_));
                 if (thumbW > editorW) thumbW = editorW;
                 float thumbX = editorLeft + (scrollX_ / maxScrollX) * (editorW - thumbW);
@@ -2219,12 +2326,12 @@ void Application::handleEvents() {
                 if (scrollX_ > maxScrollX) scrollX_ = maxScrollX;
                 continue;
             }
-            if (mx >= mmX && my >= tbH && my < fwh - sbH) {
+            if (mx >= mmX && my >= tbH && my < fwh - sbH - findPanelH) {
                 float minimapH = viewH;
                 float vpH = minimapH * 0.15f;
                 float vpTop = tbH + (maxScroll > 0.f ? (scrollY_ / maxScroll) * (minimapH - vpH) : 0.f);
                 if (vpTop < tbH) vpTop = tbH;
-                if (vpTop + vpH > fwh - sbH) vpTop = fwh - sbH - vpH;
+                if (vpTop + vpH > fwh - sbH - findPanelH) vpTop = fwh - sbH - findPanelH - vpH;
                 if (my >= vpTop && my <= vpTop + vpH) {
                     minimapDragging_ = true;
                     minimapPendingJump_ = false;
@@ -2658,6 +2765,7 @@ void Application::render() {
     float scrollbarW = minimapVisible_ ? 0.f : 10.f;
     float tbH = titlebar_->height() + tabBarH_;
     float sbH = statusbar_->height();
+    float findPanelH = find_.active ? (find_.replaceActive ? 62.f : 30.f) : 0.f;
     float lineStep = fontAtlas().lineHeight();
     float textOriginY = tbH + fontAtlas().ascent() + 4.0f;
     size_t lineCount = totalLines();
@@ -2665,10 +2773,10 @@ void Application::render() {
     size_t currentCol = colOfPos(selections_[0].cursor);
     size_t firstVisibleLine = (size_t)(scrollY_ / lineStep);
     size_t firstRenderLine = firstVisibleLine > 2 ? firstVisibleLine - 2 : 0;
-    size_t lastRenderLine = lineCount > 0 ? std::min(lineCount - 1, (size_t)((scrollY_ + (fwh - sbH - tbH)) / lineStep) + 3) : 0;
+    size_t lastRenderLine = lineCount > 0 ? std::min(lineCount - 1, (size_t)((scrollY_ + (fwh - sbH - findPanelH - tbH)) / lineStep) + 3) : 0;
     float firstVisibleY = textOriginY + firstVisibleLine * lineStep - scrollY_;
     float sidebarOffset = sidebarVisible_ ? sidebarWidth_ : 0.f;
-    deferPopupDraw_ = titlebar_->isMenuOpen() || tabDropdownOpen_ || tabContextOpen_ || statusPopup_ != StatusPopup::None || (acActive_ && !acItems_.empty());
+    deferPopupDraw_ = titlebar_->isMenuOpen() || tabDropdownOpen_ || tabContextOpen_ || statusPopup_ != StatusPopup::None || commandPalette_.active || (acActive_ && !acItems_.empty());
     if (activeTab_ < tabs_.size()) {
         tabs_[activeTab_].fileName = openFile_.empty() ? "untitled" : openFile_;
         tabs_[activeTab_].filePath = openFilePath_;
@@ -2690,7 +2798,7 @@ void Application::render() {
     if (scrollX_ < 0.f || wordWrap_) scrollX_ = 0.f;
     bool horizontalScrollbarVisible = !wordWrap_ && maxScrollX > 0.f;
     float hScrollbarH = horizontalScrollbarVisible ? 10.f : 0.f;
-    float editorBottom = fwh - sbH - hScrollbarH;
+    float editorBottom = fwh - sbH - findPanelH - hScrollbarH;
     float drawTextX = textX - scrollX_;
 
     glEnable(GL_SCISSOR_TEST);
@@ -2949,7 +3057,7 @@ void Application::render() {
         if (!sv.empty()) { GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo()); glBufferData(GL_ARRAY_BUFFER, sv.size()*sizeof(float), sv.data(), GL_DYNAMIC_DRAW); glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(sv.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0); }
     }
     if (horizontalScrollbarVisible) {
-        float trackY = fwh - sbH - hScrollbarH;
+        float trackY = fwh - sbH - findPanelH - hScrollbarH;
         float regionW = editorWidth;
         float thumbW = std::max(20.f, regionW * (regionW / maxLineWidth_));
         if (thumbW > regionW) thumbW = regionW;
@@ -2960,10 +3068,10 @@ void Application::render() {
     }
     // minimap
     if (minimapVisible_) {
-        bool mmOver = mouseX_ >= (int)(fww - mmW) && mouseY_ >= (int)tbH && mouseY_ < (int)(fwh - sbH);
+        bool mmOver = mouseX_ >= (int)(fww - mmW) && mouseY_ >= (int)tbH && mouseY_ < (int)(fwh - sbH - findPanelH);
         minimap_->setMouseOver(mmOver);
         minimap_->updateHoverFade(1.f/60.f);
-        minimap_->draw(fontAtlas(), *syntax_, textBuffer, fww - mmW, textOriginY, fwh, tbH, gutterW, lineStep, scrollY_, mmOver);
+        minimap_->draw(fontAtlas(), *syntax_, textBuffer, fww - mmW, textOriginY, fwh - findPanelH, tbH, gutterW, lineStep, scrollY_, mmOver);
     }
     // status bar
     std::string branch;
@@ -2975,67 +3083,69 @@ void Application::render() {
     if (find_.active) {
         float rowH = 30.f, barH = find_.replaceActive ? rowH * 2.f + 2.f : rowH;
         float barY = fwh - sbH - barH;
-        float barW = editorRight;
+        float barW = fww;
         auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
             addSolid(x0, y0, x1, y1, r, g, b, a);
         };
-        // panel background
         ar(0, barY, barW, barY + barH, 0.16f, 0.16f, 0.19f, 1.f);
         ar(0, barY, barW, barY + 1, 0.30f, 0.30f, 0.35f, 1.f);
-        // find field background
-        float fieldX = 8.f, fieldW = barW - 220.f, fieldH = 22.f;
+        float fieldX = 108.f, fieldH = 22.f;
+        float rightButtonsW = find_.replaceActive ? 286.f : 164.f;
+        float fieldW = std::max(120.f, barW - fieldX - rightButtonsW);
         float fy = barY + (rowH - fieldH) / 2.f;
         ar(fieldX, fy, fieldX + fieldW, fy + fieldH, 0.12f, 0.12f, 0.14f, 1.f);
-        // toggle buttons
-        float btnX = fieldX + fieldW + 8.f;
+        float btnX = 8.f;
         auto toggleBtn = [&](const char* label, bool active, float x) {
             ar(x, fy, x + 28.f, fy + fieldH, active ? 0.25f : 0.14f, active ? 0.28f : 0.14f, active ? 0.35f : 0.16f, 1.f);
         };
         toggleBtn("/Re", find_.regex, btnX); btnX += 32.f;
         toggleBtn("Aa", find_.caseSensitive, btnX); btnX += 32.f;
         toggleBtn("\\b", find_.wholeWord, btnX); btnX += 32.f;
-        float findButtonX = btnX;
-        btnX += fontAtlas().measureText("Find") + 12.f;
-        float prevButtonX = btnX;
-        btnX += fontAtlas().measureText("Prev") + 12.f;
-        float allButtonX = btnX;
+        float prevButtonX = fieldX + fieldW + 8.f;
+        float nextButtonX = prevButtonX + 62.f;
+        float closeButtonX = barW - 30.f;
+        ar(prevButtonX, fy, prevButtonX + 56.f, fy + fieldH, 0.18f, 0.18f, 0.21f, 1.f);
+        ar(nextButtonX, fy, nextButtonX + 56.f, fy + fieldH, 0.18f, 0.18f, 0.21f, 1.f);
+        ar(closeButtonX, fy, closeButtonX + 22.f, fy + fieldH, 0.18f, 0.18f, 0.21f, 1.f);
         float replaceFieldY = 0.f;
         float replaceButtonX = 0.f;
         float replaceAllButtonX = 0.f;
-        // replace row
         if (find_.replaceActive) {
             float ry = barY + rowH + 2.f;
             float rfy = ry + (rowH - fieldH) / 2.f;
             replaceFieldY = rfy;
+            ar(8.f, rfy, 36.f, rfy + fieldH, 0.14f, 0.14f, 0.16f, 1.f);
+            ar(40.f, rfy, 68.f, rfy + fieldH, 0.14f, 0.14f, 0.16f, 1.f);
             ar(fieldX, rfy, fieldX + fieldW, rfy + fieldH, 0.12f, 0.12f, 0.14f, 1.f);
-            float rbx = fieldX + fieldW + 8.f + 96.f; // skip toggle column
-            replaceButtonX = rbx;
-            rbx += fontAtlas().measureText("Replace") + 14.f;
-            replaceAllButtonX = rbx;
+            replaceButtonX = fieldX + fieldW + 8.f;
+            replaceAllButtonX = replaceButtonX + 82.f;
+            ar(replaceButtonX, rfy, replaceButtonX + 76.f, rfy + fieldH, 0.18f, 0.18f, 0.21f, 1.f);
+            ar(replaceAllButtonX, rfy, replaceAllButtonX + 96.f, rfy + fieldH, 0.18f, 0.18f, 0.21f, 1.f);
         }
         flushSolid();
         std::string findText = find_.query + (findFocus_ == 0 ? "|" : "");
         fontAtlas().drawText(findText, fieldX + 6.f, fy + 4.f, 0.85f, 0.85f, 0.88f, 1.f);
         if (!find_.matches.empty()) {
-            std::string mc = std::to_string(find_.currentMatch + 1) + " of " + std::to_string(find_.matches.size());
+            std::string mc = std::to_string(find_.matches.size()) + " matches";
             float mcW = fontAtlas().measureText(mc);
             fontAtlas().drawText(mc, fieldX + fieldW - mcW - 8.f, fy + 4.f, 0.5f, 0.5f, 0.55f, 1.f);
         } else if (!find_.query.empty()) {
             float mw = fontAtlas().measureText("No matches");
             fontAtlas().drawText("No matches", fieldX + fieldW - mw - 8.f, fy + 4.f, 0.6f, 0.3f, 0.3f, 1.f);
         }
-        fontAtlas().drawText("/Re", fieldX + fieldW + 12.f, fy + 4.f, find_.regex ? 0.95f : 0.45f, find_.regex ? 0.85f : 0.45f, find_.regex ? 0.95f : 0.5f, 1.f);
-        fontAtlas().drawText("Aa", fieldX + fieldW + 44.f, fy + 4.f, find_.caseSensitive ? 0.95f : 0.45f, find_.caseSensitive ? 0.85f : 0.45f, find_.caseSensitive ? 0.95f : 0.5f, 1.f);
-        fontAtlas().drawText("\\b", fieldX + fieldW + 76.f, fy + 4.f, find_.wholeWord ? 0.95f : 0.45f, find_.wholeWord ? 0.85f : 0.45f, find_.wholeWord ? 0.95f : 0.5f, 1.f);
-        fontAtlas().drawText("Find", findButtonX + 4.f, fy + 4.f, 0.7f, 0.75f, 0.7f, 1.f);
-        fontAtlas().drawText("Prev", prevButtonX + 4.f, fy + 4.f, 0.5f, 0.55f, 0.5f, 1.f);
-        fontAtlas().drawText("All", allButtonX + 4.f, fy + 4.f, 0.5f, 0.55f, 0.5f, 1.f);
-        fontAtlas().drawText("\xc3\x97", barW - 18.f, fy + 3.f, 0.6f, 0.6f, 0.6f, 1.f);
+        fontAtlas().drawText("/Re", 12.f, fy + 4.f, find_.regex ? 0.95f : 0.45f, find_.regex ? 0.85f : 0.45f, find_.regex ? 0.95f : 0.5f, 1.f);
+        fontAtlas().drawText("Aa", 44.f, fy + 4.f, find_.caseSensitive ? 0.95f : 0.45f, find_.caseSensitive ? 0.85f : 0.45f, find_.caseSensitive ? 0.95f : 0.5f, 1.f);
+        fontAtlas().drawText("\\b", 76.f, fy + 4.f, find_.wholeWord ? 0.95f : 0.45f, find_.wholeWord ? 0.85f : 0.45f, find_.wholeWord ? 0.95f : 0.5f, 1.f);
+        fontAtlas().drawText("Prev", prevButtonX + 9.f, fy + 4.f, 0.65f, 0.70f, 0.65f, 1.f);
+        fontAtlas().drawText("Next", nextButtonX + 9.f, fy + 4.f, 0.70f, 0.75f, 0.70f, 1.f);
+        fontAtlas().drawText("\xc3\x97", closeButtonX + 7.f, fy + 3.f, 0.6f, 0.6f, 0.6f, 1.f);
         if (find_.replaceActive) {
             std::string repText = find_.replace + (findFocus_ == 1 ? "|" : "");
+            fontAtlas().drawText("^", 17.f, replaceFieldY + 4.f, 0.45f, 0.45f, 0.5f, 1.f);
+            fontAtlas().drawText("<>", 45.f, replaceFieldY + 4.f, 0.45f, 0.45f, 0.5f, 1.f);
             fontAtlas().drawText(repText, fieldX + 6.f, replaceFieldY + 4.f, 0.85f, 0.85f, 0.88f, 1.f);
-            fontAtlas().drawText("Replace", replaceButtonX, replaceFieldY + 4.f, 0.7f, 0.75f, 0.7f, 1.f);
-            fontAtlas().drawText("Replace All", replaceAllButtonX, replaceFieldY + 4.f, 0.7f, 0.75f, 0.7f, 1.f);
+            fontAtlas().drawText("Replace", replaceButtonX + 8.f, replaceFieldY + 4.f, 0.7f, 0.75f, 0.7f, 1.f);
+            fontAtlas().drawText("All", replaceAllButtonX + 34.f, replaceFieldY + 4.f, 0.7f, 0.75f, 0.7f, 1.f);
         }
     }
     // goto overlay
@@ -3061,7 +3171,7 @@ void Application::render() {
                 fontAtlas().drawText(goto_.subtexts[i], ox + 200, oy + 30 + i * 22, 0.4f, 0.4f, 0.45f, 1.f);
         }
     }
-    if (commandPalette_.active) {
+    if (commandPalette_.active && !deferPopupDraw_) {
         float ow = 560.f, oh = 286.f, ox = (fww - ow) / 2.f, oy = tbH + 36.f;
         auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
             addSolid(x0, y0, x1, y1, r, g, b, a);
@@ -3190,7 +3300,7 @@ void Application::render() {
     // render overflow popups to separate window
     bool hasPopup = false;
     float mainX = 0.f, mainY = 0.f, mainW = 0.f, mainH = 0.f;
-    enum class PopupKind { None, Menu, TabDropdown, TabContext, Status, Autocomplete } popupKind = PopupKind::None;
+    enum class PopupKind { None, Menu, TabDropdown, TabContext, Status, CommandPalette, Autocomplete } popupKind = PopupKind::None;
     if (titlebar_->isMenuOpen()) {
         titlebar_->getMenuPopupBounds(fontAtlas(), mainX, mainY, mainW, mainH);
         popupKind = PopupKind::Menu; hasPopup = true;
@@ -3214,6 +3324,10 @@ void Application::render() {
         }
         mainX = popupX_; mainY = popupY_; mainW = maxTextW; mainH = itemCount * 24.f + 4.f;
         popupKind = PopupKind::Status; hasPopup = true;
+    } else if (commandPalette_.active) {
+        mainW = 560.f; mainH = 330.f;
+        mainX = (fww - mainW) / 2.f; mainY = tbH + 36.f;
+        popupKind = PopupKind::CommandPalette; hasPopup = true;
     } else if (acActive_ && !acItems_.empty()) {
         size_t cur = selections_[0].cursor, ls = lineStart(cur);
         size_t cl = lineOfPos(cur);
@@ -3285,6 +3399,43 @@ void Application::render() {
                     float b = (syntax_->languageName() == syntaxLanguages[i]) ? 1.f : 0.7f;
                     if (syntax_->languageName() == syntaxLanguages[i]) fontAtlas().drawText("\xe2\x80\xa2", 8.f, 6.f + row * 24.f, 0.9f, 0.9f, 1.f, 1.f);
                     fontAtlas().drawText(syntaxLanguages[i], 24.f, 6.f + row * 24.f, b, b, b, 1.f);
+                }
+            }
+        } else if (popupKind == PopupKind::CommandPalette) {
+            std::vector<float> pv;
+            float headerH = 38.f, rowH = 24.f;
+            int total = (int)commandPalette_.results.size();
+            int visible = std::min(12, total - commandPalette_.scroll);
+            if (visible < 0) visible = 0;
+            drawRect(pv, 0, 0, mainW, mainH, 0.15f, 0.15f, 0.18f, 0.98f);
+            drawRect(pv, 0, 0, mainW, headerH, 0.12f, 0.12f, 0.14f, 1.f);
+            int selectedRow = commandPalette_.selected - commandPalette_.scroll;
+            if (selectedRow >= 0 && selectedRow < visible)
+                drawRect(pv, 2.f, headerH + selectedRow * rowH, mainW - 8.f, headerH + (selectedRow + 1) * rowH, 0.25f, 0.30f, 0.45f, 1.f);
+            if (total > 12) {
+                float trackX = mainW - 6.f;
+                float listH = 12.f * rowH;
+                float thumbH = std::max(20.f, listH * (12.f / (float)total));
+                float maxScroll = (float)std::max(1, total - 12);
+                float thumbY = headerH + ((float)commandPalette_.scroll / maxScroll) * (listH - thumbH);
+                drawRect(pv, trackX, thumbY, trackX + 4.f, thumbY + thumbH, 0.32f, 0.32f, 0.35f, 1.f);
+            }
+            flush(pv);
+            fontAtlas().drawText(">", 12.f, 9.f, 0.70f, 0.72f, 0.78f, 1.f);
+            fontAtlas().drawText("_", 22.f, 12.f, 0.70f, 0.72f, 0.78f, 1.f);
+            fontAtlas().drawText(commandPalette_.query + "|", 42.f, 8.f, 0.84f, 0.84f, 0.86f, 1.f);
+            std::string count = std::to_string(total) + " commands";
+            float countW = fontAtlas().measureText(count);
+            fontAtlas().drawText(count, mainW - countW - 14.f, 8.f, 0.46f, 0.46f, 0.50f, 1.f);
+            for (int row = 0; row < visible; ++row) {
+                int resultIndex = commandPalette_.scroll + row;
+                int idx = commandPalette_.results[resultIndex];
+                float b = resultIndex == commandPalette_.selected ? 0.98f : 0.72f;
+                float y = headerH + 4.f + row * rowH;
+                fontAtlas().drawText(paletteCommands[idx].label, 12.f, y, b, b, b + 0.03f, 1.f);
+                if (paletteCommands[idx].shortcut[0]) {
+                    float sw = fontAtlas().measureText(paletteCommands[idx].shortcut);
+                    fontAtlas().drawText(paletteCommands[idx].shortcut, mainW - sw - 16.f, y, 0.48f, 0.48f, 0.52f, 1.f);
                 }
             }
         } else if (popupKind == PopupKind::Autocomplete) {

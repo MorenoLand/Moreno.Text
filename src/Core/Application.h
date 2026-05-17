@@ -62,6 +62,8 @@ struct CommandPaletteState {
     std::string query;
     std::vector<int> results;
     int selected = 0;
+    int scroll = 0;
+    int hover = -1;
 };
 
 struct TabBuffer {
@@ -118,7 +120,7 @@ public:
     void commandFind() { find_.active = true; find_.replaceActive = false; find_.query.clear(); find_.matches.clear(); }
     void commandReplace() { find_.active = true; find_.replaceActive = true; find_.query.clear(); find_.matches.clear(); }
     void commandGotoAnything() { goto_.active = true; goto_.query.clear(); goto_.selected = 0; goto_.items.clear(); }
-    void commandPalette() { commandPalette_.active = true; commandPalette_.query.clear(); commandPalette_.selected = 0; updateCommandPalette(); }
+    void commandPalette() { commandPalette_.active = true; commandPalette_.query.clear(); commandPalette_.selected = 0; commandPalette_.scroll = 0; commandPalette_.hover = -1; updateCommandPalette(); }
     void toggleFullscreen();
     void toggleMinimap() { minimapVisible_ = !minimapVisible_; }
     void toggleWordWrap() { wordWrap_ = !wordWrap_; visualLines_.clear(); }
