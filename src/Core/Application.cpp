@@ -1698,7 +1698,7 @@ void Application::render() {
     size_t firstVisibleLine = (size_t)(scrollY_ / lineStep);
     float firstVisibleY = textOriginY + firstVisibleLine * lineStep - scrollY_;
     float sidebarOffset = sidebarVisible_ ? sidebarWidth_ : 0.f;
-    deferPopupDraw_ = titlebar_->isMenuOpen() || tabDropdownOpen_ || tabContextOpen_ || statusPopup_ != StatusPopup::None || (acActive_ && !acItems_.empty());
+    deferPopupDraw_ = tabDropdownOpen_ || tabContextOpen_ || statusPopup_ != StatusPopup::None || (acActive_ && !acItems_.empty());
     if (activeTab_ < tabs_.size()) {
         tabs_[activeTab_].fileName = openFile_.empty() ? "untitled" : openFile_;
         tabs_[activeTab_].filePath = openFilePath_;
@@ -2137,7 +2137,6 @@ void Application::render() {
         glDisable(GL_SCISSOR_TEST);
     }
 
-    if (titlebar_->isMenuOpen() && deferPopupDraw_) titlebar_->deferMenuDraw();
     titlebar_->draw(fontAtlas(), 0, 0, 0, 0);
     if (closeConfirmOpen_) {
         float mw = 420.f, mh = 118.f, mx = (fww - mw) / 2.f, my = (fwh - mh) / 2.f;
@@ -2166,10 +2165,7 @@ void Application::render() {
     bool hasPopup = false;
     float mainX = 0.f, mainY = 0.f, mainW = 0.f, mainH = 0.f;
     enum class PopupKind { None, Menu, TabDropdown, TabContext, Status, Autocomplete } popupKind = PopupKind::None;
-    if (titlebar_->isMenuOpen()) {
-        titlebar_->getMenuBounds(mainX, mainY, mainW, mainH);
-        popupKind = PopupKind::Menu; hasPopup = true;
-    } else if (tabDropdownOpen_) {
+    if (tabDropdownOpen_) {
         mainX = tabChevronX_; mainY = titlebar_->height() + tabBarH_;
         mainW = 260.f; mainH = static_cast<float>(tabs_.size()) * 24.f + 4.f;
         popupKind = PopupKind::TabDropdown; hasPopup = true;
