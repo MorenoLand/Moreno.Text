@@ -120,6 +120,7 @@ public:
     void toggleFullscreen();
     void toggleMinimap() { minimapVisible_ = !minimapVisible_; }
     void toggleWordWrap() { wordWrap_ = !wordWrap_; visualLines_.clear(); }
+    void openSettingsFile();
     void swapLineUp();
     void swapLineDown();
     void duplicateLine();

@@ -3,6 +3,7 @@
 #include "Renderer/GLRenderer.h"
 #include "UI/Titlebar.h"
 #include "UI/MenuBar.h"
+#include "Settings/SettingsManager.h"
 #include "UI/Gutter.h"
 #include "UI/Minimap.h"
 #include "UI/StatusBar.h"
@@ -67,6 +68,20 @@ static std::string findMonospaceFont() {
 
 bool Application::init(int argc, char** argv) {
     initPaths();
+    // load settings
+    {
+        std::string userDir = paths_.dataDir + "/Packages/User";
+        fs::create_directories(userDir);
+        std::string settingsPath = userDir + "/Preferences.moreno-settings";
+        auto& settings = SettingsManager::instance();
+        settings.load(settingsPath);
+        settings.ensureDefaults();
+        settings.save();
+        tabSize_ = settings.get<int>("tab_size", 4);
+        useTabs_ = !settings.get<bool>("translate_tabs_to_spaces", true);
+        autoPair_ = settings.get<bool>("auto_match_enabled", true);
+        minimapVisible_ = settings.get<bool>("minimap_visible", true);
+    }
     selections_.emplace_back(0);
     TabBuffer initTab; initTab.fileName = "untitled"; initTab.selections.emplace_back(0);
     tabs_.push_back(std::move(initTab));
@@ -1466,6 +1481,11 @@ void Application::closeAllPopups() {
     statusPopup_ = StatusPopup::None;
     acActive_ = false; commandPalette_.active = false;
     hidePopupWindow();
+}
+
+void Application::openSettingsFile() {
+    std::string settingsPath = SettingsManager::instance().path();
+    if (!settingsPath.empty() && fs::exists(settingsPath)) openFile(settingsPath);
 }
 
 void Application::buildVisualLineMap(float editorWidth, float gutterWidth) {

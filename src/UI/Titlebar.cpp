@@ -30,7 +30,7 @@ void Titlebar::buildMenu() {
         {{"Toggle Minimap","",[]{ Application::instance().toggleMinimap(); }},{"Hide Tabs","",nullptr},{"Hide Status Bar","",nullptr},{"Toggle Side Bar","Ctrl+K Ctrl+B",[]{ Application::instance().toggleSidebar(); }},{"","",nullptr,true},{"Word Wrap","Alt+Z",[]{ Application::instance().toggleWordWrap(); }},{"","",nullptr,true},{"Enter Full Screen","F11",[]{ Application::instance().toggleFullscreen(); }},{"Enter Distraction Free Mode","Shift+F11",nullptr},{"","",nullptr,true},{"Syntax",">",nullptr},{"Indentation",">",nullptr}},
         {{"Goto Anything...","Ctrl+P",[]{ Application::instance().commandGotoAnything(); }},{"Goto Symbol...","Ctrl+R",nullptr},{"Goto Line...","Ctrl+G",nullptr},{"Goto Word...","Ctrl+;",nullptr},{"","",nullptr,true},{"Jump Back","Alt+-",nullptr},{"Jump Forward","Alt+Shift+-",nullptr},{"","",nullptr,true},{"Next Bookmark","F2",nullptr},{"Previous Bookmark","Shift+F2",nullptr},{"Toggle Bookmark","Ctrl+F2",nullptr},{"Clear All Bookmarks","Ctrl+Shift+F2",nullptr}},
         {{"Command Palette...","Ctrl+Shift+P",[]{ Application::instance().commandPalette(); }},{"","",nullptr,true},{"Record Macro","",[]{}},{"Playback Macro","",[]{}}},
-        {{"Settings","",[]{}},{"Key Bindings","",[]{}},{"Color Scheme",">",[]{}},{"Font",">",[]{}},{"Theme",">",[]{}}},
+        {{"Settings","",[]{ Application::instance().openSettingsFile(); }},{"Key Bindings","",[]{}},{"Color Scheme",">",[]{}},{"Font",">",[]{}},{"Theme",">",[]{}}},
     };
 }
 
