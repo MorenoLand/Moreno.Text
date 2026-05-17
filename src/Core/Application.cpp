@@ -2307,6 +2307,7 @@ void Application::updateTitle() {
 
 void Application::render() {
     GLRenderer::beginFrame();
+    fontAtlas().resetMeasureCache();
     solidVerts_.clear();
     auto addSolid = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
         solidVerts_.insert(solidVerts_.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});

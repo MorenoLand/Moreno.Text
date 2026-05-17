@@ -170,6 +170,9 @@ void FontAtlas::destroy() {
 }
 
 float FontAtlas::measureText(std::string_view text) const {
+    std::string key(text);
+    auto cached = measureCache_.find(key);
+    if (cached != measureCache_.end()) return cached->second;
     float cx = 0;
     int spaceAdv = 0;
     auto it = glyphs_.find(' ');
@@ -181,6 +184,7 @@ float FontAtlas::measureText(std::string_view text) const {
         auto git = glyphs_.find(cp);
         if (git != glyphs_.end()) cx += git->second.advance;
     }
+    measureCache_.emplace(std::move(key), cx);
     return cx;
 }
 

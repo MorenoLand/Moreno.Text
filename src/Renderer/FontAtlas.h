@@ -26,6 +26,7 @@ public:
     void drawText(std::string_view text, float x, float y, float r, float g, float b, float a);
     void drawTextScaled(std::string_view text, float x, float y, float scale, float r, float g, float b, float a);
     float measureText(std::string_view text) const;
+    void resetMeasureCache() const { measureCache_.clear(); }
     float lineHeight() const { return lineHeight_; }
     float ascent() const { return ascent_; }
     float descent() const { return descent_; }
@@ -42,6 +43,7 @@ private:
     GLuint atlasTex_ = 0;
     int atlasW_ = 1024, atlasH_ = 1024;
     std::vector<uint8_t> atlasData_;
+    mutable std::unordered_map<std::string, float> measureCache_;
     bool dirty_ = false;
     int packCursorX_ = 0, packCursorY_ = 0, packRowH_ = 0;
     bool packGlyph(int w, int h, int& outX, int& outY);
