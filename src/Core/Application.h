@@ -154,6 +154,7 @@ private:
     void drawTabBar(class FontAtlas& font, float windowW, float titlebarH);
     bool handleTabBarEvent(const SDL_Event& e, float windowW, float titlebarH);
     float tabBarH_ = 35.f;
+    float tabChevronX_ = 0.f;
     SDL_Window* window_ = nullptr;
     SDL_GLContext glContext_ = nullptr;
     AppPaths paths_;
@@ -192,9 +193,18 @@ private:
     std::vector<UndoStep> undoStack_, redoStack_;
     std::chrono::milliseconds undoWindow_{500};
     FindState find_;
+    int findFocus_ = 0;
     GotoState goto_;
     enum GotoMode { Files, Symbols, Lines, Words } gotoMode_ = Files;
     void updateGotoResults();
+    // autocomplete
+    bool acActive_ = false;
+    std::vector<std::string> acItems_;
+    int acSelected_ = 0;
+    std::string acPrefix_;
+    size_t acPrefixStart_ = 0;
+    void updateAutocomplete();
+    void acceptAutocomplete();
     std::vector<bool> foldedLines_;
     void toggleFold(size_t line);
     bool isFolded(size_t line) const;
@@ -212,6 +222,11 @@ private:
     bool closeConfirmOpen_ = false;
     size_t closeConfirmIndex_ = 0;
     std::string menuStyle_ = "icon";
+    // popup window
+    SDL_Window* popupWin_ = nullptr;
+    void ensurePopupWindow();
+    void renderPopupToWindow(int x, int y, int w, int h);
+    void hidePopupWindow();
     void convertIndentation(bool toSpaces);
     void guessIndent();
     void notifySyntaxEdit(size_t startByte, size_t oldEndByte, size_t newEndByte);

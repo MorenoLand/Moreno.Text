@@ -168,6 +168,12 @@ void Application::insertText(const std::string& text) {
     syntax_->notifyEdit(pos, pos, newPos, startRow, startCol, startRow, startCol, newEndRow, newEndCol);
     selections_[0].anchor = selections_[0].cursor = newPos;
     desiredCursorX_ = -1.f; dirty_ = true; syntaxDirty_ = true;
+    // trigger autocomplete
+    size_t wStart = pos;
+    while (wStart > 0 && (isalnum(textBuffer[wStart-1]) || textBuffer[wStart-1] == '_')) --wStart;
+    acPrefix_ = textBuffer.substr(wStart, newPos - wStart);
+    acPrefixStart_ = wStart;
+    updateAutocomplete();
 }
 void Application::insertAtCursor(const std::string& text) { insertText(text); }
 void Application::deleteSelection() {
@@ -569,6 +575,28 @@ void Application::toggleFold(size_t line) {
     foldedLines_[line] = !foldedLines_[line];
 }
 
+void Application::ensurePopupWindow() {
+    if (popupWin_) return;
+    popupWin_ = SDL_CreateWindow("popup", 0, 0, 1, 1,
+        SDL_WINDOW_BORDERLESS | SDL_WINDOW_ALWAYS_ON_TOP | SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN | SDL_WINDOW_ALLOW_HIGHDPI);
+}
+
+void Application::hidePopupWindow() {
+    if (popupWin_) SDL_HideWindow(popupWin_);
+}
+
+void Application::renderPopupToWindow(int x, int y, int w, int h) {
+    ensurePopupWindow();
+    SDL_SetWindowPosition(popupWin_, x, y);
+    SDL_SetWindowSize(popupWin_, w, h);
+    SDL_ShowWindow(popupWin_);
+    SDL_GL_MakeCurrent(popupWin_, glContext_);
+    int pw, ph; SDL_GL_GetDrawableSize(popupWin_, &pw, &ph);
+    glViewport(0, 0, pw, ph);
+    glClearColor(0, 0, 0, 0);
+    glClear(GL_COLOR_BUFFER_BIT);
+}
+
 void Application::convertIndentation(bool toSpaces) {
     pushUndo();
     std::string result; result.reserve(textBuffer.size());
@@ -747,11 +775,12 @@ void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
     }
     float activeBright = maxTabScroll > 0.f ? 0.8f : 0.35f;
     float controlY = barY + 8.f;
+    tabChevronX_ = visibleW + 40.f;
     font.drawText("<", visibleW + 7.f, controlY, tabScrollX_ > 0.f ? activeBright : 0.35f, tabScrollX_ > 0.f ? activeBright : 0.35f, tabScrollX_ > 0.f ? activeBright : 0.35f, 1.f);
     font.drawText(">", visibleW + 27.f, controlY, tabScrollX_ < maxTabScroll ? activeBright : 0.35f, tabScrollX_ < maxTabScroll ? activeBright : 0.35f, tabScrollX_ < maxTabScroll ? activeBright : 0.35f, 1.f);
     font.drawText("v", visibleW + 47.f, controlY, 0.75f, 0.75f, 0.78f, 1.f);
     if (tabDropdownOpen_) {
-        float popW = 260.f, itemH = 24.f, popH = tabs_.size() * itemH + 4.f, popX = windowW - popW - 2.f, popY = barY + tabBarH_;
+        float popW = 260.f, itemH = 24.f, popH = tabs_.size() * itemH + 4.f, popX = tabChevronX_, popY = barY + tabBarH_;;
         std::vector<float> pv;
         auto pr = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
             pv.insert(pv.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
@@ -802,7 +831,7 @@ bool Application::handleTabBarEvent(const SDL_Event& e, float windowW, float tit
     }
     if (e.type == SDL_MOUSEMOTION && tabDropdownOpen_) {
         float mx = (float)e.motion.x, my = (float)e.motion.y;
-        float popW = 260.f, itemH = 24.f, popX = windowW - popW - 2.f, popY = barY + tabBarH_;
+        float popW = 260.f, itemH = 24.f, popX = tabChevronX_, popY = barY + tabBarH_;
         tabDropdownHover_ = (mx >= popX && mx <= popX + popW && my >= popY && my <= popY + tabs_.size() * itemH + 4.f) ? (int)((my - popY - 2.f) / itemH) : -1;
         return true;
     }
@@ -820,7 +849,7 @@ bool Application::handleTabBarEvent(const SDL_Event& e, float windowW, float tit
             tabContextOpen_ = false;
         }
         if (tabDropdownOpen_) {
-            float popW = 260.f, itemH = 24.f, popX = windowW - popW - 2.f, popY = barY + tabBarH_;
+            float popW = 260.f, itemH = 24.f, popX = tabChevronX_, popY = barY + tabBarH_;
             if (mx >= popX && mx <= popX + popW && my >= popY && my <= popY + tabs_.size() * itemH + 4.f) {
                 int idx = (int)((my - popY - 2.f) / itemH);
                 if (idx >= 0 && idx < (int)tabs_.size()) switchToTab((size_t)idx);
@@ -924,6 +953,45 @@ void Application::updateGotoResults() {
     goto_.selected = goto_.items.empty() ? -1 : 0;
 }
 
+void Application::updateAutocomplete() {
+    acItems_.clear(); acActive_ = false;
+    if (acPrefix_.size() < 2) return;
+    std::unordered_set<std::string> seen;
+    seen.insert(acPrefix_);
+    std::string word;
+    for (size_t i = 0; i < textBuffer.size(); ++i) {
+        char c = textBuffer[i];
+        if (isalnum(c) || c == '_') word += c;
+        else {
+            if (word.size() >= acPrefix_.size() && word != acPrefix_) {
+                bool match = true;
+                for (size_t j = 0; j < acPrefix_.size() && match; ++j)
+                    if (tolower(word[j]) != tolower(acPrefix_[j])) match = false;
+                if (match && seen.insert(word).second) acItems_.push_back(word);
+            }
+            word.clear();
+        }
+    }
+    if (word.size() >= acPrefix_.size() && word != acPrefix_) {
+        bool match = true;
+        for (size_t j = 0; j < acPrefix_.size() && match; ++j)
+            if (tolower(word[j]) != tolower(acPrefix_[j])) match = false;
+        if (match && seen.insert(word).second) acItems_.push_back(word);
+    }
+    if (!acItems_.empty()) { acActive_ = true; acSelected_ = 0; }
+    if (acItems_.size() > 10) acItems_.resize(10);
+}
+
+void Application::acceptAutocomplete() {
+    if (!acActive_ || acSelected_ >= (int)acItems_.size()) return;
+    std::string completion = acItems_[acSelected_].substr(acPrefix_.size());
+    size_t pos = selections_[0].cursor;
+    textBuffer.insert(pos, completion);
+    selections_[0].anchor = selections_[0].cursor = pos + completion.size();
+    dirty_ = true; syntaxDirty_ = true;
+    acActive_ = false;
+}
+
 // ── events ──
 
 void Application::handleEvents() {
@@ -956,7 +1024,8 @@ void Application::handleEvents() {
         // find mode input
         if (find_.active && e.type == SDL_KEYDOWN) {
             auto mod = e.key.keysym.mod; auto sym = e.key.keysym.sym;
-            if (sym == SDLK_ESCAPE) { find_.active = false; continue; }
+            if (sym == SDLK_ESCAPE) { find_.active = false; acActive_ = false; continue; }
+            if (sym == SDLK_TAB && find_.replaceActive) { findFocus_ = 1 - findFocus_; continue; }
             if (sym == SDLK_RETURN) {
                 if (!find_.matches.empty()) {
                     if (mod & KMOD_SHIFT) find_.currentMatch = (find_.currentMatch + find_.matches.size() - 1) % find_.matches.size();
@@ -967,17 +1036,21 @@ void Application::handleEvents() {
                 continue;
             }
             if ((mod & KMOD_CTRL) && (sym == SDLK_f || sym == SDLK_h || sym == SDLK_r)) continue;
-            if (sym == SDLK_BACKSPACE && !find_.query.empty()) {
-                auto it = find_.query.end(); --it;
-                while (it != find_.query.begin() && (*it & 0xC0) == 0x80) --it;
-                find_.query.erase(it, find_.query.end()); findAllMatches(); continue;
+            if (sym == SDLK_BACKSPACE) {
+                if (findFocus_ == 1 && find_.replaceActive) { if (!find_.replace.empty()) { auto it = find_.replace.end(); --it; while (it != find_.replace.begin() && (*it & 0xC0) == 0x80) --it; find_.replace.erase(it, find_.replace.end()); } }
+                else { if (!find_.query.empty()) { auto it = find_.query.end(); --it; while (it != find_.query.begin() && (*it & 0xC0) == 0x80) --it; find_.query.erase(it, find_.query.end()); findAllMatches(); } }
+                continue;
             }
             if ((mod & KMOD_ALT) && sym == SDLK_r) { find_.regex = !find_.regex; findAllMatches(); continue; }
             if ((mod & KMOD_ALT) && sym == SDLK_c) { find_.caseSensitive = !find_.caseSensitive; findAllMatches(); continue; }
             if ((mod & KMOD_ALT) && sym == SDLK_w) { find_.wholeWord = !find_.wholeWord; findAllMatches(); continue; }
             continue;
         }
-        if (find_.active && e.type == SDL_TEXTINPUT) { find_.query += e.text.text; findAllMatches(); continue; }
+        if (find_.active && e.type == SDL_TEXTINPUT) {
+            if (findFocus_ == 1 && find_.replaceActive) find_.replace += e.text.text;
+            else { find_.query += e.text.text; findAllMatches(); }
+            continue;
+        }
         // goto mode
         if (goto_.active && e.type == SDL_KEYDOWN) {
             auto sym = e.key.keysym.sym;
@@ -1160,6 +1233,8 @@ void Application::handleEvents() {
                             if (idx < syntaxLangCount) {
                                 syntax_->setLanguageByName(syntaxLanguages[idx]);
                                 syntaxLangIndex_ = idx;
+                                syntaxDirty_ = true;
+                                syntax_->parse(textBuffer);
                             }
                         }
                     }
@@ -1184,6 +1259,16 @@ void Application::handleEvents() {
                 if (mx >= synX && mx <= synX + synW + 10.f) {
                     int visibleLangs = std::min(syntaxLangCount, 18);
                     statusPopup_ = StatusPopup::Syntax; popupX_ = synX; popupY_ = fwh - sbH - visibleLangs * 24.f - 4.f; popupSelected_ = 0; popupScroll_ = 0; continue;
+                }
+            }
+            // find/replace button clicks
+            if (find_.active && find_.replaceActive) {
+                float barH = 64.f, barY = fwh - sbH - barH;
+                float er = fww - (minimapVisible_ ? 100.f : 0.f) - 10.f;
+                float bx = er - 280.f;
+                if (my >= barY + 26.f && my <= barY + 44.f) {
+                    if (mx >= bx && mx <= bx + 72.f) { doReplace(); continue; }
+                    if (mx >= bx + 80.f && mx <= bx + 170.f) { doReplaceAll(); continue; }
                 }
             }
             // gutter fold click
@@ -1222,6 +1307,7 @@ void Application::handleEvents() {
                 else if (mod & KMOD_SHIFT) selections_[0].cursor = clickPos;
                 else { selections_.clear(); selections_.emplace_back(clickPos); }
                 selecting_ = true;
+                acActive_ = false;
                 desiredCursorX_ = -1.f;
             }
         }
@@ -1235,7 +1321,7 @@ void Application::handleEvents() {
             auto& sel = selections_[0];
             bool shift = mod & KMOD_SHIFT, ctrl = mod & KMOD_CTRL;
             if (ctrl && sym == SDLK_q) running_ = false;
-            else if (sym == SDLK_ESCAPE) { selections_.clear(); selections_.emplace_back(sel.cursor); find_.active = false; goto_.active = false; tabDropdownOpen_ = false; }
+            else if (sym == SDLK_ESCAPE) { selections_.clear(); selections_.emplace_back(sel.cursor); find_.active = false; goto_.active = false; tabDropdownOpen_ = false; acActive_ = false; }
             else if (ctrl && sym == SDLK_a) { sel.anchor = 0; sel.cursor = textBuffer.size(); }
             else if (ctrl && sym == SDLK_c) copySelectionOrLine();
             else if (ctrl && sym == SDLK_x) cutSelectionOrLine();
@@ -1243,8 +1329,8 @@ void Application::handleEvents() {
             else if (ctrl && sym == SDLK_b) toggleSidebar();
             else if (ctrl && sym == SDLK_z) { if (shift) doRedo(); else doUndo(); }
             else if (ctrl && sym == SDLK_y) doRedo();
-            else if (ctrl && sym == SDLK_f) { find_.active = true; find_.replaceActive = false; find_.query.clear(); find_.matches.clear(); }
-            else if (ctrl && sym == SDLK_h) { find_.active = true; find_.replaceActive = true; find_.query.clear(); find_.matches.clear(); }
+            else if (ctrl && sym == SDLK_f) { find_.active = true; find_.replaceActive = false; find_.query.clear(); find_.matches.clear(); findFocus_ = 0; }
+            else if (ctrl && sym == SDLK_h) { find_.active = true; find_.replaceActive = true; find_.query.clear(); find_.matches.clear(); findFocus_ = 0; }
             else if (ctrl && sym == SDLK_s) { if (shift) saveFileAs(); else saveFile(); }
             else if (ctrl && shift && sym == SDLK_t) reopenClosedTab();
             else if (ctrl && sym == SDLK_p) { goto_.active = true; goto_.query.clear(); goto_.selected = 0; goto_.items.clear(); }
@@ -1294,9 +1380,10 @@ void Application::handleEvents() {
                     textBuffer.erase(pos, de - pos); dirty_ = true;
                 }
             }
-            else if (sym == SDLK_RETURN) insertText("\n");
+            else if (sym == SDLK_RETURN) { if (acActive_) { acceptAutocomplete(); } else { insertText("\n"); } }
             else if (sym == SDLK_TAB) {
-                if (shift) {
+                if (acActive_) { acceptAutocomplete(); }
+                else if (shift) {
                     pushUndo(); size_t ls = lineStart(sel.cursor); int rm = 0;
                     while (rm < tabSize_ && ls + rm < textBuffer.size() && textBuffer[ls + rm] == ' ') ++rm;
                     if (rm > 0) { textBuffer.erase(ls, rm); sel.anchor = sel.cursor = (sel.cursor > ls + rm) ? sel.cursor - rm : ls; dirty_ = true; }
@@ -1319,7 +1406,8 @@ void Application::handleEvents() {
                 } else { if (sel.cursor < textBuffer.size()) { if (shift) sel.cursor++; else sel.anchor = sel.cursor = sel.cursor + 1; } desiredCursorX_ = -1.f; }
             }
             else if (sym == SDLK_UP) {
-                size_t cl = lineOfPos(sel.cursor); if (cl > 0) {
+                if (acActive_) { if (acSelected_ > 0) --acSelected_; }
+                else { size_t cl = lineOfPos(sel.cursor); if (cl > 0) {
                     size_t ls = lineStartForLine(cl - 1), le = lineEnd(ls);
                     std::string_view lt(textBuffer.data() + ls, le - ls);
                     if (desiredCursorX_ < 0) desiredCursorX_ = fontAtlas().measureText(textBuffer.substr(lineStart(sel.cursor), sel.cursor - lineStart(sel.cursor)));
@@ -1331,10 +1419,11 @@ void Application::handleEvents() {
                         if (adv + cw / 2.f > desiredCursorX_) break; adv += cw; col += b; i += b;
                     }
                     size_t np = ls + col; if (shift) sel.cursor = np; else sel.anchor = sel.cursor = np;
-                }
+                } }
             }
             else if (sym == SDLK_DOWN) {
-                size_t cl = lineOfPos(sel.cursor); if (cl < totalLines() - 1) {
+                if (acActive_) { if (acSelected_ < (int)acItems_.size() - 1) ++acSelected_; }
+                else { size_t cl = lineOfPos(sel.cursor); if (cl < totalLines() - 1) {
                     size_t nls = lineStartForLine(cl + 1), le = lineEnd(nls);
                     std::string_view lt(textBuffer.data() + nls, le - nls);
                     if (desiredCursorX_ < 0) desiredCursorX_ = fontAtlas().measureText(textBuffer.substr(lineStart(sel.cursor), sel.cursor - lineStart(sel.cursor)));
@@ -1346,7 +1435,7 @@ void Application::handleEvents() {
                         if (adv + cw / 2.f > desiredCursorX_) break; adv += cw; col += b; i += b;
                     }
                     size_t np = nls + col; if (shift) sel.cursor = np; else sel.anchor = sel.cursor = np;
-                }
+                } }
             }
             else if (sym == SDLK_HOME) {
                 if (ctrl) { if (shift) sel.cursor = 0; else sel.anchor = sel.cursor = 0; }
@@ -1495,13 +1584,20 @@ void Application::render() {
             if (gy + lineStep < tbH) { gy += lineStep; continue; }
             if (gy > fwh) break;
             int indent = (ln < lineIndents_.size()) ? lineIndents_[ln] : 0;
-            for (int lvl = tabSize_; lvl < indent; lvl += tabSize_) {
+            int cursorIndent = (currentLine < lineIndents_.size()) ? lineIndents_[currentLine] : 0;
+            for (int lvl = tabSize_; lvl <= indent && lvl < cursorIndent; lvl += tabSize_) {
                 float gx = textX + lvl * spaceWidth;
-                // only draw if next line has same or deeper indent
                 bool draw = (ln + 1 < totalLines() && lineIndents_[ln+1] > lvl);
-                // or previous line has deeper indent
                 draw = draw || (ln > 0 && lineIndents_[ln-1] >= lvl);
-                if (draw) addGuideRect(gx, gy, gx + 1, gy + lineStep, 0.3f, 0.3f, 0.35f, 0.5f);
+                if (draw) addGuideRect(gx, gy, gx + 1, gy + lineStep, 0.231f, 0.251f, 0.282f, 0.15f);
+            }
+            // active indent guide at cursor's indent level
+            if (indent > 0 && ln == currentLine) {
+                int activeLvl = ((cursorIndent - 1) / tabSize_) * tabSize_;
+                if (activeLvl > 0) {
+                    float gx = textX + activeLvl * spaceWidth;
+                    addGuideRect(gx, gy, gx + 1, gy + lineStep, 0.294f, 0.314f, 0.345f, 0.35f);
+                }
             }
             gy += lineStep;
         }
@@ -1720,14 +1816,13 @@ void Application::render() {
         };
         ar(0, barY, editorRight, barY + barH, 0.18f, 0.18f, 0.21f, 1.f);
         GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo()); glBufferData(GL_ARRAY_BUFFER, fbv.size()*sizeof(float), fbv.data(), GL_DYNAMIC_DRAW); glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(fbv.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0);
-        std::string fl = "Find: " + find_.query + "|";
+        std::string fl = "Find: " + find_.query + (findFocus_ == 0 ? "|" : "");
         if (find_.regex) fl += "  [REGEX]"; if (find_.caseSensitive) fl += "  [CASE]"; if (find_.wholeWord) fl += "  [WORD]";
         if (!find_.matches.empty()) fl += "  (" + std::to_string(find_.currentMatch+1) + "/" + std::to_string(find_.matches.size()) + ")";
         fontAtlas().drawText(fl, 12.f, barY + 6.f, 0.8f, 0.8f, 0.8f, 1.f);
         if (find_.replaceActive) {
-            std::string rl = "Replace: " + find_.replace + "|";
-            fontAtlas().drawText(rl, 12.f, barY + 28.f, 0.7f, 0.7f, 0.7f, 1.f);
-            // buttons
+            std::string rl = "Replace: " + find_.replace + (findFocus_ == 1 ? "|" : "");
+            fontAtlas().drawText(rl, 12.f, barY + 28.f, findFocus_ == 1 ? 0.9f : 0.6f, findFocus_ == 1 ? 0.9f : 0.6f, findFocus_ == 1 ? 0.9f : 0.6f, 1.f);
             float bx = editorRight - 280.f;
             fontAtlas().drawText("[Replace]", bx, barY + 28.f, 0.6f, 0.7f, 0.6f, 1.f);
             fontAtlas().drawText("[Replace All]", bx + 80.f, barY + 28.f, 0.6f, 0.7f, 0.6f, 1.f);
@@ -1760,6 +1855,26 @@ void Application::render() {
             fontAtlas().drawText(goto_.items[i], ox + 8, oy + 30 + i * 22, ib, ib, ib, 1.f);
             if (i < (int)goto_.subtexts.size() && !goto_.subtexts[i].empty())
                 fontAtlas().drawText(goto_.subtexts[i], ox + 200, oy + 30 + i * 22, 0.4f, 0.4f, 0.45f, 1.f);
+        }
+    }
+    // autocomplete popup
+    if (acActive_ && !acItems_.empty()) {
+        size_t cur = selections_[0].cursor, ls = lineStart(cur);
+        float cx = textX + fontAtlas().measureText(std::string_view(textBuffer.data()+ls, cur-ls));
+        size_t cl = lineOfPos(cur);
+        float cy = textOriginY + cl * lineStep - scrollY_ + fontAtlas().ascent() - fontAtlas().descent() + 4.f;
+        float acW = 220.f, itemH = 22.f, acH = acItems_.size() * itemH + 4.f;
+        std::vector<float> av;
+        auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
+            av.insert(av.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
+        };
+        ar(cx, cy, cx + acW, cy + acH, 0.17f, 0.19f, 0.23f, 0.98f);
+        if (acSelected_ >= 0 && acSelected_ < (int)acItems_.size())
+            ar(cx + 2, cy + 2 + acSelected_ * itemH, cx + acW - 2, cy + 2 + (acSelected_ + 1) * itemH, 0.24f, 0.27f, 0.32f, 1.f);
+        GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo()); glBufferData(GL_ARRAY_BUFFER, av.size()*sizeof(float), av.data(), GL_DYNAMIC_DRAW); glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(av.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0);
+        for (int i = 0; i < (int)acItems_.size(); ++i) {
+            float b = (i == acSelected_) ? 1.f : 0.7f;
+            fontAtlas().drawText(acItems_[i], cx + 8, cy + 4 + i * itemH, b, b, b, 1.f);
         }
     }
 
@@ -1832,10 +1947,24 @@ void Application::render() {
     }
     GLRenderer::endFrame();
     SDL_GL_SwapWindow(window_);
+    // render overflow popups to separate window
+    bool hasPopup = false;
+    int popupX = 0, popupY = 0, popupW = 0, popupH = 0;
+    // check if titlebar menu needs overflow
+    if (titlebar_->isMenuOpen()) {
+        int winX = 0, winY = 0; SDL_GetWindowPosition(window_, &winX, &winY);
+        // menu draws at (0, titlebarH) in main window coords
+        // convert to screen coords for popup
+        // For now, keep menu rendering in main window - popup window support
+        // will be activated in next commit for all popup types
+        (void)hasPopup; (void)popupX; (void)popupY; (void)popupW; (void)popupH;
+    }
+    if (popupWin_ && !hasPopup) hidePopupWindow();
 }
 
 void Application::shutdown() {
     sidebarWatchRunning_ = false;
+    if (popupWin_) { SDL_DestroyWindow(popupWin_); popupWin_ = nullptr; }
     delete syntax_; delete statusbar_; delete minimap_; delete gutter_; delete titlebar_;
     fontAtlas().destroy(); GLRenderer::destroy();
     SDL_StopTextInput(); SDL_GL_DeleteContext(glContext_); SDL_DestroyWindow(window_); SDL_Quit();
