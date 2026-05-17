@@ -166,11 +166,14 @@ void Titlebar::drawMenuPopup(FontAtlas& font, float ox, float oy) {
             if (!item.shortcut.empty()) w += font.measureText(item.shortcut) + 36.f;
             if (w + 48.f > sw) sw = w + 48.f;
         }
-        float maxH = wh * 0.8f, sh = 2.f + sm.size() * itemH;
-        if (sy + sh > wh - 8.f) sy = wh - sh - 8.f;
-        if (sh > maxH) sh = maxH;
+        float sh = 2.f + static_cast<float>(sm.size()) * itemH;
         bool popupLocal = ox != 0.f || oy != 0.f;
-        if (!popupLocal && sx + sw > ww - 4.f) sx = ddX - sw - 2.f;
+        if (!popupLocal) {
+            float maxH = wh * 0.8f;
+            if (sy + sh > wh - 8.f) sy = wh - sh - 8.f;
+            if (sh > maxH) sh = maxH;
+            if (sx + sw > ww - 4.f) sx = ddX - sw - 2.f;
+        }
         lastHasSubmenu_ = true; lastSubmenuX_ = sx + ox; lastSubmenuY_ = sy + oy; lastSubmenuW_ = sw; lastSubmenuH_ = sh;
         v.clear();
         ar(sx, sy, sx + sw, sy + sh, 0.17f, 0.17f, 0.20f, 0.98f);

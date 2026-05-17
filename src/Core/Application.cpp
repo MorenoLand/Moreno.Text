@@ -351,10 +351,13 @@ void Application::openFile(const std::string& path) {
 void Application::saveFile() { if (openFilePath_.empty()) { saveFileAs(); return; } std::ofstream f(openFilePath_, std::ios::binary); if (!f) return; f << textBuffer; dirty_ = false; updateGitBranch(); }
 void Application::saveFileAs() {
 #ifdef _WIN32
+    closeAllPopups();
+    inOsDialog_ = true;
     char buf[MAX_PATH] = {}; OPENFILENAMEA ofn = {}; ofn.lStructSize = sizeof(ofn);
     ofn.lpstrFilter = "All Files\0*.*\0Text Files\0*.txt\0"; ofn.lpstrFile = buf; ofn.nMaxFile = MAX_PATH;
     ofn.Flags = OFN_OVERWRITEPROMPT; ofn.lpstrDefExt = "txt";
     if (GetSaveFileNameA(&ofn)) { openFilePath_ = buf; openFile_ = fs::path(buf).filename().string(); detectSyntax(); saveFile(); updateGitBranch(); }
+    inOsDialog_ = false;
 #endif
 }
 void Application::saveAll() {
@@ -375,9 +378,12 @@ void Application::revertFile() {
 }
 void Application::openFileDialog() {
 #ifdef _WIN32
+    closeAllPopups();
+    inOsDialog_ = true;
     char buf[MAX_PATH] = {}; OPENFILENAMEA ofn = {}; ofn.lStructSize = sizeof(ofn);
     ofn.lpstrFilter = "All Files\0*.*\0"; ofn.lpstrFile = buf; ofn.nMaxFile = MAX_PATH; ofn.Flags = OFN_FILEMUSTEXIST;
     if (GetOpenFileNameA(&ofn)) openFile(buf);
+    inOsDialog_ = false;
 #endif
 }
 void Application::newBuffer() {
@@ -394,8 +400,11 @@ void Application::toggleFullscreen() {
 }
 
 void Application::openFolderDialog() {
+    closeAllPopups();
     std::string path;
+    inOsDialog_ = true;
     if (Platform::pickFolder(path)) loadFolder(path);
+    inOsDialog_ = false;
 }
 
 void Application::loadFolder(const std::string& path) {
@@ -1413,6 +1422,14 @@ void Application::handleAutoPair(const char* text) {
     selections_[0].anchor = selections_[0].cursor = selections_[0].cursor - 1;
 }
 
+void Application::closeAllPopups() {
+    titlebar_->closeMenuPopup();
+    tabDropdownOpen_ = false; tabContextOpen_ = false;
+    statusPopup_ = StatusPopup::None;
+    acActive_ = false; commandPalette_.active = false;
+    hidePopupWindow();
+}
+
 // ── events ──
 
 void Application::handleEvents() {
@@ -1430,6 +1447,7 @@ void Application::handleEvents() {
             }
         }
         if (e.type == SDL_WINDOWEVENT && e.window.windowID == SDL_GetWindowID(window_) && e.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
+            if (inOsDialog_) continue;
             bool focusMovedToPopup = false;
             if (popupWin_ && (SDL_GetWindowFlags(popupWin_) & SDL_WINDOW_SHOWN)) {
                 int gx = 0, gy = 0;
@@ -1826,9 +1844,9 @@ void Application::handleEvents() {
             else if (ctrl && sym == SDLK_p) { goto_.active = true; goto_.query.clear(); goto_.selected = 0; goto_.items.clear(); }
             else if (ctrl && sym == SDLK_o) openFileDialog();
             else if (ctrl && sym == SDLK_F2) { toggleBookmark(); }
-            else if (sym == SDLK_F2 && !(mod & KMOD_SHIFT) && !(mod & KMOD_CTRL)) { nextBookmark(); }
-            else if (shift && sym == SDLK_F2) { prevBookmark(); }
             else if (ctrl && shift && sym == SDLK_F2) { clearBookmarks(); }
+            else if (sym == SDLK_F2 && (mod & KMOD_SHIFT)) { prevBookmark(); }
+            else if (sym == SDLK_F2 && !(mod & KMOD_CTRL)) { nextBookmark(); }
             else if (ctrl && sym == SDLK_n) newBuffer();
             else if (ctrl && sym == SDLK_w) closeTab(activeTab_);
             else if (ctrl && shift && sym == SDLK_LEFTBRACKET) toggleFold(lineOfPos(sel.cursor));

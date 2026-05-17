@@ -248,6 +248,7 @@ private:
     bool wordWrap_ = false;
     // auto pair
     bool autoPair_ = true;
+    bool inOsDialog_ = false;
     std::vector<int> lineIndents_;
     void computeLineIndents();
     bool useTabs_ = false;
@@ -295,6 +296,7 @@ private:
     // auto pair
     void handleAutoPair(const char* text);
     void convertIndentation(bool toSpaces);
+    void closeAllPopups();
     void guessIndent();
     void notifySyntaxEdit(size_t startByte, size_t oldEndByte, size_t newEndByte);
     StatusPopup statusPopup_ = StatusPopup::None;
