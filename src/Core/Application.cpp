@@ -1169,6 +1169,222 @@ void Application::acceptAutocomplete() {
     acActive_ = false;
 }
 
+// ── line operations ──
+
+void Application::swapLineUp() {
+    size_t cl = lineOfPos(selections_[0].cursor);
+    if (cl == 0) return;
+    pushUndo();
+    size_t ls = lineStartForLine(cl), le = lineEnd(ls);
+    if (le < textBuffer.size()) ++le;
+    size_t prevLs = lineStartForLine(cl - 1);
+    std::string cur = textBuffer.substr(ls, le - ls);
+    std::string prev = textBuffer.substr(prevLs, ls - prevLs);
+    textBuffer.replace(prevLs, le - prevLs, cur + prev);
+    selections_[0].anchor = selections_[0].cursor = prevLs + (selections_[0].cursor - ls);
+    dirty_ = true; syntaxDirty_ = true;
+}
+
+void Application::swapLineDown() {
+    size_t cl = lineOfPos(selections_[0].cursor);
+    if (cl >= totalLines() - 1) return;
+    pushUndo();
+    size_t ls = lineStartForLine(cl), le = lineEnd(ls);
+    size_t nextLs = le < textBuffer.size() ? le + 1 : le;
+    size_t nextLe = lineEnd(nextLs);
+    if (nextLe < textBuffer.size()) ++nextLe;
+    std::string cur = textBuffer.substr(ls, nextLs - ls);
+    std::string next = textBuffer.substr(nextLs, nextLe - nextLs);
+    textBuffer.replace(ls, nextLe - ls, next + cur);
+    size_t offset = next.size();
+    selections_[0].anchor = selections_[0].cursor = ls + offset + (selections_[0].cursor - ls);
+    dirty_ = true; syntaxDirty_ = true;
+}
+
+void Application::duplicateLine() {
+    pushUndo();
+    size_t cl = lineOfPos(selections_[0].cursor);
+    size_t ls = lineStartForLine(cl), le = lineEnd(ls);
+    std::string line = textBuffer.substr(ls, le - ls);
+    std::string ins = "\n" + line;
+    textBuffer.insert(le, ins);
+    selections_[0].anchor = selections_[0].cursor = le + 1 + (selections_[0].cursor - ls);
+    dirty_ = true; syntaxDirty_ = true;
+}
+
+void Application::deleteLine() {
+    pushUndo();
+    size_t cl = lineOfPos(selections_[0].cursor);
+    size_t ls = lineStartForLine(cl), le = lineEnd(ls);
+    if (le < textBuffer.size()) ++le;
+    textBuffer.erase(ls, le - ls);
+    selections_[0].anchor = selections_[0].cursor = std::min(ls, textBuffer.size());
+    dirty_ = true; syntaxDirty_ = true;
+}
+
+void Application::joinLines() {
+    size_t cl = lineOfPos(selections_[0].cursor);
+    if (cl >= totalLines() - 1) return;
+    pushUndo();
+    size_t le = lineEnd(selections_[0].cursor);
+    if (le >= textBuffer.size()) return;
+    textBuffer.erase(le, 1);
+    while (le < textBuffer.size() && (textBuffer[le] == ' ' || textBuffer[le] == '\t'))
+        textBuffer.erase(le, 1);
+    textBuffer.insert(le, 1, ' ');
+    dirty_ = true; syntaxDirty_ = true;
+}
+
+// ── comment toggle ──
+
+std::string Application::commentToken() const {
+    std::string lang = syntax_->languageName();
+    if (lang=="Python"||lang=="ShellScript"||lang=="Ruby"||lang=="R"||lang=="TOML"||lang=="YAML") return "#";
+    if (lang=="SQL"||lang=="Lua") return "--";
+    return "//";
+}
+
+void Application::toggleLineComment() {
+    pushUndo();
+    std::string token = commentToken();
+    bool isHTML = (token == "<!--");
+    auto& sel = selections_[0];
+    size_t a = sel.hasSelection() ? lineStart(sel.min()) : lineStart(sel.cursor);
+    size_t b = sel.hasSelection() ? lineEnd(sel.max()) : lineEnd(sel.cursor);
+    size_t la = lineOfPos(a), lb = lineOfPos(b);
+    bool allCommented = true;
+    for (size_t ln = la; ln <= lb; ++ln) {
+        size_t ls = lineStartForLine(ln), le = lineEnd(ls);
+        size_t first = ls; while (first < le && (textBuffer[first]==' '||textBuffer[first]=='\t')) ++first;
+        if (isHTML) { if (first+3 >= le || textBuffer.compare(first,4,"<!--")!=0) allCommented = false; }
+        else { if (first+token.size() > le || textBuffer.compare(first,token.size(),token)!=0) allCommented = false; }
+    }
+    for (size_t ln = la; ln <= lb; ++ln) {
+        size_t ls = lineStartForLine(ln), le = lineEnd(ls);
+        size_t first = ls; while (first < le && (textBuffer[first]==' '||textBuffer[first]=='\t')) ++first;
+        if (allCommented) {
+            if (isHTML) { textBuffer.erase(first, 4); size_t ce = le - 4; while (ce > first && textBuffer.compare(ce,3,"-->")!=0) --ce; if (ce > first) textBuffer.erase(ce, 3); }
+            else textBuffer.erase(first, token.size());
+        } else {
+            if (isHTML) textBuffer.insert(first, "<!-- ");
+            else textBuffer.insert(first, token + " ");
+        }
+    }
+    dirty_ = true; syntaxDirty_ = true;
+}
+
+void Application::toggleBlockComment() {
+    auto& sel = selections_[0];
+    if (!sel.hasSelection()) { sel.anchor = lineStart(sel.cursor); sel.cursor = lineEnd(sel.cursor); }
+    pushUndo();
+    size_t a = sel.min(), b = sel.max();
+    std::string lang = syntax_->languageName();
+    std::string open = (lang=="HTML"||lang=="XML") ? "<!--" : "/*";
+    std::string close = (lang=="HTML"||lang=="XML") ? "-->" : "*/";
+    textBuffer.insert(b, close);
+    textBuffer.insert(a, open);
+    sel.anchor = a; sel.cursor = b + open.size() + close.size();
+    dirty_ = true; syntaxDirty_ = true;
+}
+
+// ── bookmarks ──
+
+void Application::toggleBookmark() {
+    int line = (int)lineOfPos(selections_[0].cursor);
+    if (bookmarks_.count(line)) bookmarks_.erase(line); else bookmarks_.insert(line);
+}
+void Application::nextBookmark() {
+    if (bookmarks_.empty()) return;
+    int cur = (int)lineOfPos(selections_[0].cursor);
+    auto it = bookmarks_.upper_bound(cur);
+    if (it == bookmarks_.end()) it = bookmarks_.begin();
+    selections_[0].anchor = selections_[0].cursor = lineStartForLine(*it);
+    ensureCursorVisible();
+}
+void Application::prevBookmark() {
+    if (bookmarks_.empty()) return;
+    int cur = (int)lineOfPos(selections_[0].cursor);
+    auto it = bookmarks_.lower_bound(cur);
+    if (it == bookmarks_.begin()) it = bookmarks_.end();
+    --it;
+    selections_[0].anchor = selections_[0].cursor = lineStartForLine(*it);
+    ensureCursorVisible();
+}
+void Application::clearBookmarks() { bookmarks_.clear(); }
+
+// ── convert case ──
+
+void Application::ensureWordSel() {
+    auto& sel = selections_[0];
+    if (!sel.hasSelection()) {
+        size_t p = sel.cursor, ls = lineStart(p), le = lineEnd(p);
+        size_t ws = p; while (ws > ls && (isalnum(textBuffer[ws-1])||textBuffer[ws-1]=='_')) --ws;
+        size_t we = p; while (we < le && (isalnum(textBuffer[we])||textBuffer[we]=='_')) ++we;
+        if (we > ws) { sel.anchor = ws; sel.cursor = we; }
+    }
+}
+
+void Application::convertCaseUpper() {
+    ensureWordSel(); if (!selections_[0].hasSelection()) return;
+    pushUndo(); size_t a = selections_[0].min(), b = selections_[0].max();
+    for (size_t i = a; i < b; ++i) textBuffer[i] = (char)toupper((unsigned char)textBuffer[i]);
+    dirty_ = true;
+}
+void Application::convertCaseLower() {
+    ensureWordSel(); if (!selections_[0].hasSelection()) return;
+    pushUndo(); size_t a = selections_[0].min(), b = selections_[0].max();
+    for (size_t i = a; i < b; ++i) textBuffer[i] = (char)tolower((unsigned char)textBuffer[i]);
+    dirty_ = true;
+}
+void Application::convertCaseTitle() {
+    ensureWordSel(); if (!selections_[0].hasSelection()) return;
+    pushUndo(); size_t a = selections_[0].min(), b = selections_[0].max();
+    bool ws = true;
+    for (size_t i = a; i < b; ++i) {
+        if (isalnum((unsigned char)textBuffer[i])) { textBuffer[i] = ws ? (char)toupper((unsigned char)textBuffer[i]) : (char)tolower((unsigned char)textBuffer[i]); ws = false; }
+        else ws = true;
+    }
+    dirty_ = true;
+}
+void Application::convertCaseSwap() {
+    ensureWordSel(); if (!selections_[0].hasSelection()) return;
+    pushUndo(); size_t a = selections_[0].min(), b = selections_[0].max();
+    for (size_t i = a; i < b; ++i) {
+        char c = textBuffer[i];
+        if (isupper((unsigned char)c)) textBuffer[i] = (char)tolower((unsigned char)c);
+        else if (islower((unsigned char)c)) textBuffer[i] = (char)toupper((unsigned char)c);
+    }
+    dirty_ = true;
+}
+
+// ── auto pair ──
+
+void Application::handleAutoPair(const char* text) {
+    if (!autoPair_ || text[1] != 0) { insertText(text); return; }
+    char c = text[0];
+    auto& sel = selections_[0];
+    static const struct { char open, close; } pairs[] = {{'(',')'},{'[',']'},{'{','}'},{'"','"'},{'\'','\''}};
+    char close = 0;
+    for (auto& p : pairs) if (p.open == c) { close = p.close; break; }
+    if (!close) { insertText(text); return; }
+    if (sel.hasSelection()) {
+        pushUndo();
+        size_t a = sel.min(), b = sel.max();
+        std::string wrapped = std::string(1,c) + textBuffer.substr(a, b-a) + close;
+        textBuffer.replace(a, b-a, wrapped);
+        sel.anchor = a + 1; sel.cursor = a + 1 + (b - a);
+        dirty_ = true; syntaxDirty_ = true;
+        return;
+    }
+    if (sel.cursor < textBuffer.size() && textBuffer[sel.cursor] == close) {
+        sel.anchor = sel.cursor = sel.cursor + 1;
+        return;
+    }
+    std::string ins; ins += c; ins += close;
+    insertText(ins);
+    selections_[0].anchor = selections_[0].cursor = selections_[0].cursor - 1;
+}
+
 // ── events ──
 
 void Application::handleEvents() {
@@ -1389,9 +1605,12 @@ void Application::handleEvents() {
             if (statusPopup_ != StatusPopup::None) {
             int itemCount = (statusPopup_ == StatusPopup::Indent) ? 8 : std::min(syntaxLangCount, 18);
             float popW = 240.f, popH = itemCount * 24.f + 4.f;
-            if (e.motion.x >= popupX_ && e.motion.x <= popupX_ + popW && e.motion.y >= popupY_ && e.motion.y <= popupY_ + popH)
-                popupSelected_ = (int)((e.motion.y - popupY_ - 2) / 24.f);
-            else popupSelected_ = -1;
+            if (e.motion.x >= popupX_ && e.motion.x <= popupX_ + popW && e.motion.y >= popupY_ && e.motion.y <= popupY_ + popH) {
+                int idx = (int)std::floor((e.motion.y - popupY_ - 2.f) / 24.f);
+                if (idx < 0) idx = 0;
+                if (idx >= itemCount) idx = itemCount - 1;
+                popupSelected_ = idx;
+            } else popupSelected_ = -1;
             }
         }
         else if (e.type == SDL_MOUSEWHEEL) {
@@ -1449,9 +1668,9 @@ void Application::handleEvents() {
                 int itemCount = (statusPopup_ == StatusPopup::Indent) ? 8 : std::min(syntaxLangCount, 18);
                 float popW = 240.f, popH = itemCount * 24.f + 4.f;
                 if (mx >= popupX_ && mx <= popupX_ + popW && my >= popupY_ && my <= popupY_ + popH) {
-                    int idx = (int)((my - popupY_ - 2) / 24.f);
+                    int idx = (int)std::floor((my - popupY_ - 2.f) / 24.f);
                     if (statusPopup_ == StatusPopup::Syntax) idx += popupScroll_;
-                    if (idx >= 0) {
+                    if (idx >= 0 && idx < (statusPopup_ == StatusPopup::Indent ? 8 : syntaxLangCount)) {
                         if (statusPopup_ == StatusPopup::Indent) {
                             if (idx == 0) { useTabs_ = false; syntax_->setUseTabs(false); }
                             else if (idx == 1) { useTabs_ = true; syntax_->setUseTabs(true); }
@@ -1551,10 +1770,19 @@ void Application::handleEvents() {
                 pendingCtrlK_ = false;
                 if (ctrl && sym == SDLK_1) { foldAll(); continue; }
                 if (ctrl && sym == SDLK_j) { unfoldAll(); continue; }
+                if (ctrl && sym == SDLK_u) { convertCaseUpper(); continue; }
+                if (ctrl && sym == SDLK_l) { convertCaseLower(); continue; }
             }
             if (ctrl && sym == SDLK_q) running_ = false;
             else if (sym == SDLK_ESCAPE) { selections_.clear(); selections_.emplace_back(sel.cursor); find_.active = false; goto_.active = false; commandPalette_.active = false; tabDropdownOpen_ = false; acActive_ = false; }
             else if (ctrl && sym == SDLK_k) { pendingCtrlK_ = true; }
+            else if (ctrl && shift && sym == SDLK_UP) { swapLineUp(); }
+            else if (ctrl && shift && sym == SDLK_DOWN) { swapLineDown(); }
+            else if (ctrl && shift && sym == SDLK_d) { duplicateLine(); }
+            else if (ctrl && shift && sym == SDLK_k) { deleteLine(); }
+            else if (ctrl && shift && sym == SDLK_j) { joinLines(); }
+            else if (ctrl && !shift && sym == SDLK_SLASH) { toggleLineComment(); }
+            else if (ctrl && shift && sym == SDLK_SLASH) { toggleBlockComment(); }
             else if (ctrl && sym == SDLK_a) { sel.anchor = 0; sel.cursor = textBuffer.size(); }
             else if (ctrl && sym == SDLK_c) copySelectionOrLine();
             else if (ctrl && sym == SDLK_x) cutSelectionOrLine();
@@ -1569,6 +1797,10 @@ void Application::handleEvents() {
             else if (ctrl && shift && sym == SDLK_p) commandPalette();
             else if (ctrl && sym == SDLK_p) { goto_.active = true; goto_.query.clear(); goto_.selected = 0; goto_.items.clear(); }
             else if (ctrl && sym == SDLK_o) openFileDialog();
+            else if (ctrl && sym == SDLK_F2) { toggleBookmark(); }
+            else if (sym == SDLK_F2 && !(mod & KMOD_SHIFT) && !(mod & KMOD_CTRL)) { nextBookmark(); }
+            else if (shift && sym == SDLK_F2) { prevBookmark(); }
+            else if (ctrl && shift && sym == SDLK_F2) { clearBookmarks(); }
             else if (ctrl && sym == SDLK_n) newBuffer();
             else if (ctrl && sym == SDLK_w) closeTab(activeTab_);
             else if (ctrl && shift && sym == SDLK_LEFTBRACKET) toggleFold(lineOfPos(sel.cursor));
@@ -1609,9 +1841,19 @@ void Application::handleEvents() {
                     size_t pos = sel.cursor; auto it = textBuffer.begin() + pos; --it;
                     while (it != textBuffer.begin() && (*it & 0xC0) == 0x80) --it;
                     size_t ds = it - textBuffer.begin();
+                    // auto-pair backspace
+                    if (autoPair_ && pos < textBuffer.size()) {
+                        char prev = textBuffer[ds], next = textBuffer[pos];
+                        if ((prev=='('&&next==')')||(prev=='['&&next==']')||(prev=='{'&&next=='}')||(prev=='"'&&next=='"')||(prev=='\''&&next=='\'')) {
+                            textBuffer.erase(ds, 2);
+                            sel.anchor = sel.cursor = ds; dirty_ = true; desiredCursorX_ = -1.f;
+                            goto did_backspace;
+                        }
+                    }
                     textBuffer.erase(ds, pos - ds);
                     sel.anchor = sel.cursor = ds; dirty_ = true; desiredCursorX_ = -1.f;
                 }
+                did_backspace:;
             }
             else if (sym == SDLK_DELETE) {
                 pushUndo();
@@ -1705,7 +1947,7 @@ void Application::handleEvents() {
             if (dirty_) syntaxDirty_ = true;
             ensureCursorVisible();
         }
-        else if (e.type == SDL_TEXTINPUT) { insertText(e.text.text); }
+        else if (e.type == SDL_TEXTINPUT) { handleAutoPair(e.text.text); }
     }
 }
 
@@ -1942,6 +2184,14 @@ void Application::render() {
                 float tx = 6.f, ty = gy + lineStep / 2.f - 4.f;
                 if (isFoldStart(ln)) tri(tx, ty, tx, ty + 8.f, tx + 7.f, ty + 4.f, 0.72f, 0.72f, 0.76f, 1.f);
                 else tri(tx, ty + 2.f, tx + 8.f, ty + 2.f, tx + 4.f, ty + 8.f, 0.55f, 0.55f, 0.60f, 1.f);
+            }
+            if (bookmarks_.count((int)ln)) {
+                float cx = gutter_->width() - 14.f, cy = gy + lineStep / 2.f;
+                float r = 3.f;
+                tri(cx - r, cy - r, cx + r, cy - r, cx, cy + r, 0.75f, 0.65f, 0.25f, 1.f);
+                tri(cx - r, cy + r, cx + r, cy + r, cx, cy - r, 0.75f, 0.65f, 0.25f, 1.f);
+                tri(cx - r, cy - r, cx, cy + r, cx - r, cy + r, 0.75f, 0.65f, 0.25f, 1.f);
+                tri(cx + r, cy - r, cx, cy + r, cx + r, cy + r, 0.75f, 0.65f, 0.25f, 1.f);
             }
             gy += lineStep;
         }

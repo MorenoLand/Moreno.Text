@@ -226,6 +226,28 @@ private:
     void foldAll();
     void unfoldAll();
     bool pendingCtrlK_ = false;
+    // bookmarks
+    std::set<int> bookmarks_;
+    // split view
+    bool splitActive_ = false;
+    size_t splitTab_ = 0;
+    float splitDividerPos_ = 0.5f;
+    bool splitDragging_ = false;
+    bool splitFocusRight_ = false;
+    float splitScrollY_ = 0.f;
+    std::vector<SelRange> splitSelections_;
+    // diff view
+    bool diffActive_ = false;
+    std::vector<std::pair<size_t,size_t>> diffAdded_, diffRemoved_, diffChanged_;
+    // tab drag
+    bool tabDragging_ = false;
+    size_t tabDragIndex_ = 0;
+    float tabDragStartX_ = 0.f;
+    float tabDragOffsetX_ = 0.f;
+    // word wrap
+    bool wordWrap_ = false;
+    // auto pair
+    bool autoPair_ = true;
     std::vector<int> lineIndents_;
     void computeLineIndents();
     bool useTabs_ = false;
@@ -249,6 +271,29 @@ private:
     void hidePopupWindow();
     void shapePopupWindowForMenu();
     void clearPopupWindowShape();
+    // line operations
+    void swapLineUp();
+    void swapLineDown();
+    void duplicateLine();
+    void deleteLine();
+    void joinLines();
+    // comment toggle
+    void toggleLineComment();
+    void toggleBlockComment();
+    std::string commentToken() const;
+    // bookmarks
+    void toggleBookmark();
+    void nextBookmark();
+    void prevBookmark();
+    void clearBookmarks();
+    // convert case
+    void convertCaseUpper();
+    void convertCaseLower();
+    void convertCaseTitle();
+    void convertCaseSwap();
+    void ensureWordSel();
+    // auto pair
+    void handleAutoPair(const char* text);
     void convertIndentation(bool toSpaces);
     void guessIndent();
     void notifySyntaxEdit(size_t startByte, size_t oldEndByte, size_t newEndByte);
