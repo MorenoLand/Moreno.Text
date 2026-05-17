@@ -119,6 +119,21 @@ public:
     void commandPalette() { commandPalette_.active = true; commandPalette_.query.clear(); commandPalette_.selected = 0; updateCommandPalette(); }
     void toggleFullscreen();
     void toggleMinimap() { minimapVisible_ = !minimapVisible_; }
+    void swapLineUp();
+    void swapLineDown();
+    void duplicateLine();
+    void deleteLine();
+    void joinLines();
+    void toggleLineComment();
+    void toggleBlockComment();
+    void convertCaseUpper();
+    void convertCaseLower();
+    void convertCaseTitle();
+    void convertCaseSwap();
+    void toggleBookmark();
+    void nextBookmark();
+    void prevBookmark();
+    void clearBookmarks();
 private:
     Application() = default;
     bool init(int argc, char** argv);
@@ -272,26 +287,7 @@ private:
     void hidePopupWindow();
     void shapePopupWindowForMenu();
     void clearPopupWindowShape();
-    // line operations
-    void swapLineUp();
-    void swapLineDown();
-    void duplicateLine();
-    void deleteLine();
-    void joinLines();
-    // comment toggle
-    void toggleLineComment();
-    void toggleBlockComment();
     std::string commentToken() const;
-    // bookmarks
-    void toggleBookmark();
-    void nextBookmark();
-    void prevBookmark();
-    void clearBookmarks();
-    // convert case
-    void convertCaseUpper();
-    void convertCaseLower();
-    void convertCaseTitle();
-    void convertCaseSwap();
     void ensureWordSel();
     // auto pair
     void handleAutoPair(const char* text);

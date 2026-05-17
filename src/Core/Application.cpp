@@ -894,6 +894,24 @@ void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
     font.drawText("<", visibleW + 7.f, controlY, tabScrollX_ > 0.f ? activeBright : 0.35f, tabScrollX_ > 0.f ? activeBright : 0.35f, tabScrollX_ > 0.f ? activeBright : 0.35f, 1.f);
     font.drawText(">", visibleW + 27.f, controlY, tabScrollX_ < maxTabScroll ? activeBright : 0.35f, tabScrollX_ < maxTabScroll ? activeBright : 0.35f, tabScrollX_ < maxTabScroll ? activeBright : 0.35f, 1.f);
     font.drawText("v", visibleW + 47.f, controlY, 0.75f, 0.75f, 0.78f, 1.f);
+    // tab drag ghost
+    if (tabDragging_ && tabDragIndex_ < tabs_.size()) {
+        std::string dragLabel = tabs_[tabDragIndex_].fileName.empty() ? "untitled" : tabs_[tabDragIndex_].fileName;
+        if (tabs_[tabDragIndex_].dirty) dragLabel += "\xe2\x80\xa2";
+        float dragW = std::clamp(font.measureText(dragLabel) + 32.f, 48.f, 180.f);
+        float dragX = std::clamp(mouseX_ - dragW / 2.f, 0.f, visibleW - dragW);
+        std::vector<float> dv;
+        auto dar = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
+            dv.insert(dv.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
+        };
+        dar(dragX, barY, dragX + dragW, barY + tabBarH_, 0.20f, 0.20f, 0.23f, 0.6f);
+        dar(dragX, barY + tabBarH_ - 2.f, dragX + dragW, barY + tabBarH_, accentColor_.r, accentColor_.g, accentColor_.b, 0.5f);
+        GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
+        glBufferData(GL_ARRAY_BUFFER, dv.size()*sizeof(float), dv.data(), GL_DYNAMIC_DRAW);
+        glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(dv.size()/8));
+        glBindVertexArray(0); GLRenderer::setDrawMode(0);
+        font.drawText(dragLabel, dragX + 12.f, barY + 8.f, 0.85f, 0.85f, 0.85f, 0.6f);
+    }
     if (tabDropdownOpen_ && !deferPopupDraw_) {
         float popW = 260.f, itemH = 24.f, popH = tabs_.size() * itemH + 4.f, popX = tabChevronX_, popY = barY + tabBarH_;;
         std::vector<float> pv;
@@ -1061,7 +1079,11 @@ static const PaletteCommandDef paletteCommands[] = {
     {"Close File","Ctrl+W"},{"Reopen Closed Tab","Ctrl+Shift+T"},{"Revert File",""},{"Undo","Ctrl+Z"},{"Redo","Ctrl+Y"},
     {"Cut","Ctrl+X"},{"Copy","Ctrl+C"},{"Paste","Ctrl+V"},{"Paste and Indent","Ctrl+Shift+V"},{"Select All","Ctrl+A"},
     {"Find","Ctrl+F"},{"Replace","Ctrl+H"},{"Goto Anything","Ctrl+P"},{"Toggle Side Bar","Ctrl+K Ctrl+B"},{"Toggle Minimap",""},
-    {"Enter Full Screen","F11"}
+    {"Enter Full Screen","F11"},{"Toggle Word Wrap",""},
+    {"Swap Line Up","Ctrl+Shift+Up"},{"Swap Line Down","Ctrl+Shift+Down"},{"Duplicate Line","Ctrl+Shift+D"},{"Delete Line","Ctrl+Shift+K"},{"Join Lines","Ctrl+Shift+J"},
+    {"Toggle Line Comment","Ctrl+/"},{"Toggle Block Comment","Ctrl+Shift+/"},
+    {"Upper Case","Ctrl+K Ctrl+U"},{"Lower Case","Ctrl+K Ctrl+L"},{"Title Case",""},{"Swap Case",""},
+    {"Toggle Bookmark","Ctrl+F2"},{"Next Bookmark","F2"},{"Previous Bookmark","Shift+F2"},{"Clear All Bookmarks","Ctrl+Shift+F2"}
 };
 
 static std::string lowerCopy(std::string s) {
@@ -1105,6 +1127,22 @@ void Application::executePaletteCommand(int commandIndex) {
         case 19: toggleSidebar(); break;
         case 20: toggleMinimap(); break;
         case 21: toggleFullscreen(); break;
+        case 22: wordWrap_ = !wordWrap_; break;
+        case 23: swapLineUp(); break;
+        case 24: swapLineDown(); break;
+        case 25: duplicateLine(); break;
+        case 26: deleteLine(); break;
+        case 27: joinLines(); break;
+        case 28: toggleLineComment(); break;
+        case 29: toggleBlockComment(); break;
+        case 30: convertCaseUpper(); break;
+        case 31: convertCaseLower(); break;
+        case 32: convertCaseTitle(); break;
+        case 33: convertCaseSwap(); break;
+        case 34: toggleBookmark(); break;
+        case 35: nextBookmark(); break;
+        case 36: prevBookmark(); break;
+        case 37: clearBookmarks(); break;
     }
 }
 
