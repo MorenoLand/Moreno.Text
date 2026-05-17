@@ -5,6 +5,7 @@
 #include <GL/glew.h>
 #include <string>
 #include <string_view>
+#include <vector>
 
 extern GLuint gl_shaderProgram();
 extern GLuint gl_vao();
@@ -82,11 +83,13 @@ void Minimap::draw(FontAtlas& font, SyntaxHighlighter& syntax, const std::string
         lineStart = lineEnd + 1;
     }
     {
-        float frac = contentH > 0.f ? viewH / contentH : 1.f;
+        float visibleLines = lineStep > 0.f ? viewH / lineStep : (float)lineCount;
+        float frac = lineCount > 0 ? visibleLines / (float)lineCount : 1.f;
         if (frac > 1.f) frac = 1.f;
         float vpH = minimapH * frac;
-        if (vpH < 20.f) vpH = 20.f;
         float vpTop = top + (maxScroll > 0.f ? (scrollY / maxScroll) * (minimapH - vpH) : 0.f);
+        if (vpTop < top) vpTop = top;
+        if (vpTop + vpH > bottom) vpTop = bottom - vpH;
         float a = hovered ? 0.44f : 0.376f;
         addRect(originX, vpTop, originX + width_, vpTop + vpH, 0.267f, 0.267f, 0.267f, a);
         addRect(originX, vpTop, originX + width_, vpTop + 1, 0.34f, 0.34f, 0.34f, a);

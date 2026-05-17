@@ -7,7 +7,7 @@ class Gutter {
 public:
     Gutter() = default;
     void draw(FontAtlas& font, size_t totalLines, size_t currentLine,
-              size_t firstVisibleLine, float originY, float lineStep, float windowH, float titlebarH);
+              size_t firstVisibleLine, float originX, float originY, float lineStep, float windowH, float titlebarH);
     float width() const { return width_; }
 private:
     float width_ = 48.f;

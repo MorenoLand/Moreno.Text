@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <chrono>
+#include <filesystem>
 
 class Titlebar;
 class Gutter;
@@ -66,6 +67,14 @@ struct TabBuffer {
 
 enum class StatusPopup { None, Indent, Syntax };
 
+struct SidebarNode {
+    std::string name, path, extension;
+    bool folder = false;
+    bool expanded = false;
+    int depth = 0;
+    std::vector<SidebarNode> children;
+};
+
 class Application {
 public:
     static Application& instance();
@@ -79,6 +88,8 @@ public:
     void openFile(const std::string& path);
     void switchToTab(size_t index);
     void closeTab(size_t index);
+    void openFolderDialog();
+    void toggleSidebar() { sidebarVisible_ = !sidebarVisible_; }
 private:
     Application() = default;
     bool init(int argc, char** argv);
@@ -105,6 +116,14 @@ private:
     void doRedo();
     void doReplace();
     void doReplaceAll();
+    std::string selectedTextOrLine() const;
+    void copySelectionOrLine();
+    void cutSelectionOrLine();
+    void pasteClipboard(bool andIndent);
+    void loadFolder(const std::string& path);
+    void buildSidebarNode(SidebarNode& node);
+    void drawSidebar(class FontAtlas& font, float windowH, float titlebarH, float statusbarH);
+    bool handleSidebarEvent(const SDL_Event& e, float windowH, float titlebarH, float statusbarH);
     // tabs
     std::vector<TabBuffer> tabs_;
     size_t activeTab_ = 0;
@@ -132,6 +151,15 @@ private:
     float tabScrollX_ = 0.f;
     bool tabDropdownOpen_ = false;
     int tabDropdownHover_ = -1;
+    bool tabContextOpen_ = false;
+    int tabContextHover_ = -1;
+    size_t tabContextIndex_ = 0;
+    float tabContextX_ = 0.f, tabContextY_ = 0.f;
+    bool sidebarVisible_ = false;
+    bool sidebarResizing_ = false;
+    float sidebarWidth_ = 200.f;
+    std::string sidebarRoot_;
+    SidebarNode sidebarTree_;
     std::vector<UndoStep> undoStack_, redoStack_;
     std::chrono::milliseconds undoWindow_{500};
     FindState find_;

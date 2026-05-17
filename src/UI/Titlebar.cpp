@@ -12,73 +12,24 @@ extern GLuint gl_vbo();
 
 void Titlebar::buildMenu() {
     menuItems_ = {
-        {"File", "", nullptr},
-        {"New File", "Ctrl+N", []{ Application::instance().newBuffer(); }},
-        {"Open File...", "Ctrl+O", []{}},
-        {"Open Folder...", "", []{}},
-        {"Open Recent", ">", []{}},
-        {"", "", nullptr, true},
-        {"Save", "Ctrl+S", []{ Application::instance().saveFile(); }},
-        {"Save As...", "Ctrl+Shift+S", []{ Application::instance().saveFileAs(); }},
-        {"Save All", "", []{}},
-        {"", "", nullptr, true},
-        {"Close File", "Ctrl+W", []{}},
-        {"Revert File", "", []{}},
-        {"", "", nullptr, true},
-        {"Edit", "", nullptr},
-        {"Undo", "Ctrl+Z", []{}},
-        {"Redo", "Ctrl+Y", []{}},
-        {"", "", nullptr, true},
-        {"Cut", "Ctrl+X", []{}},
-        {"Copy", "Ctrl+C", []{}},
-        {"Paste", "Ctrl+V", []{}},
-        {"Paste and Indent", "Ctrl+Shift+V", []{}},
-        {"", "", nullptr, true},
-        {"Select All", "Ctrl+A", []{}},
-        {"", "", nullptr, true},
-        {"Selection", "", nullptr},
-        {"Expand Selection to Line", "Ctrl+L", []{}},
-        {"Expand Selection to Word", "Ctrl+D", []{}},
-        {"Split into Lines", "Ctrl+Shift+L", []{}},
-        {"Single Selection", "Esc", []{}},
-        {"", "", nullptr, true},
-        {"Find", "", nullptr},
-        {"Find...", "Ctrl+F", []{}},
-        {"Find Next", "F3", []{}},
-        {"Find Previous", "Shift+F3", []{}},
-        {"Find All", "Alt+F3", []{}},
-        {"Replace...", "Ctrl+H", []{}},
-        {"Find in Files...", "Ctrl+Shift+F", []{}},
-        {"", "", nullptr, true},
-        {"View", "", nullptr},
-        {"Hide Minimap", "", []{}},
-        {"Hide Tabs", "", []{}},
-        {"Hide Status Bar", "", []{}},
-        {"Word Wrap", "", []{}},
-        {"Enter Full Screen", "F11", []{}},
-        {"Enter Distraction Free", "Shift+F11", []{}},
-        {"", "", nullptr, true},
-        {"Goto", "", nullptr},
-        {"Goto Anything...", "Ctrl+P", []{}},
-        {"Goto Symbol...", "Ctrl+R", []{}},
-        {"Goto Line...", "Ctrl+G", []{}},
-        {"Goto Word...", "Ctrl+;", []{}},
-        {"Jump Back", "Alt+-", []{}},
-        {"Jump Forward", "Alt+Shift+-", []{}},
-        {"", "", nullptr, true},
-        {"Tools", "", nullptr},
-        {"Command Palette...", "Ctrl+Shift+P", []{}},
-        {"Record Macro", "", []{}},
-        {"Playback Macro", "", []{}},
-        {"", "", nullptr, true},
-        {"Preferences", "", nullptr},
-        {"Settings", "", []{}},
-        {"Key Bindings", "", []{}},
-        {"Color Scheme", ">", []{}},
-        {"Font", ">", []{}},
-        {"Theme", ">", []{}},
-        {"", "", nullptr, true},
-        {"Exit", "Ctrl+Q", []{ Application::instance().quit(); }},
+        {"File", ">", nullptr, false, 0},
+        {"Edit", ">", nullptr, false, 1},
+        {"Selection", ">", nullptr, false, 2},
+        {"Find", ">", nullptr, false, 3},
+        {"View", ">", nullptr, false, 4},
+        {"Goto", ">", nullptr, false, 5},
+        {"Tools", ">", nullptr, false, 6},
+        {"Preferences", ">", nullptr, false, 7},
+    };
+    submenus_ = {
+        {{"New File","Ctrl+N",[]{ Application::instance().newBuffer(); }},{"Open File...","Ctrl+O",[]{}},{"Open Folder...","",[]{ Application::instance().openFolderDialog(); }},{"Open Recent",">",[]{}},{"","",nullptr,true},{"Save","Ctrl+S",[]{ Application::instance().saveFile(); }},{"Save As...","Ctrl+Shift+S",[]{ Application::instance().saveFileAs(); }},{"Save All","",[]{}},{"","",nullptr,true},{"Close File","Ctrl+W",[]{}},{"Revert File","",[]{}},{"","",nullptr,true},{"Exit","Ctrl+Q",[]{ Application::instance().quit(); }}},
+        {{"Undo","Ctrl+Z",[]{}},{"Redo","Ctrl+Y",[]{}},{"","",nullptr,true},{"Cut","Ctrl+X",[]{}},{"Copy","Ctrl+C",[]{}},{"Paste","Ctrl+V",[]{}},{"Paste and Indent","Ctrl+Shift+V",[]{}},{"","",nullptr,true},{"Select All","Ctrl+A",[]{}},{"","",nullptr,true},{"Line",">",[]{}},{"Comment",">",[]{}},{"Convert Case",">",[]{}},{"Code Folding",">",[]{}}},
+        {{"Select All","Ctrl+A",[]{}},{"Expand Selection to Line","Ctrl+L",[]{}},{"Expand Selection to Word","Ctrl+D",[]{}},{"Expand Selection to Brackets","Ctrl+Shift+M",[]{}},{"Expand Selection to Indentation","",[]{}},{"Expand Selection to Scope","Ctrl+Shift+Space",[]{}},{"","",nullptr,true},{"Split into Lines","Ctrl+Shift+L",[]{}},{"Single Selection","Escape",[]{}}},
+        {{"Find...","Ctrl+F",[]{}},{"Find Next","F3",[]{}},{"Find Previous","Shift+F3",[]{}},{"Find All","Alt+F3",[]{}},{"","",nullptr,true},{"Replace...","Ctrl+H",[]{}},{"","",nullptr,true},{"Find in Files...","Ctrl+Shift+F",[]{}}},
+        {{"Hide Minimap","",[]{}},{"Hide Tabs","",[]{}},{"Hide Status Bar","",[]{}},{"Toggle Side Bar","Ctrl+K Ctrl+B",[]{ Application::instance().toggleSidebar(); }},{"","",nullptr,true},{"Word Wrap","",[]{}},{"","",nullptr,true},{"Enter Full Screen","F11",[]{}},{"Enter Distraction Free Mode","Shift+F11",[]{}},{"","",nullptr,true},{"Syntax",">",[]{}},{"Indentation",">",[]{}}},
+        {{"Goto Anything...","Ctrl+P",[]{}},{"Goto Symbol...","Ctrl+R",[]{}},{"Goto Line...","Ctrl+G",[]{}},{"Goto Word...","Ctrl+;",[]{}},{"","",nullptr,true},{"Jump Back","Alt+-",[]{}},{"Jump Forward","Alt+Shift+-",[]{}},{"","",nullptr,true},{"Next Bookmark","F2",[]{}},{"Previous Bookmark","Shift+F2",[]{}},{"Toggle Bookmark","Ctrl+F2",[]{}},{"Clear All Bookmarks","Ctrl+Shift+F2",[]{}}},
+        {{"Command Palette...","Ctrl+Shift+P",[]{}},{"","",nullptr,true},{"Record Macro","",[]{}},{"Playback Macro","",[]{}}},
+        {{"Settings","",[]{}},{"Key Bindings","",[]{}},{"Color Scheme",">",[]{}},{"Font",">",[]{}},{"Theme",">",[]{}}},
     };
 }
 
@@ -100,7 +51,7 @@ void Titlebar::drawMenu(FontAtlas& font) {
     SDL_Window* window = SDL_GL_GetCurrentWindow();
     int ww = 1280, wh = 720;
     if (window) SDL_GL_GetDrawableSize(window, &ww, &wh);
-    float maxW = 160.f;
+    float maxW = 140.f;
     for (auto& item : menuItems_) {
         float w = font.measureText(item.label);
         if (!item.shortcut.empty()) w += font.measureText(item.shortcut) + 24.f;
@@ -108,13 +59,9 @@ void Titlebar::drawMenu(FontAtlas& font) {
     }
     float ddX = 0.f, ddY = height_;
     float itemH = 24.f;
-    int maxVisible = (int)((wh * 0.8f - 28.f) / itemH);
-    if (maxVisible < 1) maxVisible = 1;
-    int visibleCount = (int)menuItems_.size() < maxVisible ? (int)menuItems_.size() : maxVisible;
-    if (menuScroll_ > (int)menuItems_.size() - visibleCount) menuScroll_ = (int)menuItems_.size() - visibleCount;
-    if (menuScroll_ < 0) menuScroll_ = 0;
-    bool scrollable = visibleCount < (int)menuItems_.size();
-    float arrowH = scrollable ? 14.f : 0.f;
+    int visibleCount = (int)menuItems_.size();
+    bool scrollable = false;
+    float arrowH = 0.f;
     float ddW = maxW, ddH = 2.f + visibleCount * itemH + arrowH * 2.f;
     std::vector<float> v;
     auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
@@ -122,17 +69,9 @@ void Titlebar::drawMenu(FontAtlas& font) {
     };
     ar(ddX, ddY, ddX + ddW, ddY + ddH, 0.17f, 0.17f, 0.20f, 0.98f);
     ar(ddX, ddY, ddX + ddW, ddY + 1, 0.30f, 0.30f, 0.35f, 1.f);
-    if (scrollable) {
-        ar(ddX, ddY, ddX + ddW, ddY + arrowH, 0.14f, 0.14f, 0.17f, 1.f);
-        ar(ddX, ddY + ddH - arrowH, ddX + ddW, ddY + ddH, 0.14f, 0.14f, 0.17f, 1.f);
-    }
     if (menuHovered_ >= menuScroll_ && menuHovered_ < menuScroll_ + visibleCount && !menuItems_[menuHovered_].separator)
         ar(ddX + 2, ddY + arrowH + 2 + (menuHovered_ - menuScroll_) * itemH, ddX + ddW - 2, ddY + arrowH + 2 + (menuHovered_ - menuScroll_ + 1) * itemH, 0.25f, 0.30f, 0.45f, 1.f);
     flushSolid(v);
-    if (scrollable) {
-        font.drawText("^", ddX + ddW * 0.5f - 4.f, ddY - 1.f, menuScroll_ > 0 ? 0.7f : 0.35f, menuScroll_ > 0 ? 0.7f : 0.35f, menuScroll_ > 0 ? 0.7f : 0.35f, 1.f);
-        font.drawText("v", ddX + ddW * 0.5f - 4.f, ddY + ddH - arrowH - 1.f, menuScroll_ + visibleCount < (int)menuItems_.size() ? 0.7f : 0.35f, menuScroll_ + visibleCount < (int)menuItems_.size() ? 0.7f : 0.35f, menuScroll_ + visibleCount < (int)menuItems_.size() ? 0.7f : 0.35f, 1.f);
-    }
     glEnable(GL_SCISSOR_TEST);
     glScissor((int)ddX, wh - (int)(ddY + ddH + 4), (int)ddW, (int)(ddH + 4));
     for (int i = menuScroll_; i < menuScroll_ + visibleCount && i < (int)menuItems_.size(); ++i) {
@@ -144,13 +83,41 @@ void Titlebar::drawMenu(FontAtlas& font) {
             flushSolid(v);
             continue;
         }
-        bool heading = !item.action && item.shortcut.empty();
-        float ib = heading ? 0.55f : ((menuHovered_ == i) ? 1.f : 0.78f);
+        float ib = (menuHovered_ == i) ? 1.f : 0.78f;
         font.drawText(item.label, ddX + 12.f, iy, ib, ib, ib, 1.f);
         if (!item.shortcut.empty())
             font.drawText(item.shortcut, ddX + ddW - font.measureText(item.shortcut) - 12.f, iy, 0.5f, 0.5f, 0.55f, 1.f);
     }
     glDisable(GL_SCISSOR_TEST);
+    if (submenuOpen_ >= 0 && submenuOpen_ < (int)submenus_.size()) {
+        auto& sm = submenus_[submenuOpen_];
+        float sx = ddX + ddW + 2.f, sy = ddY + 2.f + submenuOpen_ * itemH;
+        float sw = 180.f;
+        for (auto& item : sm) {
+            float w = font.measureText(item.label);
+            if (!item.shortcut.empty()) w += font.measureText(item.shortcut) + 30.f;
+            if (w + 32.f > sw) sw = w + 32.f;
+        }
+        float maxH = wh * 0.8f, sh = 2.f + sm.size() * itemH;
+        if (sy + sh > wh - 8.f) sy = wh - sh - 8.f;
+        if (sh > maxH) sh = maxH;
+        v.clear();
+        ar(sx, sy, sx + sw, sy + sh, 0.17f, 0.17f, 0.20f, 0.98f);
+        if (submenuHovered_ >= 0 && submenuHovered_ < (int)sm.size() && !sm[submenuHovered_].separator)
+            ar(sx + 2, sy + 2 + submenuHovered_ * itemH, sx + sw - 2, sy + 2 + (submenuHovered_ + 1) * itemH, 0.25f, 0.30f, 0.45f, 1.f);
+        flushSolid(v);
+        glEnable(GL_SCISSOR_TEST);
+        glScissor((int)sx, wh - (int)(sy + sh), (int)sw, (int)sh);
+        for (int i = 0; i < (int)sm.size(); ++i) {
+            auto& item = sm[i];
+            float iy = sy + 6.f + i * itemH;
+            if (item.separator) { v.clear(); ar(sx + 8, sy + 13.f + i * itemH, sx + sw - 8, sy + 14.f + i * itemH, 0.3f, 0.3f, 0.33f, 1.f); flushSolid(v); continue; }
+            float b = (submenuHovered_ == i) ? 1.f : 0.78f;
+            font.drawText(item.label, sx + 12.f, iy, b, b, b, 1.f);
+            if (!item.shortcut.empty()) font.drawText(item.shortcut, sx + sw - font.measureText(item.shortcut) - 12.f, iy, 0.5f, 0.5f, 0.55f, 1.f);
+        }
+        glDisable(GL_SCISSOR_TEST);
+    }
 }
 
 void Titlebar::init(int windowWidth) {
@@ -228,12 +195,10 @@ bool Titlebar::handleMenuEvent(const SDL_Event& e) {
     int ww = 1280, wh = 720;
     if (window) SDL_GL_GetDrawableSize(window, &ww, &wh);
     float ddX = 0.f, ddY = height_;
-    float ddW = 320.f, itemH = 24.f;
-    int maxVisible = (int)((wh * 0.8f - 28.f) / itemH);
-    if (maxVisible < 1) maxVisible = 1;
-    int visibleCount = (int)menuItems_.size() < maxVisible ? (int)menuItems_.size() : maxVisible;
-    bool scrollable = visibleCount < (int)menuItems_.size();
-    float arrowH = scrollable ? 14.f : 0.f;
+    float ddW = 150.f, itemH = 24.f;
+    int visibleCount = (int)menuItems_.size();
+    bool scrollable = false;
+    float arrowH = 0.f;
     float ddH = 2.f + visibleCount * itemH + arrowH * 2.f;
     auto clampMenuScroll = [&] {
         int maxScroll = (int)menuItems_.size() - visibleCount;
@@ -245,7 +210,12 @@ bool Titlebar::handleMenuEvent(const SDL_Event& e) {
         menuHovered_ = -1;
         if (mx >= ddX && mx <= ddX + ddW && my >= ddY && my <= ddY + ddH) {
             int idx = menuScroll_ + (int)((my - ddY - arrowH - 2) / itemH);
-            if (idx >= 0 && idx < (int)menuItems_.size() && !menuItems_[idx].separator) menuHovered_ = idx;
+            if (idx >= 0 && idx < (int)menuItems_.size() && !menuItems_[idx].separator) { menuHovered_ = idx; submenuOpen_ = menuItems_[idx].submenu; submenuHovered_ = -1; }
+        } else if (submenuOpen_ >= 0 && submenuOpen_ < (int)submenus_.size()) {
+            float sx = ddX + ddW + 2.f, sy = ddY + 2.f + submenuOpen_ * itemH, sh = 2.f + submenus_[submenuOpen_].size() * itemH;
+            if (sy + sh > wh - 8.f) sy = wh - sh - 8.f;
+            if (mx >= sx && mx <= sx + 320.f && my >= sy && my <= sy + sh) submenuHovered_ = (int)((my - sy - 2.f) / itemH);
+            else submenuHovered_ = -1;
         }
         return true;
     }
@@ -261,9 +231,17 @@ bool Titlebar::handleMenuEvent(const SDL_Event& e) {
     }
     if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == 1) {
         float mx = (float)e.button.x, my = (float)e.button.y;
+        if (submenuOpen_ >= 0 && submenuOpen_ < (int)submenus_.size()) {
+            float sx = ddX + ddW + 2.f, sy = ddY + 2.f + submenuOpen_ * itemH, sh = 2.f + submenus_[submenuOpen_].size() * itemH;
+            if (sy + sh > wh - 8.f) sy = wh - sh - 8.f;
+            if (mx >= sx && mx <= sx + 320.f && my >= sy && my <= sy + sh) {
+                int idx = (int)((my - sy - 2.f) / itemH);
+                auto& sm = submenus_[submenuOpen_];
+                if (idx >= 0 && idx < (int)sm.size() && !sm[idx].separator && sm[idx].action) { sm[idx].action(); closeMenu(); submenuOpen_ = -1; return true; }
+                return true;
+            }
+        }
         if (mx >= ddX && mx <= ddX + ddW && my >= ddY && my <= ddY + ddH) {
-            if (scrollable && my < ddY + arrowH) { --menuScroll_; clampMenuScroll(); return true; }
-            if (scrollable && my > ddY + ddH - arrowH) { ++menuScroll_; clampMenuScroll(); return true; }
             int idx = menuScroll_ + (int)((my - ddY - arrowH - 2) / itemH);
             if (idx >= 0 && idx < (int)menuItems_.size() && !menuItems_[idx].separator && menuItems_[idx].action) {
                 menuItems_[idx].action();
@@ -271,7 +249,7 @@ bool Titlebar::handleMenuEvent(const SDL_Event& e) {
                 return true;
             }
         }
-        closeMenu();
+        closeMenu(); submenuOpen_ = -1;
         return true;
     }
     return false;

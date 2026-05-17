@@ -9,6 +9,7 @@ struct TitlebarMenuItem {
     std::string shortcut;
     std::function<void()> action;
     bool separator = false;
+    int submenu = -1;
 };
 
 struct TitlebarButton {
@@ -45,10 +46,13 @@ private:
     void updateButtonPositions(int windowWidth);
     bool menuOpen_ = false;
     int menuHovered_ = -1;
+    int submenuOpen_ = -1;
+    int submenuHovered_ = -1;
     int menuScroll_ = 0;
     std::vector<TitlebarMenuItem> menuItems_;
+    std::vector<std::vector<TitlebarMenuItem>> submenus_;
     void buildMenu();
-    void closeMenu() { menuOpen_ = false; menuHovered_ = -1; }
+    void closeMenu() { menuOpen_ = false; menuHovered_ = -1; submenuOpen_ = -1; submenuHovered_ = -1; }
     void drawMenu(class FontAtlas& font);
     bool handleMenuEvent(const SDL_Event& e);
 };

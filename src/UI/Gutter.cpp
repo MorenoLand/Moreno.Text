@@ -12,11 +12,11 @@ extern GLuint gl_vbo();
 int Gutter::digitCount(size_t n) { int d = 1; while (n >= 10) { n /= 10; ++d; } return d; }
 
 void Gutter::draw(FontAtlas& font, size_t totalLines, size_t currentLine,
-                  size_t firstVisibleLine, float originY, float lineStep, float windowH, float titlebarH) {
+                  size_t firstVisibleLine, float originX, float originY, float lineStep, float windowH, float titlebarH) {
     int digits = digitCount(totalLines);
     float charW = font.measureText("8");
     width_ = digits * charW + padding_ * 2 + 12.f;
-    float borderX = width_;
+    float borderX = originX + width_;
     // gutter background + 1px right border (solid color)
     std::vector<float> verts;
     auto addRect = [&](float x0, float y0, float x1, float y1, float r, float g, float b, float a) {
@@ -27,7 +27,7 @@ void Gutter::draw(FontAtlas& font, size_t totalLines, size_t currentLine,
         verts.insert(verts.end(), { x1,y1, 0,0, r,g,b,a });
         verts.insert(verts.end(), { x1,y0, 0,0, r,g,b,a });
     };
-    addRect(0, titlebarH, borderX, windowH, 0.11f, 0.11f, 0.13f, 1.f);
+    addRect(originX, titlebarH, borderX, windowH, 0.11f, 0.11f, 0.13f, 1.f);
     addRect(borderX - 1, titlebarH, borderX, windowH, 0.08f, 0.08f, 0.10f, 1.f);
     if (!verts.empty()) {
         GLRenderer::setDrawMode(2);
