@@ -2729,14 +2729,13 @@ void Application::render() {
         size_t cl = lineOfPos(cur);
         float cy = textOriginY + cl * lineStep - scrollY_ + fontAtlas().ascent() - fontAtlas().descent() + 4.f;
         float acW = 220.f, itemH = 22.f, acH = acItems_.size() * itemH + 4.f;
-        std::vector<float> av;
         auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
-            av.insert(av.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
+            addSolid(x0, y0, x1, y1, r, g, b, a);
         };
         ar(cx, cy, cx + acW, cy + acH, 0.17f, 0.19f, 0.23f, 0.98f);
         if (acSelected_ >= 0 && acSelected_ < (int)acItems_.size())
             ar(cx + 2, cy + 2 + acSelected_ * itemH, cx + acW - 2, cy + 2 + (acSelected_ + 1) * itemH, 0.24f, 0.27f, 0.32f, 1.f);
-        GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo()); glBufferData(GL_ARRAY_BUFFER, av.size()*sizeof(float), av.data(), GL_DYNAMIC_DRAW); glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(av.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0);
+        flushSolid();
         for (int i = 0; i < (int)acItems_.size(); ++i) {
             float b = (i == acSelected_) ? 1.f : 0.7f;
             fontAtlas().drawText(acItems_[i], cx + 8, cy + 4 + i * itemH, b, b, b, 1.f);
