@@ -1599,6 +1599,43 @@ void Application::handleEvents() {
         if (titlebar_->handleEvent(e, window_)) continue;
         { int tbww,tbwh; SDL_GL_GetDrawableSize(window_,&tbww,&tbwh); if (handleTabBarEvent(e,(float)tbww,titlebar_->height())) continue; }
         if (handleSidebarEvent(e, (float)wh, titlebar_->height() + tabBarH_, statusbar_->height())) continue;
+        // find bar click handling
+        if (find_.active && e.type == SDL_MOUSEBUTTONDOWN && e.button.button == 1) {
+            float sbH = statusbar_->height();
+            float rowH = 30.f, barH = find_.replaceActive ? rowH * 2.f + 2.f : rowH;
+            float barY = (float)wh - sbH - barH;
+            float mx = (float)e.button.x, my = (float)e.button.y;
+            if (my >= barY && my < barY + barH) {
+                float editorRight = (float)ww - (minimapVisible_ ? 100.f : 0.f);
+                float fieldW = editorRight - 220.f;
+                float btnX = fieldW + 16.f;
+                float fieldH = 22.f, fy = barY + (rowH - fieldH) / 2.f;
+                // toggle buttons
+                if (my >= fy && my < fy + fieldH) {
+                    if (mx >= btnX && mx < btnX + 28.f) { find_.regex = !find_.regex; findAllMatches(); continue; }
+                    btnX += 32.f;
+                    if (mx >= btnX && mx < btnX + 28.f) { find_.caseSensitive = !find_.caseSensitive; findAllMatches(); continue; }
+                    btnX += 32.f;
+                    if (mx >= btnX && mx < btnX + 28.f) { find_.wholeWord = !find_.wholeWord; findAllMatches(); continue; }
+                }
+                // close X
+                if (mx >= editorRight - 22.f && mx < editorRight && my >= barY && my < barY + rowH) { find_.active = false; continue; }
+                // replace row buttons
+                if (find_.replaceActive && my >= barY + rowH) {
+                    float rbx = fieldW + 16.f + 96.f;
+                    float rbw = fontAtlas().measureText("Replace");
+                    if (mx >= rbx && mx < rbx + rbw + 10.f) { doReplace(); continue; }
+                    rbx += rbw + 14.f;
+                    if (mx >= rbx) { doReplaceAll(); continue; }
+                }
+                // click in field area focuses
+                if (mx >= 8.f && mx < fieldW + 8.f) {
+                    findFocus_ = (my < barY + rowH) ? 0 : 1;
+                    if (!find_.replaceActive) findFocus_ = 0;
+                }
+                continue;
+            }
+        }
         if (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
             SDL_GL_GetDrawableSize(window_, &ww, &wh); GLRenderer::resize(ww, wh); titlebar_->layout(ww);
         }
@@ -2338,29 +2375,66 @@ void Application::render() {
     statusbar_->draw(fontAtlas(), fww, fwh, mmW, currentLine, currentCol, syntax_->languageName(), useTabs_, tabSize_, branch);
     // find bar
     if (find_.active) {
-        float barH = find_.replaceActive ? 64.f : 32.f, barY = fwh - sbH - barH;
+        float rowH = 30.f, barH = find_.replaceActive ? rowH * 2.f + 2.f : rowH;
+        float barY = fwh - sbH - barH;
+        float barW = editorRight;
         std::vector<float> fbv;
         auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
             fbv.insert(fbv.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
         };
-        ar(0, barY, editorRight, barY + barH, 0.18f, 0.18f, 0.21f, 1.f);
-        GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo()); glBufferData(GL_ARRAY_BUFFER, fbv.size()*sizeof(float), fbv.data(), GL_DYNAMIC_DRAW); glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(fbv.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0);
-        std::string fl = "Find: " + find_.query + (findFocus_ == 0 ? "|" : "");
-        if (find_.regex) fl += "  [REGEX]"; if (find_.caseSensitive) fl += "  [CASE]"; if (find_.wholeWord) fl += "  [WORD]";
-        if (!find_.matches.empty()) fl += "  (" + std::to_string(find_.currentMatch+1) + "/" + std::to_string(find_.matches.size()) + ")";
-        fontAtlas().drawText(fl, 12.f, barY + 6.f, 0.8f, 0.8f, 0.8f, 1.f);
-        if (find_.replaceActive) {
-            std::string rl = "Replace: " + find_.replace + (findFocus_ == 1 ? "|" : "");
-            fontAtlas().drawText(rl, 12.f, barY + 28.f, findFocus_ == 1 ? 0.9f : 0.6f, findFocus_ == 1 ? 0.9f : 0.6f, findFocus_ == 1 ? 0.9f : 0.6f, 1.f);
-            float bx = editorRight - 280.f;
-            fontAtlas().drawText("[Replace]", bx, barY + 28.f, 0.6f, 0.7f, 0.6f, 1.f);
-            fontAtlas().drawText("[Replace All]", bx + 80.f, barY + 28.f, 0.6f, 0.7f, 0.6f, 1.f);
+        // panel background
+        ar(0, barY, barW, barY + barH, 0.16f, 0.16f, 0.19f, 1.f);
+        ar(0, barY, barW, barY + 1, 0.30f, 0.30f, 0.35f, 1.f);
+        // find field background
+        float fieldX = 8.f, fieldW = barW - 220.f, fieldH = 22.f;
+        float fy = barY + (rowH - fieldH) / 2.f;
+        ar(fieldX, fy, fieldX + fieldW, fy + fieldH, 0.12f, 0.12f, 0.14f, 1.f);
+        // find text + cursor
+        std::string findText = find_.query + (findFocus_ == 0 ? "|" : "");
+        fontAtlas().drawText(findText, fieldX + 6.f, fy + 4.f, 0.85f, 0.85f, 0.88f, 1.f);
+        // match count
+        if (!find_.matches.empty()) {
+            std::string mc = std::to_string(find_.currentMatch + 1) + " of " + std::to_string(find_.matches.size());
+            float mcW = fontAtlas().measureText(mc);
+            fontAtlas().drawText(mc, fieldX + fieldW - mcW - 8.f, fy + 4.f, 0.5f, 0.5f, 0.55f, 1.f);
+        } else if (!find_.query.empty()) {
+            float mw = fontAtlas().measureText("No matches");
+            fontAtlas().drawText("No matches", fieldX + fieldW - mw - 8.f, fy + 4.f, 0.6f, 0.3f, 0.3f, 1.f);
         }
-        // toggles
-        float tx = editorRight - 240.f;
-        fontAtlas().drawText(find_.regex ? "[.*]" : ".*", tx, barY + 6.f, find_.regex ? 0.9f : 0.4f, find_.regex ? 0.8f : 0.4f, 0.3f, 1.f);
-        fontAtlas().drawText(find_.caseSensitive ? "[Aa]" : "Aa", tx + 40.f, barY + 6.f, find_.caseSensitive ? 0.9f : 0.4f, find_.caseSensitive ? 0.8f : 0.4f, 0.3f, 1.f);
-        fontAtlas().drawText(find_.wholeWord ? "[\\b]" : "\\b", tx + 80.f, barY + 6.f, find_.wholeWord ? 0.9f : 0.4f, find_.wholeWord ? 0.8f : 0.4f, 0.3f, 1.f);
+        // toggle buttons
+        float btnX = fieldX + fieldW + 8.f;
+        auto toggleBtn = [&](const char* label, bool active, float x) {
+            ar(x, fy, x + 28.f, fy + fieldH, active ? 0.25f : 0.14f, active ? 0.28f : 0.14f, active ? 0.35f : 0.16f, 1.f);
+            fontAtlas().drawText(label, x + 4.f, fy + 4.f, active ? 0.95f : 0.45f, active ? 0.85f : 0.45f, active ? 0.95f : 0.5f, 1.f);
+        };
+        toggleBtn("/Re", find_.regex, btnX); btnX += 32.f;
+        toggleBtn("Aa", find_.caseSensitive, btnX); btnX += 32.f;
+        toggleBtn("\\b", find_.wholeWord, btnX); btnX += 32.f;
+        // find buttons
+        fontAtlas().drawText("Find", btnX + 4.f, fy + 4.f, 0.7f, 0.75f, 0.7f, 1.f);
+        btnX += fontAtlas().measureText("Find") + 12.f;
+        fontAtlas().drawText("Prev", btnX + 4.f, fy + 4.f, 0.5f, 0.55f, 0.5f, 1.f);
+        btnX += fontAtlas().measureText("Prev") + 12.f;
+        fontAtlas().drawText("All", btnX + 4.f, fy + 4.f, 0.5f, 0.55f, 0.5f, 1.f);
+        // close X
+        fontAtlas().drawText("\xc3\x97", barW - 18.f, fy + 3.f, 0.6f, 0.6f, 0.6f, 1.f);
+        // replace row
+        if (find_.replaceActive) {
+            float ry = barY + rowH + 2.f;
+            float rfy = ry + (rowH - fieldH) / 2.f;
+            ar(fieldX, rfy, fieldX + fieldW, rfy + fieldH, 0.12f, 0.12f, 0.14f, 1.f);
+            std::string repText = find_.replace + (findFocus_ == 1 ? "|" : "");
+            fontAtlas().drawText(repText, fieldX + 6.f, rfy + 4.f, 0.85f, 0.85f, 0.88f, 1.f);
+            // replace buttons
+            float rbx = fieldX + fieldW + 8.f + 96.f; // skip toggle column
+            fontAtlas().drawText("Replace", rbx, rfy + 4.f, 0.7f, 0.75f, 0.7f, 1.f);
+            rbx += fontAtlas().measureText("Replace") + 14.f;
+            fontAtlas().drawText("Replace All", rbx, rfy + 4.f, 0.7f, 0.75f, 0.7f, 1.f);
+        }
+        GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
+        glBufferData(GL_ARRAY_BUFFER, fbv.size()*sizeof(float), fbv.data(), GL_DYNAMIC_DRAW);
+        glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(fbv.size()/8));
+        glBindVertexArray(0); GLRenderer::setDrawMode(0);
     }
     // goto overlay
     if (goto_.active) {
