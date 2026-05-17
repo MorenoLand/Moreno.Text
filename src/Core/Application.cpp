@@ -4,6 +4,7 @@
 #include "UI/Titlebar.h"
 #include "UI/MenuBar.h"
 #include "Settings/SettingsManager.h"
+#include "Theme/ThemeEngine.h"
 #include "UI/Gutter.h"
 #include "UI/Minimap.h"
 #include "UI/StatusBar.h"
@@ -81,6 +82,15 @@ bool Application::init(int argc, char** argv) {
         useTabs_ = !settings.get<bool>("translate_tabs_to_spaces", true);
         autoPair_ = settings.get<bool>("auto_match_enabled", true);
         minimapVisible_ = settings.get<bool>("minimap_visible", true);
+    }
+    // load color scheme
+    {
+        std::string defaultDir = paths_.dataDir + "/Packages/Default";
+        fs::create_directories(defaultDir);
+        std::string schemePath = defaultDir + "/Moreno Dark.moreno-color-scheme";
+        auto& theme = ThemeEngine::instance();
+        if (!fs::exists(schemePath)) theme.writeDefault(schemePath);
+        theme.load(schemePath);
     }
     selections_.emplace_back(0);
     TabBuffer initTab; initTab.fileName = "untitled"; initTab.selections.emplace_back(0);
