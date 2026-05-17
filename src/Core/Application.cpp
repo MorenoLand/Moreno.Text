@@ -21,6 +21,7 @@
 #include <regex>
 #include <chrono>
 #include <cctype>
+#include <thread>
 
 extern GLuint gl_shaderProgram();
 extern GLuint gl_vao();
@@ -290,27 +291,31 @@ void Application::updateGitBranch() {
     std::string dir;
     if (!sidebarRoot_.empty()) dir = sidebarRoot_;
     else if (!openFilePath_.empty()) dir = fs::path(openFilePath_).parent_path().string();
-    if (dir.empty()) { gitBranch_.clear(); return; }
+    if (dir.empty()) { std::lock_guard<std::mutex> lock(gitBranchMutex_); gitBranch_.clear(); return; }
+    if (gitBranchBusy_.exchange(true)) return;
+    std::thread([this, dir] {
 
 #ifdef _WIN32
-    std::string command = "git -C \"" + dir + "\" rev-parse --abbrev-ref HEAD 2>NUL";
-    FILE* pipe = _popen(command.c_str(), "r");
+        std::string command = "git -C \"" + dir + "\" rev-parse --abbrev-ref HEAD 2>NUL";
+        FILE* pipe = _popen(command.c_str(), "r");
 #else
-    std::string command = "git -C \"" + dir + "\" rev-parse --abbrev-ref HEAD 2>/dev/null";
-    FILE* pipe = popen(command.c_str(), "r");
+        std::string command = "git -C \"" + dir + "\" rev-parse --abbrev-ref HEAD 2>/dev/null";
+        FILE* pipe = popen(command.c_str(), "r");
 #endif
-    if (!pipe) { gitBranch_.clear(); return; }
+        if (!pipe) { std::lock_guard<std::mutex> lock(gitBranchMutex_); gitBranch_.clear(); gitBranchBusy_ = false; return; }
 
-    char buf[256] = {};
-    std::string branch;
-    while (fgets(buf, sizeof(buf), pipe)) branch += buf;
+        char buf[256] = {};
+        std::string branch;
+        while (fgets(buf, sizeof(buf), pipe)) branch += buf;
 #ifdef _WIN32
-    _pclose(pipe);
+        _pclose(pipe);
 #else
-    pclose(pipe);
+        pclose(pipe);
 #endif
-    while (!branch.empty() && (branch.back() == '\n' || branch.back() == '\r' || branch.back() == ' ' || branch.back() == '\t')) branch.pop_back();
-    gitBranch_ = (branch.empty() || branch == "HEAD") ? "" : branch;
+        while (!branch.empty() && (branch.back() == '\n' || branch.back() == '\r' || branch.back() == ' ' || branch.back() == '\t')) branch.pop_back();
+        { std::lock_guard<std::mutex> lock(gitBranchMutex_); gitBranch_ = (branch.empty() || branch == "HEAD") ? "" : branch; }
+        gitBranchBusy_ = false;
+    }).detach();
 }
 
 // ── file ops ──
@@ -335,12 +340,40 @@ void Application::saveFileAs() {
     if (GetSaveFileNameA(&ofn)) { openFilePath_ = buf; openFile_ = fs::path(buf).filename().string(); detectSyntax(); saveFile(); updateGitBranch(); }
 #endif
 }
+void Application::saveAll() {
+    saveCurrentTab();
+    for (auto& tab : tabs_) {
+        if (tab.filePath.empty() || !tab.dirty) continue;
+        std::ofstream f(tab.filePath, std::ios::binary);
+        if (f) { f << tab.text; tab.dirty = false; }
+    }
+    loadTab(activeTab_);
+}
+void Application::revertFile() {
+    if (openFilePath_.empty()) return;
+    std::ifstream f(openFilePath_, std::ios::binary);
+    if (!f) return;
+    std::ostringstream ss; ss << f.rdbuf();
+    textBuffer = ss.str(); dirty_ = false; selections_.clear(); selections_.emplace_back(std::min(selections_.empty() ? 0 : selections_[0].cursor, textBuffer.size()));
+}
+void Application::openFileDialog() {
+#ifdef _WIN32
+    char buf[MAX_PATH] = {}; OPENFILENAMEA ofn = {}; ofn.lStructSize = sizeof(ofn);
+    ofn.lpstrFilter = "All Files\0*.*\0"; ofn.lpstrFile = buf; ofn.nMaxFile = MAX_PATH; ofn.Flags = OFN_FILEMUSTEXIST;
+    if (GetOpenFileNameA(&ofn)) openFile(buf);
+#endif
+}
 void Application::newBuffer() {
     saveCurrentTab();
     TabBuffer tab; tab.fileName = "untitled"; tab.selections.emplace_back(0);
     tabs_.push_back(std::move(tab)); activeTab_ = tabs_.size()-1;
     textBuffer.clear(); openFilePath_.clear(); openFile_ = "untitled"; dirty_ = false;
     selections_.clear(); selections_.emplace_back(0); scrollY_ = 0; undoStack_.clear(); redoStack_.clear(); foldedLines_.clear(); detectSyntax();
+}
+
+void Application::toggleFullscreen() {
+    fullscreen_ = !fullscreen_;
+    SDL_SetWindowFullscreen(window_, fullscreen_ ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
 }
 
 void Application::openFolderDialog() {
@@ -359,6 +392,25 @@ void Application::loadFolder(const std::string& path) {
     buildSidebarNode(sidebarTree_);
     sidebarVisible_ = true;
     updateGitBranch();
+#ifdef _WIN32
+    sidebarWatchRunning_ = false;
+    sidebarWatchRunning_ = true;
+    std::thread([this, path] {
+        int wideLen = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, nullptr, 0);
+        if (wideLen <= 1) return;
+        std::wstring widePath((size_t)wideLen - 1, L'\0');
+        MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, widePath.data(), wideLen);
+        HANDLE dir = CreateFileW(widePath.c_str(), FILE_LIST_DIRECTORY, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+        if (dir == INVALID_HANDLE_VALUE) return;
+        char buffer[4096];
+        DWORD bytes = 0;
+        while (sidebarWatchRunning_) {
+            if (ReadDirectoryChangesW(dir, buffer, sizeof(buffer), TRUE, FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME | FILE_NOTIFY_CHANGE_LAST_WRITE, &bytes, nullptr, nullptr))
+                sidebarRefreshPending_ = true;
+        }
+        CloseHandle(dir);
+    }).detach();
+#endif
 }
 
 void Application::buildSidebarNode(SidebarNode& node) {
@@ -395,33 +447,59 @@ void Application::drawSidebar(FontAtlas& font, float windowH, float titlebarH, f
     GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
     glBufferData(GL_ARRAY_BUFFER, v.size()*sizeof(float), v.data(), GL_DYNAMIC_DRAW);
     glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(v.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0);
-    float rowH = 22.f, y = titlebarH + 6.f;
+    float rowH = 22.f, y = titlebarH + 6.f - sidebarScrollY_;
+    sidebarContentH_ = 0.f;
+    std::function<void(SidebarNode&)> countNode = [&](SidebarNode& node) {
+        if (&node != &sidebarTree_) sidebarContentH_ += rowH;
+        if (node.folder && node.expanded) for (auto& child : node.children) countNode(child);
+    };
+    countNode(sidebarTree_);
+    float viewH = windowH - statusbarH - titlebarH - 6.f;
+    float maxScroll = std::max(0.f, sidebarContentH_ - viewH);
+    if (sidebarScrollY_ > maxScroll) sidebarScrollY_ = maxScroll;
     std::function<void(SidebarNode&)> drawNode = [&](SidebarNode& node) {
         if (&node != &sidebarTree_) {
-            if (y > windowH - statusbarH - rowH) return;
+            float rowY = y; y += rowH;
+            if (rowY + rowH < titlebarH || rowY > windowH - statusbarH) return;
             float x = 8.f + node.depth * 14.f;
             bool active = !node.folder && !openFilePath_.empty() && fs::absolute(node.path).string() == fs::absolute(openFilePath_).string();
             std::vector<float> rv;
-            if (active) addSolidRect(rv, 2.f, y - 3.f, sidebarWidth_ - 4.f, y + rowH - 3.f, 0.25f, 0.30f, 0.45f, 1.f);
+            if (active) addSolidRect(rv, 2.f, rowY - 3.f, sidebarWidth_ - 4.f, rowY + rowH - 3.f, 0.25f, 0.30f, 0.45f, 1.f);
             float ir = node.folder ? 0.86f : 0.45f, ig = node.folder ? 0.66f : 0.55f, ib = node.folder ? 0.22f : 0.65f;
             std::string ext = node.extension;
             if (ext == ".h") { ir = 0.2f; ig = 0.75f; ib = 0.75f; } else if (ext == ".py") { ir = 0.9f; ig = 0.78f; ib = 0.25f; }
             else if (ext == ".js") { ir = 0.9f; ig = 0.55f; ib = 0.2f; } else if (ext == ".json") { ir = 0.45f; ig = 0.75f; ib = 0.35f; }
             else if (ext == ".md") { ir = ig = ib = 0.85f; } else if (ext == ".txt") { ir = ig = ib = 0.55f; }
-            addSolidRect(rv, x + 12.f, y + 3.f, x + 20.f, y + 13.f, ir, ig, ib, 1.f);
+            addSolidRect(rv, x + 12.f, rowY + 3.f, x + 20.f, rowY + 13.f, ir, ig, ib, 1.f);
             if (!rv.empty()) { GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo()); glBufferData(GL_ARRAY_BUFFER, rv.size()*sizeof(float), rv.data(), GL_DYNAMIC_DRAW); glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(rv.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0); }
-            if (node.folder) font.drawText(node.expanded ? "v" : ">", x, y, 0.55f, 0.55f, 0.58f, 1.f);
+            if (node.folder) font.drawText(node.expanded ? "v" : ">", x, rowY, 0.55f, 0.55f, 0.58f, 1.f);
             float b = active ? 0.95f : 0.68f;
-            font.drawText(node.name, x + 26.f, y, b, b, b + 0.03f, 1.f);
-            y += rowH;
+            font.drawText(node.name, x + 26.f, rowY, b, b, b + 0.03f, 1.f);
         }
         if (node.folder && node.expanded) for (auto& child : node.children) drawNode(child);
     };
     drawNode(sidebarTree_);
+    if (sidebarContentH_ > viewH) {
+        float thumbH = std::max(20.f, viewH * (viewH / sidebarContentH_));
+        float thumbY = titlebarH + (sidebarScrollY_ / maxScroll) * (viewH - thumbH);
+        std::vector<float> sv;
+        addSolidRect(sv, sidebarWidth_ - 5.f, thumbY, sidebarWidth_ - 1.f, thumbY + thumbH, 0.29f, 0.29f, 0.29f, 1.f);
+        GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
+        glBufferData(GL_ARRAY_BUFFER, sv.size()*sizeof(float), sv.data(), GL_DYNAMIC_DRAW);
+        glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(sv.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0);
+    }
 }
 
 bool Application::handleSidebarEvent(const SDL_Event& e, float windowH, float titlebarH, float statusbarH) {
     if (!sidebarVisible_) return false;
+    if (e.type == SDL_MOUSEWHEEL && mouseX_ >= 0 && mouseX_ <= sidebarWidth_ && mouseY_ >= titlebarH && mouseY_ <= windowH - statusbarH) {
+        float viewH = windowH - statusbarH - titlebarH - 6.f;
+        float maxScroll = std::max(0.f, sidebarContentH_ - viewH);
+        sidebarScrollY_ -= e.wheel.y * 44.f;
+        if (sidebarScrollY_ < 0.f) sidebarScrollY_ = 0.f;
+        if (sidebarScrollY_ > maxScroll) sidebarScrollY_ = maxScroll;
+        return true;
+    }
     if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == 1 && e.button.x >= sidebarWidth_ - 4 && e.button.x <= sidebarWidth_ + 4 && e.button.y >= titlebarH && e.button.y <= windowH - statusbarH) {
         sidebarResizing_ = true; return true;
     }
@@ -430,7 +508,7 @@ bool Application::handleSidebarEvent(const SDL_Event& e, float windowH, float ti
         sidebarWidth_ = std::clamp((float)e.motion.x, 140.f, 420.f); return true;
     }
     if (e.type != SDL_MOUSEBUTTONDOWN || e.button.button != 1 || e.button.x > sidebarWidth_ || e.button.y < titlebarH || e.button.y > windowH - statusbarH) return false;
-    float rowH = 22.f, y = titlebarH + 6.f, mx = (float)e.button.x, my = (float)e.button.y;
+    float rowH = 22.f, y = titlebarH + 6.f - sidebarScrollY_, mx = (float)e.button.x, my = (float)e.button.y;
     std::function<bool(SidebarNode&)> hitNode = [&](SidebarNode& node) -> bool {
         if (&node != &sidebarTree_) {
             float rowY = y; y += rowH;
@@ -577,12 +655,31 @@ void Application::switchToTab(size_t index) {
     saveCurrentTab(); loadTab(index);
 }
 
-void Application::closeTab(size_t index) {
+void Application::closeTabNow(size_t index) {
     if (index >= tabs_.size()) return;
+    if (!tabs_[index].filePath.empty()) {
+        closedTabStack_.push_back(tabs_[index].filePath);
+        if (closedTabStack_.size() > 10) closedTabStack_.erase(closedTabStack_.begin());
+    }
     tabs_.erase(tabs_.begin() + index);
     if (tabs_.empty()) { newBuffer(); return; }
     if (activeTab_ >= tabs_.size()) activeTab_ = tabs_.size()-1;
     loadTab(activeTab_);
+}
+
+void Application::closeTab(size_t index) {
+    saveCurrentTab();
+    if (index >= tabs_.size()) return;
+    if (tabs_[index].dirty) { closeConfirmOpen_ = true; closeConfirmIndex_ = index; return; }
+    closeTabNow(index);
+}
+
+void Application::reopenClosedTab() {
+    while (!closedTabStack_.empty()) {
+        std::string path = closedTabStack_.back();
+        closedTabStack_.pop_back();
+        if (fs::exists(path)) { openFile(path); return; }
+    }
 }
 
 void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
@@ -634,13 +731,13 @@ void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
     for (auto& label : labels) {
         float lx = label.x;
         float textBright = (label.index == activeTab_) ? 0.85f : 0.55f;
-        float textY = barY + (tabBarH_ - font.lineHeight()) / 2.f + font.ascent();
+        float textY = barY + 8.f;
         font.drawText(label.text, lx + 12.f, textY, textBright, textBright, textBright+0.05f, 1.f);
         float tw = std::clamp(font.measureText(label.text) + 32.f, 48.f, 180.f);
         font.drawText("\xc3\x97", lx + tw - 17.f, textY, 0.55f, 0.55f, 0.60f, 1.f);
     }
     float activeBright = maxTabScroll > 0.f ? 0.8f : 0.35f;
-    float controlY = barY + (tabBarH_ - font.lineHeight()) / 2.f + font.ascent();
+    float controlY = barY + 8.f;
     font.drawText("<", visibleW + 7.f, controlY, tabScrollX_ > 0.f ? activeBright : 0.35f, tabScrollX_ > 0.f ? activeBright : 0.35f, tabScrollX_ > 0.f ? activeBright : 0.35f, 1.f);
     font.drawText(">", visibleW + 27.f, controlY, tabScrollX_ < maxTabScroll ? activeBright : 0.35f, tabScrollX_ < maxTabScroll ? activeBright : 0.35f, tabScrollX_ < maxTabScroll ? activeBright : 0.35f, 1.f);
     font.drawText("v", visibleW + 47.f, controlY, 0.75f, 0.75f, 0.78f, 1.f);
@@ -707,8 +804,8 @@ bool Application::handleTabBarEvent(const SDL_Event& e, float windowW, float tit
             if (mx >= tabContextX_ && mx <= tabContextX_ + popW && my >= tabContextY_ && my <= tabContextY_ + popH) {
                 int idx = (int)((my - tabContextY_ - 2.f) / itemH);
                 if (idx == 0) closeTab(tabContextIndex_);
-                else if (idx == 1) { for (size_t i = tabs_.size(); i-- > 0;) if (i != tabContextIndex_) closeTab(i); }
-                else if (idx == 2) { while (!tabs_.empty()) closeTab(0); }
+                else if (idx == 1) { for (size_t i = tabs_.size(); i-- > 0;) if (i != tabContextIndex_) { if (tabs_[i].dirty) closeTab(i); else closeTabNow(i); if (closeConfirmOpen_) break; } }
+                else if (idx == 2) { while (!tabs_.empty() && !closeConfirmOpen_) { if (tabs_[0].dirty) closeTab(0); else closeTabNow(0); } }
                 tabContextOpen_ = false; return true;
             }
             tabContextOpen_ = false;
@@ -765,6 +862,29 @@ void Application::handleEvents() {
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
         if (e.type == SDL_QUIT) { running_ = false; return; }
+        if (closeConfirmOpen_) {
+            int ww, wh; SDL_GL_GetDrawableSize(window_, &ww, &wh);
+            float mw = 420.f, mh = 118.f, mx0 = ((float)ww - mw) / 2.f, my0 = ((float)wh - mh) / 2.f;
+            float by = my0 + 76.f, bw = 96.f, bh = 26.f;
+            if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_ESCAPE) { closeConfirmOpen_ = false; continue; }
+            if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == 1) {
+                float mx = (float)e.button.x, my = (float)e.button.y;
+                auto inButton = [&](float x) { return mx >= x && mx <= x + bw && my >= by && my <= by + bh; };
+                if (inButton(mx0 + 72.f)) {
+                    size_t idx = closeConfirmIndex_;
+                    closeConfirmOpen_ = false;
+                    switchToTab(idx);
+                    saveFile();
+                    if (!dirty_) closeTabNow(activeTab_);
+                } else if (inButton(mx0 + 182.f)) {
+                    size_t idx = closeConfirmIndex_;
+                    closeConfirmOpen_ = false;
+                    closeTabNow(idx);
+                } else if (inButton(mx0 + 292.f) || (mx < mx0 || mx > mx0 + mw || my < my0 || my > my0 + mh)) closeConfirmOpen_ = false;
+                continue;
+            }
+            continue;
+        }
         // find mode input
         if (find_.active && e.type == SDL_KEYDOWN) {
             auto mod = e.key.keysym.mod; auto sym = e.key.keysym.sym;
@@ -826,7 +946,7 @@ void Application::handleEvents() {
             float viewH = (float)wh - tbH - sbH;
             float contentH = totalLines() * lineStep;
             float maxScroll = contentH > viewH ? contentH - viewH : 0.f;
-            float mmX = (float)ww - minimap_->width();
+            float mmX = (float)ww - (minimapVisible_ ? minimap_->width() : 0.f);
             float sbX = mmX - 10.f;
             scrollbarHovered_ = e.motion.x >= (int)sbX && e.motion.x < (int)mmX && e.motion.y >= (int)tbH && e.motion.y < wh - (int)sbH;
             auto clampScroll = [&] { if (scrollY_ < 0.f) scrollY_ = 0.f; if (scrollY_ > maxScroll) scrollY_ = maxScroll; };
@@ -899,7 +1019,7 @@ void Application::handleEvents() {
             float textX = gutterW + 8.0f;
             float sbH = statusbar_->height();
             float fww = (float)ww, fwh = (float)wh;
-            float mmX = fww - minimap_->width();
+            float mmX = fww - (minimapVisible_ ? minimap_->width() : 0.f);
             float sbX = mmX - 10.f;
             float viewH = fwh - tbH - sbH;
             float contentH = totalLines() * lineStep;
@@ -953,7 +1073,7 @@ void Application::handleEvents() {
             }
             // status bar click
             if (my >= fwh - sbH && my < fwh) {
-                float editorRight = fww - minimap_->width();
+                float editorRight = fww - (minimapVisible_ ? minimap_->width() : 0.f);
                 std::string indentLabel = useTabs_ ? ("Tab Size: " + std::to_string(tabSize_)) : ("Spaces: " + std::to_string(tabSize_));
                 float indentW = fontAtlas().measureText(indentLabel);
                 std::string synLabel = syntax_->languageName();
@@ -1028,14 +1148,9 @@ void Application::handleEvents() {
             else if (ctrl && sym == SDLK_f) { find_.active = true; find_.replaceActive = false; find_.query.clear(); find_.matches.clear(); }
             else if (ctrl && sym == SDLK_h) { find_.active = true; find_.replaceActive = true; find_.query.clear(); find_.matches.clear(); }
             else if (ctrl && sym == SDLK_s) { if (shift) saveFileAs(); else saveFile(); }
+            else if (ctrl && shift && sym == SDLK_t) reopenClosedTab();
             else if (ctrl && sym == SDLK_p) { goto_.active = true; goto_.query.clear(); goto_.selected = 0; goto_.items.clear(); }
-            else if (ctrl && sym == SDLK_o) {
-#ifdef _WIN32
-                char buf[MAX_PATH] = {}; OPENFILENAMEA ofn = {}; ofn.lStructSize = sizeof(ofn);
-                ofn.lpstrFilter = "All Files\0*.*\0"; ofn.lpstrFile = buf; ofn.nMaxFile = MAX_PATH; ofn.Flags = OFN_FILEMUSTEXIST;
-                if (GetOpenFileNameA(&ofn)) openFile(buf);
-#endif
-            }
+            else if (ctrl && sym == SDLK_o) openFileDialog();
             else if (ctrl && sym == SDLK_n) newBuffer();
             else if (ctrl && sym == SDLK_w) closeTab(activeTab_);
             else if (ctrl && sym == SDLK_d) {
@@ -1164,7 +1279,12 @@ void Application::handleEvents() {
     }
 }
 
-void Application::update() {}
+void Application::update() {
+    if (sidebarRefreshPending_.exchange(false) && !sidebarRoot_.empty()) {
+        sidebarTree_.children.clear();
+        buildSidebarNode(sidebarTree_);
+    }
+}
 void Application::updateTitle() {
     std::string t = openFile_; if (dirty_) t += "\xe2\x80\xa2"; t += " - Moreno Text";
     titlebar_->setTitle(t); SDL_SetWindowTitle(window_, t.c_str());
@@ -1175,7 +1295,7 @@ void Application::render() {
     updateTitle();
     int ww, wh; SDL_GL_GetDrawableSize(window_, &ww, &wh);
     float fww = (float)ww, fwh = (float)wh;
-    float mmW = minimap_->width();
+    float mmW = minimapVisible_ ? minimap_->width() : 0.f;
     float scrollbarW = 10.f;
     float tbH = titlebar_->height() + tabBarH_;
     float sbH = statusbar_->height();
@@ -1203,7 +1323,7 @@ void Application::render() {
     float editorRight = fww - mmW - scrollbarW;
 
     glEnable(GL_SCISSOR_TEST);
-    glScissor((int)gutterRight, (int)sbH, ww - (int)gutterRight - (int)minimap_->width(), wh - (int)(tbH + sbH));
+    glScissor((int)gutterRight, (int)sbH, ww - (int)gutterRight - (int)mmW, wh - (int)(tbH + sbH));
 
     {
         float cy = textOriginY + currentLine * lineStep - scrollY_;
@@ -1429,9 +1549,11 @@ void Application::render() {
         if (!sv.empty()) { GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo()); glBufferData(GL_ARRAY_BUFFER, sv.size()*sizeof(float), sv.data(), GL_DYNAMIC_DRAW); glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(sv.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0); }
     }
     // minimap
-    minimap_->draw(fontAtlas(), *syntax_, textBuffer, fww - mmW, textOriginY, fwh, tbH, gutterW, lineStep, scrollY_, mouseX_ >= (int)(fww - mmW) && mouseY_ >= (int)tbH && mouseY_ < (int)(fwh - sbH));
+    if (minimapVisible_) minimap_->draw(fontAtlas(), *syntax_, textBuffer, fww - mmW, textOriginY, fwh, tbH, gutterW, lineStep, scrollY_, mouseX_ >= (int)(fww - mmW) && mouseY_ >= (int)tbH && mouseY_ < (int)(fwh - sbH));
     // status bar
-    statusbar_->draw(fontAtlas(), fww, fwh, mmW, currentLine, currentCol, syntax_->languageName(), useTabs_, tabSize_, gitBranch_);
+    std::string branch;
+    { std::lock_guard<std::mutex> lock(gitBranchMutex_); branch = gitBranch_; }
+    statusbar_->draw(fontAtlas(), fww, fwh, mmW, currentLine, currentCol, syntax_->languageName(), useTabs_, tabSize_, branch);
     // find bar
     if (find_.active) {
         float barH = find_.replaceActive ? 64.f : 32.f, barY = fwh - sbH - barH;
@@ -1524,11 +1646,34 @@ void Application::render() {
     }
 
     titlebar_->draw(fontAtlas(), 0, 0, 0, 0);
+    if (closeConfirmOpen_) {
+        float mw = 420.f, mh = 118.f, mx = (fww - mw) / 2.f, my = (fwh - mh) / 2.f;
+        std::vector<float> mv;
+        auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
+            mv.insert(mv.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
+        };
+        ar(0, 0, fww, fwh, 0.f, 0.f, 0.f, 0.42f);
+        ar(mx, my, mx + mw, my + mh, 0.17f, 0.17f, 0.20f, 0.98f);
+        ar(mx, my, mx + mw, my + 1.f, 0.35f, 0.35f, 0.40f, 1.f);
+        float by = my + 76.f, bw = 96.f, bh = 26.f;
+        ar(mx + 72.f, by, mx + 72.f + bw, by + bh, 0.24f, 0.28f, 0.34f, 1.f);
+        ar(mx + 182.f, by, mx + 182.f + bw, by + bh, 0.24f, 0.28f, 0.34f, 1.f);
+        ar(mx + 292.f, by, mx + 292.f + bw, by + bh, 0.24f, 0.28f, 0.34f, 1.f);
+        GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
+        glBufferData(GL_ARRAY_BUFFER, mv.size()*sizeof(float), mv.data(), GL_DYNAMIC_DRAW);
+        glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(mv.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0);
+        std::string name = closeConfirmIndex_ < tabs_.size() ? tabs_[closeConfirmIndex_].fileName : openFile_;
+        fontAtlas().drawText("Save changes to " + name + " before closing?", mx + 22.f, my + 28.f, 0.86f, 0.86f, 0.88f, 1.f);
+        fontAtlas().drawText("Save", mx + 103.f, by + 6.f, 0.82f, 0.82f, 0.86f, 1.f);
+        fontAtlas().drawText("Don't Save", mx + 198.f, by + 6.f, 0.82f, 0.82f, 0.86f, 1.f);
+        fontAtlas().drawText("Cancel", mx + 315.f, by + 6.f, 0.82f, 0.82f, 0.86f, 1.f);
+    }
     GLRenderer::endFrame();
     SDL_GL_SwapWindow(window_);
 }
 
 void Application::shutdown() {
+    sidebarWatchRunning_ = false;
     delete syntax_; delete statusbar_; delete minimap_; delete gutter_; delete titlebar_;
     fontAtlas().destroy(); GLRenderer::destroy();
     SDL_StopTextInput(); SDL_GL_DeleteContext(glContext_); SDL_DestroyWindow(window_); SDL_Quit();

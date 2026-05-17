@@ -4,6 +4,8 @@
 #include <vector>
 #include <chrono>
 #include <filesystem>
+#include <atomic>
+#include <mutex>
 
 class Titlebar;
 class Gutter;
@@ -88,8 +90,25 @@ public:
     void openFile(const std::string& path);
     void switchToTab(size_t index);
     void closeTab(size_t index);
+    void closeCurrentTab() { closeTab(activeTab_); }
+    void reopenClosedTab();
+    void openFileDialog();
     void openFolderDialog();
     void toggleSidebar() { sidebarVisible_ = !sidebarVisible_; }
+    void saveAll();
+    void revertFile();
+    void commandUndo() { doUndo(); }
+    void commandRedo() { doRedo(); }
+    void commandCut() { cutSelectionOrLine(); }
+    void commandCopy() { copySelectionOrLine(); }
+    void commandPaste() { pasteClipboard(false); }
+    void commandPasteAndIndent() { pasteClipboard(true); }
+    void commandSelectAll() { if (!selections_.empty()) { selections_[0].anchor = 0; selections_[0].cursor = textBuffer.size(); } }
+    void commandFind() { find_.active = true; find_.replaceActive = false; find_.query.clear(); find_.matches.clear(); }
+    void commandReplace() { find_.active = true; find_.replaceActive = true; find_.query.clear(); find_.matches.clear(); }
+    void commandGotoAnything() { goto_.active = true; goto_.query.clear(); goto_.selected = 0; goto_.items.clear(); }
+    void toggleFullscreen();
+    void toggleMinimap() { minimapVisible_ = !minimapVisible_; }
 private:
     Application() = default;
     bool init(int argc, char** argv);
@@ -130,6 +149,7 @@ private:
     size_t activeTab_ = 0;
     void saveCurrentTab();
     void loadTab(size_t index);
+    void closeTabNow(size_t index);
     void drawTabBar(class FontAtlas& font, float windowW, float titlebarH);
     bool handleTabBarEvent(const SDL_Event& e, float windowW, float titlebarH);
     float tabBarH_ = 35.f;
@@ -145,6 +165,8 @@ private:
     float scrollY_ = 0.f;
     bool selecting_ = false;
     bool minimapDragging_ = false;
+    bool minimapVisible_ = true;
+    bool fullscreen_ = false;
     bool scrollbarHovered_ = false;
     bool scrollbarDragging_ = false;
     float scrollbarDragOffset_ = 0.f;
@@ -159,8 +181,12 @@ private:
     bool sidebarVisible_ = false;
     bool sidebarResizing_ = false;
     float sidebarWidth_ = 200.f;
+    float sidebarScrollY_ = 0.f;
+    float sidebarContentH_ = 0.f;
     std::string sidebarRoot_;
     SidebarNode sidebarTree_;
+    std::atomic<bool> sidebarWatchRunning_{false};
+    std::atomic<bool> sidebarRefreshPending_{false};
     std::vector<UndoStep> undoStack_, redoStack_;
     std::chrono::milliseconds undoWindow_{500};
     FindState find_;
@@ -176,6 +202,11 @@ private:
     struct UiColor { float r, g, b, a; };
     UiColor accentColor_{0.306f, 0.788f, 0.690f, 1.f};
     std::string gitBranch_;
+    std::mutex gitBranchMutex_;
+    std::atomic<bool> gitBranchBusy_{false};
+    std::vector<std::string> closedTabStack_;
+    bool closeConfirmOpen_ = false;
+    size_t closeConfirmIndex_ = 0;
     std::string menuStyle_ = "icon";
     void convertIndentation(bool toSpaces);
     void guessIndent();
