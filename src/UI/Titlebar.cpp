@@ -46,7 +46,27 @@ static void flushSolid(std::vector<float>& v) {
     v.clear();
 }
 
+void Titlebar::getMenuBounds(float& x, float& y, float& w, float& h) const {
+    x = 0.f;
+    y = height_;
+    float itemH = 24.f;
+    w = 150.f;
+    h = 2.f + static_cast<float>(menuItems_.size()) * itemH;
+    if (submenuOpen_ >= 0 && submenuOpen_ < static_cast<int>(submenus_.size())) {
+        w += 322.f;
+        float sy = 2.f + static_cast<float>(submenuOpen_) * itemH;
+        float sh = sy + 2.f + static_cast<float>(submenus_[submenuOpen_].size()) * itemH;
+        if (sh > h) h = sh;
+    }
+}
+
 void Titlebar::drawMenu(FontAtlas& font) {
+    if (!menuOpen_) return;
+    if (menuDeferred_) { menuDeferred_ = false; return; }
+    drawMenuPopup(font, 0.f, 0.f);
+}
+
+void Titlebar::drawMenuPopup(FontAtlas& font, float ox, float oy) {
     if (!menuOpen_) return;
     SDL_Window* window = SDL_GL_GetCurrentWindow();
     int ww = 1280, wh = 720;
@@ -57,7 +77,7 @@ void Titlebar::drawMenu(FontAtlas& font) {
         if (!item.shortcut.empty()) w += font.measureText(item.shortcut) + 24.f;
         if (w + 32.f > maxW) maxW = w + 32.f;
     }
-    float ddX = 0.f, ddY = height_;
+    float ddX = -ox, ddY = height_ - oy;
     float itemH = 24.f;
     int visibleCount = (int)menuItems_.size();
     bool scrollable = false;

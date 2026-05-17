@@ -31,6 +31,9 @@ public:
     void setTitle(const std::string& t) { title_ = t; }
     SDL_HitTestResult hitTest(int mx, int my, SDL_Window* window);
     bool isMenuOpen() const { return menuOpen_; }
+    void deferMenuDraw() { menuDeferred_ = true; }
+    void getMenuBounds(float& x, float& y, float& w, float& h) const;
+    void drawMenuPopup(FontAtlas& font, float ox, float oy);
 private:
     float height_ = 30.f;
     float buttonSize_ = 46.f;
@@ -49,6 +52,7 @@ private:
     int submenuOpen_ = -1;
     int submenuHovered_ = -1;
     int menuScroll_ = 0;
+    bool menuDeferred_ = false;
     std::vector<TitlebarMenuItem> menuItems_;
     std::vector<std::vector<TitlebarMenuItem>> submenus_;
     void buildMenu();

@@ -651,11 +651,10 @@ void Application::renderPopupToWindow(int x, int y, int w, int h) {
     SDL_SetWindowPosition(popupWin_, x, y);
     SDL_SetWindowSize(popupWin_, w, h);
     SDL_ShowWindow(popupWin_);
-    SDL_GL_MakeCurrent(popupWin_, glContext_);
+    if (SDL_GL_MakeCurrent(popupWin_, glContext_) != 0) return;
     int pw, ph; SDL_GL_GetDrawableSize(popupWin_, &pw, &ph);
-    glViewport(0, 0, pw, ph);
-    glClearColor(0, 0, 0, 0);
-    glClear(GL_COLOR_BUFFER_BIT);
+    GLRenderer::resize(pw, ph);
+    GLRenderer::beginFrame();
 }
 
 void Application::convertIndentation(bool toSpaces) {
@@ -840,7 +839,7 @@ void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
     font.drawText("<", visibleW + 7.f, controlY, tabScrollX_ > 0.f ? activeBright : 0.35f, tabScrollX_ > 0.f ? activeBright : 0.35f, tabScrollX_ > 0.f ? activeBright : 0.35f, 1.f);
     font.drawText(">", visibleW + 27.f, controlY, tabScrollX_ < maxTabScroll ? activeBright : 0.35f, tabScrollX_ < maxTabScroll ? activeBright : 0.35f, tabScrollX_ < maxTabScroll ? activeBright : 0.35f, 1.f);
     font.drawText("v", visibleW + 47.f, controlY, 0.75f, 0.75f, 0.78f, 1.f);
-    if (tabDropdownOpen_) {
+    if (tabDropdownOpen_ && !deferPopupDraw_) {
         float popW = 260.f, itemH = 24.f, popH = tabs_.size() * itemH + 4.f, popX = tabChevronX_, popY = barY + tabBarH_;;
         std::vector<float> pv;
         auto pr = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
@@ -859,7 +858,7 @@ void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
             font.drawText(label, popX + 10.f, popY + 6.f + i * itemH, b, b, b + 0.03f, 1.f);
         }
     }
-    if (tabContextOpen_) {
+    if (tabContextOpen_ && !deferPopupDraw_) {
         const char* items[] = {"Close", "Close Others", "Close All", "Reopen Closed Tab"};
         float itemH = 24.f, popW = 170.f, popH = 4.f + 4 * itemH;
         std::vector<float> cv;
@@ -1059,6 +1058,16 @@ void Application::handleEvents() {
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
         if (e.type == SDL_QUIT) { running_ = false; return; }
+        if (popupWin_) {
+            Uint32 popupId = SDL_GetWindowID(popupWin_);
+            if (e.type == SDL_MOUSEMOTION && e.motion.windowID == popupId) {
+                e.motion.x += static_cast<Sint32>(popupMainX_);
+                e.motion.y += static_cast<Sint32>(popupMainY_);
+            } else if ((e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_MOUSEBUTTONUP) && e.button.windowID == popupId) {
+                e.button.x += static_cast<Sint32>(popupMainX_);
+                e.button.y += static_cast<Sint32>(popupMainY_);
+            }
+        }
         if (closeConfirmOpen_) {
             int ww, wh; SDL_GL_GetDrawableSize(window_, &ww, &wh);
             float mw = 420.f, mh = 118.f, mx0 = ((float)ww - mw) / 2.f, my0 = ((float)wh - mh) / 2.f;
@@ -1567,6 +1576,7 @@ void Application::render() {
     size_t firstVisibleLine = (size_t)(scrollY_ / lineStep);
     float firstVisibleY = textOriginY + firstVisibleLine * lineStep - scrollY_;
     float sidebarOffset = sidebarVisible_ ? sidebarWidth_ : 0.f;
+    deferPopupDraw_ = titlebar_->isMenuOpen() || tabDropdownOpen_ || tabContextOpen_ || statusPopup_ != StatusPopup::None || (acActive_ && !acItems_.empty());
     if (activeTab_ < tabs_.size()) {
         tabs_[activeTab_].fileName = openFile_.empty() ? "untitled" : openFile_;
         tabs_[activeTab_].filePath = openFilePath_;
@@ -1916,7 +1926,7 @@ void Application::render() {
         }
     }
     // autocomplete popup
-    if (acActive_ && !acItems_.empty()) {
+    if (acActive_ && !acItems_.empty() && !deferPopupDraw_) {
         size_t cur = selections_[0].cursor, ls = lineStart(cur);
         float cx = textX + fontAtlas().measureText(std::string_view(textBuffer.data()+ls, cur-ls));
         size_t cl = lineOfPos(cur);
@@ -1936,7 +1946,7 @@ void Application::render() {
         }
     }
 
-    if (statusPopup_ != StatusPopup::None) {
+    if (statusPopup_ != StatusPopup::None && !deferPopupDraw_) {
         int itemCount = (statusPopup_ == StatusPopup::Indent) ? 8 : std::min(syntaxLangCount, 18);
         // compute popup width from content
         float maxTextW = 100.f;
@@ -1980,6 +1990,7 @@ void Application::render() {
         glDisable(GL_SCISSOR_TEST);
     }
 
+    if (titlebar_->isMenuOpen() && deferPopupDraw_) titlebar_->deferMenuDraw();
     titlebar_->draw(fontAtlas(), 0, 0, 0, 0);
     if (closeConfirmOpen_) {
         float mw = 420.f, mh = 118.f, mx = (fww - mw) / 2.f, my = (fwh - mh) / 2.f;
@@ -1987,7 +1998,6 @@ void Application::render() {
         auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
             mv.insert(mv.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
         };
-        ar(0, 0, fww, fwh, 0.f, 0.f, 0.f, 0.42f);
         ar(mx, my, mx + mw, my + mh, 0.17f, 0.17f, 0.20f, 0.98f);
         ar(mx, my, mx + mw, my + 1.f, 0.35f, 0.35f, 0.40f, 1.f);
         float by = my + 76.f, bw = 96.f, bh = 26.f;
@@ -2007,15 +2017,114 @@ void Application::render() {
     SDL_GL_SwapWindow(window_);
     // render overflow popups to separate window
     bool hasPopup = false;
-    int popupX = 0, popupY = 0, popupW = 0, popupH = 0;
-    // check if titlebar menu needs overflow
+    float mainX = 0.f, mainY = 0.f, mainW = 0.f, mainH = 0.f;
+    enum class PopupKind { None, Menu, TabDropdown, TabContext, Status, Autocomplete } popupKind = PopupKind::None;
     if (titlebar_->isMenuOpen()) {
+        titlebar_->getMenuBounds(mainX, mainY, mainW, mainH);
+        popupKind = PopupKind::Menu; hasPopup = true;
+    } else if (tabDropdownOpen_) {
+        mainX = tabChevronX_; mainY = titlebar_->height() + tabBarH_;
+        mainW = 260.f; mainH = static_cast<float>(tabs_.size()) * 24.f + 4.f;
+        popupKind = PopupKind::TabDropdown; hasPopup = true;
+    } else if (tabContextOpen_) {
+        mainX = tabContextX_; mainY = tabContextY_;
+        mainW = 170.f; mainH = 4.f + 4.f * 24.f;
+        popupKind = PopupKind::TabContext; hasPopup = true;
+    } else if (statusPopup_ != StatusPopup::None) {
+        int itemCount = (statusPopup_ == StatusPopup::Indent) ? 8 : std::min(syntaxLangCount, 18);
+        float maxTextW = 100.f;
+        if (statusPopup_ == StatusPopup::Indent) {
+            const char* indentItems[] = {"Indent Using Spaces","Indent Using Tabs","Tab Width: 2","Tab Width: 4","Tab Width: 8","Convert Indentation to Spaces","Convert Indentation to Tabs","Detect Indentation"};
+            for (auto* item : indentItems) maxTextW = std::max(maxTextW, fontAtlas().measureText(item) + 48.f);
+        } else {
+            for (int i = 0; i < syntaxLangCount; ++i) maxTextW = std::max(maxTextW, fontAtlas().measureText(syntaxLanguages[i]) + 32.f);
+        }
+        mainX = popupX_; mainY = popupY_; mainW = maxTextW; mainH = itemCount * 24.f + 4.f;
+        popupKind = PopupKind::Status; hasPopup = true;
+    } else if (acActive_ && !acItems_.empty()) {
+        size_t cur = selections_[0].cursor, ls = lineStart(cur);
+        size_t cl = lineOfPos(cur);
+        mainX = textX + fontAtlas().measureText(std::string_view(textBuffer.data()+ls, cur-ls));
+        mainY = textOriginY + cl * lineStep - scrollY_ + fontAtlas().ascent() - fontAtlas().descent() + 4.f;
+        mainW = 220.f; mainH = static_cast<float>(acItems_.size()) * 22.f + 4.f;
+        popupKind = PopupKind::Autocomplete; hasPopup = true;
+    }
+    if (hasPopup && mainW > 1.f && mainH > 1.f) {
         int winX = 0, winY = 0; SDL_GetWindowPosition(window_, &winX, &winY);
-        // menu draws at (0, titlebarH) in main window coords
-        // convert to screen coords for popup
-        // For now, keep menu rendering in main window - popup window support
-        // will be activated in next commit for all popup types
-        (void)hasPopup; (void)popupX; (void)popupY; (void)popupW; (void)popupH;
+        popupMainX_ = mainX; popupMainY_ = mainY; popupMainW_ = mainW; popupMainH_ = mainH;
+        renderPopupToWindow(winX + static_cast<int>(mainX), winY + static_cast<int>(mainY), static_cast<int>(mainW), static_cast<int>(mainH));
+        auto drawRect = [](std::vector<float>& verts, float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
+            verts.insert(verts.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
+        };
+        auto flush = [](std::vector<float>& verts) {
+            if (verts.empty()) return;
+            GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
+            glBufferData(GL_ARRAY_BUFFER, verts.size()*sizeof(float), verts.data(), GL_DYNAMIC_DRAW);
+            glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(verts.size()/8));
+            glBindVertexArray(0); GLRenderer::setDrawMode(0); verts.clear();
+        };
+        if (popupKind == PopupKind::Menu) {
+            titlebar_->drawMenuPopup(fontAtlas(), mainX, mainY);
+        } else if (popupKind == PopupKind::TabDropdown) {
+            std::vector<float> pv;
+            float itemH = 24.f;
+            drawRect(pv, 0, 0, mainW, mainH, 0.17f, 0.17f, 0.20f, 0.98f);
+            if (tabDropdownHover_ >= 0 && tabDropdownHover_ < (int)tabs_.size())
+                drawRect(pv, 2, 2 + tabDropdownHover_ * itemH, mainW - 2, 2 + (tabDropdownHover_ + 1) * itemH, 0.25f, 0.30f, 0.45f, 1.f);
+            flush(pv);
+            for (size_t i = 0; i < tabs_.size(); ++i) {
+                std::string label = tabs_[i].fileName.empty() ? "untitled" : tabs_[i].fileName;
+                if (tabs_[i].dirty) label += "\xe2\x80\xa2";
+                float b = i == activeTab_ ? 0.95f : 0.70f;
+                fontAtlas().drawText(label, 10.f, 6.f + i * itemH, b, b, b + 0.03f, 1.f);
+            }
+        } else if (popupKind == PopupKind::TabContext) {
+            const char* items[] = {"Close", "Close Others", "Close All", "Reopen Closed Tab"};
+            std::vector<float> cv; float itemH = 24.f;
+            drawRect(cv, 0, 0, mainW, mainH, 0.17f, 0.17f, 0.20f, 0.98f);
+            if (tabContextHover_ >= 0) drawRect(cv, 2, 2 + tabContextHover_ * itemH, mainW - 2, 2 + (tabContextHover_ + 1) * itemH, 0.25f, 0.30f, 0.45f, 1.f);
+            flush(cv);
+            for (int i = 0; i < 4; ++i) fontAtlas().drawText(items[i], 10.f, 6.f + i * itemH, 0.78f, 0.78f, 0.82f, 1.f);
+        } else if (popupKind == PopupKind::Status) {
+            int itemCount = (statusPopup_ == StatusPopup::Indent) ? 8 : std::min(syntaxLangCount, 18);
+            std::vector<float> pv;
+            drawRect(pv, 0, 0, mainW, mainH, 0.18f, 0.18f, 0.21f, 0.98f);
+            drawRect(pv, 0, 0, mainW, 1, 0.3f, 0.3f, 0.35f, 1.f);
+            if (popupSelected_ >= 0 && popupSelected_ < itemCount)
+                drawRect(pv, 2, 2 + popupSelected_ * 24.f, mainW - 2, 2 + (popupSelected_ + 1) * 24.f, 0.25f, 0.30f, 0.45f, 1.f);
+            flush(pv);
+            if (statusPopup_ == StatusPopup::Indent) {
+                const char* indentItems[] = {"Indent Using Spaces","Indent Using Tabs","Tab Width: 2","Tab Width: 4","Tab Width: 8","Convert Indentation to Spaces","Convert Indentation to Tabs","Detect Indentation"};
+                for (int i = 0; i < itemCount; ++i) {
+                    bool active = (i == 0 && !useTabs_) || (i == 1 && useTabs_) || (i == 2 && tabSize_ == 2) || (i == 3 && tabSize_ == 4) || (i == 4 && tabSize_ == 8);
+                    if (active) fontAtlas().drawText("\xe2\x80\xa2", 8.f, 6.f + i * 24.f, 0.9f, 0.9f, 1.f, 1.f);
+                    float b = active ? 0.9f : 0.7f;
+                    fontAtlas().drawText(indentItems[i], 24.f, 6.f + i * 24.f, b, b, active ? 1.f : 0.75f, 1.f);
+                }
+            } else {
+                for (int row = 0; row < itemCount; ++row) {
+                    int i = popupScroll_ + row;
+                    if (i >= syntaxLangCount) break;
+                    float b = (syntax_->languageName() == syntaxLanguages[i]) ? 1.f : 0.7f;
+                    if (syntax_->languageName() == syntaxLanguages[i]) fontAtlas().drawText("\xe2\x80\xa2", 8.f, 6.f + row * 24.f, 0.9f, 0.9f, 1.f, 1.f);
+                    fontAtlas().drawText(syntaxLanguages[i], 24.f, 6.f + row * 24.f, b, b, b, 1.f);
+                }
+            }
+        } else if (popupKind == PopupKind::Autocomplete) {
+            std::vector<float> av; float itemH = 22.f;
+            drawRect(av, 0, 0, mainW, mainH, 0.17f, 0.19f, 0.23f, 0.98f);
+            if (acSelected_ >= 0 && acSelected_ < (int)acItems_.size())
+                drawRect(av, 2, 2 + acSelected_ * itemH, mainW - 2, 2 + (acSelected_ + 1) * itemH, 0.24f, 0.27f, 0.32f, 1.f);
+            flush(av);
+            for (int i = 0; i < (int)acItems_.size(); ++i) {
+                float b = (i == acSelected_) ? 1.f : 0.7f;
+                fontAtlas().drawText(acItems_[i], 8.f, 4.f + i * itemH, b, b, b, 1.f);
+            }
+        }
+        GLRenderer::endFrame();
+        SDL_GL_SwapWindow(popupWin_);
+        SDL_GL_MakeCurrent(window_, glContext_);
+        GLRenderer::resize(ww, wh);
     }
     if (popupWin_ && !hasPopup) hidePopupWindow();
 }
