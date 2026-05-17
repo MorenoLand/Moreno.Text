@@ -57,6 +57,13 @@ struct GotoState {
     int selected = 0;
 };
 
+struct CommandPaletteState {
+    bool active = false;
+    std::string query;
+    std::vector<int> results;
+    int selected = 0;
+};
+
 struct TabBuffer {
     std::string text;
     std::string filePath;
@@ -109,6 +116,7 @@ public:
     void commandFind() { find_.active = true; find_.replaceActive = false; find_.query.clear(); find_.matches.clear(); }
     void commandReplace() { find_.active = true; find_.replaceActive = true; find_.query.clear(); find_.matches.clear(); }
     void commandGotoAnything() { goto_.active = true; goto_.query.clear(); goto_.selected = 0; goto_.items.clear(); }
+    void commandPalette() { commandPalette_.active = true; commandPalette_.query.clear(); commandPalette_.selected = 0; updateCommandPalette(); }
     void toggleFullscreen();
     void toggleMinimap() { minimapVisible_ = !minimapVisible_; }
 private:
@@ -198,6 +206,9 @@ private:
     GotoState goto_;
     enum GotoMode { Files, Symbols, Lines, Words } gotoMode_ = Files;
     void updateGotoResults();
+    CommandPaletteState commandPalette_;
+    void updateCommandPalette();
+    void executePaletteCommand(int commandIndex);
     // autocomplete
     bool acActive_ = false;
     std::vector<std::string> acItems_;

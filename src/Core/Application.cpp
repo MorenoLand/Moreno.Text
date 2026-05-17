@@ -870,18 +870,22 @@ void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
         }
     }
     if (tabContextOpen_ && !deferPopupDraw_) {
-        const char* items[] = {"Close", "Close Others", "Close All", "Reopen Closed Tab"};
-        float itemH = 24.f, popW = 170.f, popH = 4.f + 4 * itemH;
+        const char* items[] = {"Close Tab","Close Other Tabs","Close Tabs to the Right","Close Unmodified Tabs","Close Unmodified Tabs to the Right","Close Tabs With Deleted Files","","Split View","","New File","Open File    Ctrl+O","","Diff With Current Tab..."};
+        int itemCount = tabContextIndex_ != activeTab_ ? 13 : 12;
+        float itemH = 24.f, popW = 260.f, popH = 4.f + itemCount * itemH;
         std::vector<float> cv;
         auto cr = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
             cv.insert(cv.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
         };
         cr(tabContextX_, tabContextY_, tabContextX_ + popW, tabContextY_ + popH, 0.17f, 0.17f, 0.20f, 0.98f);
-        if (tabContextHover_ >= 0) cr(tabContextX_ + 2, tabContextY_ + 2 + tabContextHover_ * itemH, tabContextX_ + popW - 2, tabContextY_ + 2 + (tabContextHover_ + 1) * itemH, 0.25f, 0.30f, 0.45f, 1.f);
+        if (tabContextHover_ >= 0 && items[tabContextHover_][0]) cr(tabContextX_ + 2, tabContextY_ + 2 + tabContextHover_ * itemH, tabContextX_ + popW - 2, tabContextY_ + 2 + (tabContextHover_ + 1) * itemH, 0.25f, 0.30f, 0.45f, 1.f);
         GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
         glBufferData(GL_ARRAY_BUFFER, cv.size()*sizeof(float), cv.data(), GL_DYNAMIC_DRAW);
         glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(cv.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0);
-        for (int i = 0; i < 4; ++i) font.drawText(items[i], tabContextX_ + 10.f, tabContextY_ + 6.f + i * itemH, 0.78f, 0.78f, 0.82f, 1.f);
+        for (int i = 0; i < itemCount; ++i) {
+            if (!items[i][0]) { std::vector<float> sv; cr(tabContextX_ + 8.f, tabContextY_ + 13.f + i * itemH, tabContextX_ + popW - 8.f, tabContextY_ + 14.f + i * itemH, 0.3f, 0.3f, 0.33f, 1.f); continue; }
+            font.drawText(items[i], tabContextX_ + 10.f, tabContextY_ + 6.f + i * itemH, 0.78f, 0.78f, 0.82f, 1.f);
+        }
     }
 }
 
@@ -896,8 +900,11 @@ bool Application::handleTabBarEvent(const SDL_Event& e, float windowW, float tit
     }
     float maxTabScroll = totalTabsW > visibleW ? totalTabsW - visibleW : 0.f;
     if (e.type == SDL_MOUSEMOTION && tabContextOpen_) {
-        float mx = (float)e.motion.x, my = (float)e.motion.y, itemH = 24.f, popW = 170.f, popH = 4.f + 4 * itemH;
+        float mx = (float)e.motion.x, my = (float)e.motion.y, itemH = 24.f, popW = 260.f;
+        int itemCount = tabContextIndex_ != activeTab_ ? 13 : 12;
+        float popH = 4.f + itemCount * itemH;
         tabContextHover_ = (mx >= tabContextX_ && mx <= tabContextX_ + popW && my >= tabContextY_ && my <= tabContextY_ + popH) ? (int)((my - tabContextY_ - 2.f) / itemH) : -1;
+        if (tabContextHover_ == 6 || tabContextHover_ == 8 || tabContextHover_ == 11) tabContextHover_ = -1;
         return true;
     }
     if (e.type == SDL_MOUSEMOTION && tabDropdownOpen_) {
@@ -909,12 +916,19 @@ bool Application::handleTabBarEvent(const SDL_Event& e, float windowW, float tit
     if (e.type == SDL_MOUSEBUTTONDOWN && (e.button.button == 1 || e.button.button == 2 || e.button.button == 3)) {
         float mx = (float)e.button.x, my = (float)e.button.y;
         if (tabContextOpen_) {
-            float itemH = 24.f, popW = 170.f, popH = 4.f + 4 * itemH;
+            float itemH = 24.f, popW = 260.f;
+            int itemCount = tabContextIndex_ != activeTab_ ? 13 : 12;
+            float popH = 4.f + itemCount * itemH;
             if (mx >= tabContextX_ && mx <= tabContextX_ + popW && my >= tabContextY_ && my <= tabContextY_ + popH) {
                 int idx = (int)((my - tabContextY_ - 2.f) / itemH);
                 if (idx == 0) closeTab(tabContextIndex_);
                 else if (idx == 1) { for (size_t i = tabs_.size(); i-- > 0;) if (i != tabContextIndex_) { if (tabs_[i].dirty) closeTab(i); else closeTabNow(i); if (closeConfirmOpen_) break; } }
-                else if (idx == 2) { while (!tabs_.empty() && !closeConfirmOpen_) { if (tabs_[0].dirty) closeTab(0); else closeTabNow(0); } }
+                else if (idx == 2) { for (size_t i = tabs_.size(); i-- > tabContextIndex_ + 1;) { if (tabs_[i].dirty) closeTab(i); else closeTabNow(i); if (closeConfirmOpen_) break; } }
+                else if (idx == 3) { for (size_t i = tabs_.size(); i-- > 0;) if (!tabs_[i].dirty) closeTabNow(i); }
+                else if (idx == 4) { for (size_t i = tabs_.size(); i-- > tabContextIndex_ + 1;) if (!tabs_[i].dirty) closeTabNow(i); }
+                else if (idx == 5) { for (size_t i = tabs_.size(); i-- > 0;) if (!tabs_[i].filePath.empty() && !fs::exists(tabs_[i].filePath)) closeTabNow(i); }
+                else if (idx == 9) newBuffer();
+                else if (idx == 10) openFileDialog();
                 tabContextOpen_ = false; return true;
             }
             tabContextOpen_ = false;
@@ -964,6 +978,63 @@ const char* Application::syntaxLanguages[] = {
     "Perl","PHP","Python","R","Ruby","Rust","Scala","ShellScript","SQL","SublimeRC",
     "TCL","TOML","XML","YAML"
 };
+
+struct PaletteCommandDef {
+    const char* label;
+    const char* shortcut;
+};
+
+static const PaletteCommandDef paletteCommands[] = {
+    {"New File","Ctrl+N"},{"Open File","Ctrl+O"},{"Open Folder",""},{"Save","Ctrl+S"},{"Save As","Ctrl+Shift+S"},{"Save All",""},
+    {"Close File","Ctrl+W"},{"Reopen Closed Tab","Ctrl+Shift+T"},{"Revert File",""},{"Undo","Ctrl+Z"},{"Redo","Ctrl+Y"},
+    {"Cut","Ctrl+X"},{"Copy","Ctrl+C"},{"Paste","Ctrl+V"},{"Paste and Indent","Ctrl+Shift+V"},{"Select All","Ctrl+A"},
+    {"Find","Ctrl+F"},{"Replace","Ctrl+H"},{"Goto Anything","Ctrl+P"},{"Toggle Side Bar","Ctrl+K Ctrl+B"},{"Toggle Minimap",""},
+    {"Enter Full Screen","F11"}
+};
+
+static std::string lowerCopy(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+    return s;
+}
+
+void Application::updateCommandPalette() {
+    commandPalette_.results.clear();
+    std::string q = lowerCopy(commandPalette_.query);
+    int count = (int)(sizeof(paletteCommands) / sizeof(paletteCommands[0]));
+    for (int i = 0; i < count; ++i) {
+        std::string label = lowerCopy(paletteCommands[i].label);
+        if (q.empty() || label.find(q) != std::string::npos) commandPalette_.results.push_back(i);
+    }
+    if (commandPalette_.selected >= (int)commandPalette_.results.size()) commandPalette_.selected = (int)commandPalette_.results.size() - 1;
+    if (commandPalette_.selected < 0) commandPalette_.selected = commandPalette_.results.empty() ? -1 : 0;
+}
+
+void Application::executePaletteCommand(int commandIndex) {
+    switch (commandIndex) {
+        case 0: newBuffer(); break;
+        case 1: openFileDialog(); break;
+        case 2: openFolderDialog(); break;
+        case 3: saveFile(); break;
+        case 4: saveFileAs(); break;
+        case 5: saveAll(); break;
+        case 6: closeCurrentTab(); break;
+        case 7: reopenClosedTab(); break;
+        case 8: revertFile(); break;
+        case 9: doUndo(); break;
+        case 10: doRedo(); break;
+        case 11: cutSelectionOrLine(); break;
+        case 12: copySelectionOrLine(); break;
+        case 13: pasteClipboard(false); break;
+        case 14: pasteClipboard(true); break;
+        case 15: commandSelectAll(); break;
+        case 16: commandFind(); break;
+        case 17: commandReplace(); break;
+        case 18: commandGotoAnything(); break;
+        case 19: toggleSidebar(); break;
+        case 20: toggleMinimap(); break;
+        case 21: toggleFullscreen(); break;
+    }
+}
 
 void Application::updateGotoResults() {
     goto_.items.clear(); goto_.subtexts.clear(); goto_.scores.clear();
@@ -1081,7 +1152,7 @@ void Application::handleEvents() {
         }
         if (e.type == SDL_WINDOWEVENT && e.window.windowID == SDL_GetWindowID(window_) && e.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
             titlebar_->closeMenuPopup();
-            tabDropdownOpen_ = false; tabContextOpen_ = false; statusPopup_ = StatusPopup::None; acActive_ = false;
+            tabDropdownOpen_ = false; tabContextOpen_ = false; statusPopup_ = StatusPopup::None; acActive_ = false; commandPalette_.active = false;
             hidePopupWindow();
             continue;
         }
@@ -1138,6 +1209,27 @@ void Application::handleEvents() {
             else { find_.query += e.text.text; findAllMatches(); }
             continue;
         }
+        if (commandPalette_.active && e.type == SDL_KEYDOWN) {
+            auto sym = e.key.keysym.sym;
+            if (sym == SDLK_ESCAPE) { commandPalette_.active = false; continue; }
+            if (sym == SDLK_RETURN) {
+                if (commandPalette_.selected >= 0 && commandPalette_.selected < (int)commandPalette_.results.size()) {
+                    int idx = commandPalette_.results[commandPalette_.selected];
+                    commandPalette_.active = false;
+                    executePaletteCommand(idx);
+                }
+                continue;
+            }
+            if (sym == SDLK_UP) { if (commandPalette_.selected > 0) --commandPalette_.selected; continue; }
+            if (sym == SDLK_DOWN) { if (commandPalette_.selected < (int)commandPalette_.results.size() - 1) ++commandPalette_.selected; continue; }
+            if (sym == SDLK_BACKSPACE && !commandPalette_.query.empty()) {
+                auto it = commandPalette_.query.end(); --it;
+                while (it != commandPalette_.query.begin() && (*it & 0xC0) == 0x80) --it;
+                commandPalette_.query.erase(it, commandPalette_.query.end()); updateCommandPalette(); continue;
+            }
+            continue;
+        }
+        if (commandPalette_.active && e.type == SDL_TEXTINPUT) { commandPalette_.query += e.text.text; updateCommandPalette(); continue; }
         // goto mode
         if (goto_.active && e.type == SDL_KEYDOWN) {
             auto sym = e.key.keysym.sym;
@@ -1409,7 +1501,7 @@ void Application::handleEvents() {
                 if (ctrl && sym == SDLK_j) { unfoldAll(); continue; }
             }
             if (ctrl && sym == SDLK_q) running_ = false;
-            else if (sym == SDLK_ESCAPE) { selections_.clear(); selections_.emplace_back(sel.cursor); find_.active = false; goto_.active = false; tabDropdownOpen_ = false; acActive_ = false; }
+            else if (sym == SDLK_ESCAPE) { selections_.clear(); selections_.emplace_back(sel.cursor); find_.active = false; goto_.active = false; commandPalette_.active = false; tabDropdownOpen_ = false; acActive_ = false; }
             else if (ctrl && sym == SDLK_k) { pendingCtrlK_ = true; }
             else if (ctrl && sym == SDLK_a) { sel.anchor = 0; sel.cursor = textBuffer.size(); }
             else if (ctrl && sym == SDLK_c) copySelectionOrLine();
@@ -1422,6 +1514,7 @@ void Application::handleEvents() {
             else if (ctrl && sym == SDLK_h) { find_.active = true; find_.replaceActive = true; find_.query.clear(); find_.matches.clear(); findFocus_ = 0; }
             else if (ctrl && sym == SDLK_s) { if (shift) saveFileAs(); else saveFile(); }
             else if (ctrl && shift && sym == SDLK_t) reopenClosedTab();
+            else if (ctrl && shift && sym == SDLK_p) commandPalette();
             else if (ctrl && sym == SDLK_p) { goto_.active = true; goto_.query.clear(); goto_.selected = 0; goto_.items.clear(); }
             else if (ctrl && sym == SDLK_o) openFileDialog();
             else if (ctrl && sym == SDLK_n) newBuffer();
@@ -1945,6 +2038,31 @@ void Application::render() {
                 fontAtlas().drawText(goto_.subtexts[i], ox + 200, oy + 30 + i * 22, 0.4f, 0.4f, 0.45f, 1.f);
         }
     }
+    if (commandPalette_.active) {
+        float ow = 560.f, oh = 286.f, ox = (fww - ow) / 2.f, oy = tbH + 36.f;
+        std::vector<float> cv;
+        auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
+            cv.insert(cv.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
+        };
+        ar(ox, oy, ox + ow, oy + oh, 0.15f, 0.15f, 0.18f, 0.98f);
+        ar(ox, oy, ox + ow, oy + 32.f, 0.12f, 0.12f, 0.14f, 1.f);
+        if (commandPalette_.selected >= 0 && commandPalette_.selected < (int)commandPalette_.results.size())
+            ar(ox + 2.f, oy + 34.f + commandPalette_.selected * 24.f, ox + ow - 2.f, oy + 34.f + (commandPalette_.selected + 1) * 24.f, 0.25f, 0.30f, 0.45f, 1.f);
+        GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
+        glBufferData(GL_ARRAY_BUFFER, cv.size()*sizeof(float), cv.data(), GL_DYNAMIC_DRAW);
+        glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(cv.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0);
+        fontAtlas().drawText("Command Palette: " + commandPalette_.query + "|", ox + 10.f, oy + 8.f, 0.84f, 0.84f, 0.86f, 1.f);
+        int visible = std::min(10, (int)commandPalette_.results.size());
+        for (int row = 0; row < visible; ++row) {
+            int idx = commandPalette_.results[row];
+            float b = row == commandPalette_.selected ? 0.98f : 0.72f;
+            fontAtlas().drawText(paletteCommands[idx].label, ox + 10.f, oy + 38.f + row * 24.f, b, b, b + 0.03f, 1.f);
+            if (paletteCommands[idx].shortcut[0]) {
+                float sw = fontAtlas().measureText(paletteCommands[idx].shortcut);
+                fontAtlas().drawText(paletteCommands[idx].shortcut, ox + ow - sw - 14.f, oy + 38.f + row * 24.f, 0.48f, 0.48f, 0.52f, 1.f);
+            }
+        }
+    }
     // autocomplete popup
     if (acActive_ && !acItems_.empty() && !deferPopupDraw_) {
         size_t cur = selections_[0].cursor, ls = lineStart(cur);
@@ -2048,7 +2166,8 @@ void Application::render() {
         popupKind = PopupKind::TabDropdown; hasPopup = true;
     } else if (tabContextOpen_) {
         mainX = tabContextX_; mainY = tabContextY_;
-        mainW = 170.f; mainH = 4.f + 4.f * 24.f;
+        int itemCount = tabContextIndex_ != activeTab_ ? 13 : 12;
+        mainW = 260.f; mainH = 4.f + itemCount * 24.f;
         popupKind = PopupKind::TabContext; hasPopup = true;
     } else if (statusPopup_ != StatusPopup::None) {
         int itemCount = (statusPopup_ == StatusPopup::Indent) ? 8 : std::min(syntaxLangCount, 18);
@@ -2099,12 +2218,14 @@ void Application::render() {
                 fontAtlas().drawText(label, 10.f, 6.f + i * itemH, b, b, b + 0.03f, 1.f);
             }
         } else if (popupKind == PopupKind::TabContext) {
-            const char* items[] = {"Close", "Close Others", "Close All", "Reopen Closed Tab"};
+            const char* items[] = {"Close Tab","Close Other Tabs","Close Tabs to the Right","Close Unmodified Tabs","Close Unmodified Tabs to the Right","Close Tabs With Deleted Files","","Split View","","New File","Open File    Ctrl+O","","Diff With Current Tab..."};
             std::vector<float> cv; float itemH = 24.f;
+            int itemCount = tabContextIndex_ != activeTab_ ? 13 : 12;
             drawRect(cv, 0, 0, mainW, mainH, 0.17f, 0.17f, 0.20f, 0.98f);
-            if (tabContextHover_ >= 0) drawRect(cv, 2, 2 + tabContextHover_ * itemH, mainW - 2, 2 + (tabContextHover_ + 1) * itemH, 0.25f, 0.30f, 0.45f, 1.f);
+            for (int i = 0; i < itemCount; ++i) if (!items[i][0]) drawRect(cv, 8.f, 13.f + i * itemH, mainW - 8.f, 14.f + i * itemH, 0.3f, 0.3f, 0.33f, 1.f);
+            if (tabContextHover_ >= 0 && tabContextHover_ < itemCount && items[tabContextHover_][0]) drawRect(cv, 2, 2 + tabContextHover_ * itemH, mainW - 2, 2 + (tabContextHover_ + 1) * itemH, 0.25f, 0.30f, 0.45f, 1.f);
             flush(cv);
-            for (int i = 0; i < 4; ++i) fontAtlas().drawText(items[i], 10.f, 6.f + i * itemH, 0.78f, 0.78f, 0.82f, 1.f);
+            for (int i = 0; i < itemCount; ++i) if (items[i][0]) fontAtlas().drawText(items[i], 10.f, 6.f + i * itemH, 0.78f, 0.78f, 0.82f, 1.f);
         } else if (popupKind == PopupKind::Status) {
             int itemCount = (statusPopup_ == StatusPopup::Indent) ? 8 : std::min(syntaxLangCount, 18);
             std::vector<float> pv;
