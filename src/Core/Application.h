@@ -194,6 +194,10 @@ private:
     float scrollY_ = 0.f;
     bool selecting_ = false;
     bool minimapDragging_ = false;
+    bool minimapPendingJump_ = false;
+    float minimapDragStartY_ = 0.f;
+    float minimapDragStartScrollY_ = 0.f;
+    float minimapPendingJumpY_ = 0.f;
     bool minimapVisible_ = true;
     bool fullscreen_ = false;
     bool scrollbarHovered_ = false;
@@ -209,6 +213,9 @@ private:
     float tabContextX_ = 0.f, tabContextY_ = 0.f;
     bool sidebarVisible_ = false;
     bool sidebarResizing_ = false;
+    bool sidebarScrollbarDragging_ = false;
+    float sidebarScrollbarDragStartY_ = 0.f;
+    float sidebarScrollbarDragStartScrollY_ = 0.f;
     float sidebarWidth_ = 200.f;
     float sidebarScrollY_ = 0.f;
     float sidebarContentH_ = 0.f;
@@ -280,6 +287,7 @@ private:
     bool debugFpsVisible_ = false;
     uint64_t fpsLastCounter_ = 0;
     float fpsSmoothedMs_ = 0.f;
+    uint32_t cursorLastInputTicks_ = 0;
     void computeLineIndents();
     bool useTabs_ = false;
     int tabSize_ = 2;

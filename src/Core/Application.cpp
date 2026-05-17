@@ -548,6 +548,16 @@ void Application::drawSidebar(FontAtlas& font, float windowH, float titlebarH, f
     addSolidRect(v, sidebarWidth_ - 1.f, titlebarH, sidebarWidth_, windowH - statusbarH, 0.08f, 0.09f, 0.11f, 1.f);
     struct SidebarTextDraw { std::string text; float x, y, r, g, b; };
     std::vector<SidebarTextDraw> textDraws;
+    auto fitSidebarText = [&](const std::string& text, float x) {
+        float maxW = sidebarWidth_ - x - 8.f;
+        if (maxW <= 0.f) return std::string();
+        if (font.measureText(text) <= maxW) return text;
+        std::string out = text;
+        const std::string suffix = "...";
+        float suffixW = font.measureText(suffix);
+        while (!out.empty() && font.measureText(out) + suffixW > maxW) out.pop_back();
+        return out.empty() ? suffix : out + suffix;
+    };
     float rowH = 22.f, y = titlebarH + 6.f - sidebarScrollY_;
     sidebarContentH_ = 0.f;
     std::function<void(SidebarNode&)> countNode = [&](SidebarNode& node) {
@@ -573,7 +583,8 @@ void Application::drawSidebar(FontAtlas& font, float windowH, float titlebarH, f
             addSolidRect(v, x + 12.f, rowY + 3.f, x + 20.f, rowY + 13.f, ir, ig, ib, 1.f);
             if (node.folder) textDraws.push_back({node.expanded ? "v" : ">", x, rowY, 0.55f, 0.55f, 0.58f});
             float b = active ? 0.95f : 0.68f;
-            textDraws.push_back({node.name, x + 26.f, rowY, b, b, b + 0.03f});
+            float labelX = x + 26.f;
+            textDraws.push_back({fitSidebarText(node.name, labelX), labelX, rowY, b, b, b + 0.03f});
         }
         if (node.folder && node.expanded) for (auto& child : node.children) drawNode(child);
     };
@@ -593,13 +604,43 @@ void Application::drawSidebar(FontAtlas& font, float windowH, float titlebarH, f
 
 bool Application::handleSidebarEvent(const SDL_Event& e, float windowH, float titlebarH, float statusbarH) {
     if (!sidebarVisible_) return false;
-    if (e.type == SDL_MOUSEWHEEL && mouseX_ >= 0 && mouseX_ <= sidebarWidth_ && mouseY_ >= titlebarH && mouseY_ <= windowH - statusbarH) {
-        float viewH = windowH - statusbarH - titlebarH - 6.f;
-        float maxScroll = std::max(0.f, sidebarContentH_ - viewH);
-        sidebarScrollY_ -= e.wheel.y * 44.f;
+    float viewH = windowH - statusbarH - titlebarH - 6.f;
+    float maxScroll = std::max(0.f, sidebarContentH_ - viewH);
+    auto clampSidebarScroll = [&] {
         if (sidebarScrollY_ < 0.f) sidebarScrollY_ = 0.f;
         if (sidebarScrollY_ > maxScroll) sidebarScrollY_ = maxScroll;
+    };
+    auto sidebarThumb = [&] (float& thumbY, float& thumbH) {
+        thumbH = sidebarContentH_ > 0.f ? std::max(20.f, viewH * (viewH / sidebarContentH_)) : viewH;
+        if (thumbH > viewH) thumbH = viewH;
+        thumbY = maxScroll > 0.f ? titlebarH + (sidebarScrollY_ / maxScroll) * (viewH - thumbH) : titlebarH;
+    };
+    if (e.type == SDL_MOUSEBUTTONUP && e.button.button == 1 && sidebarScrollbarDragging_) {
+        sidebarScrollbarDragging_ = false;
         return true;
+    }
+    if (e.type == SDL_MOUSEMOTION && sidebarScrollbarDragging_) {
+        float delta = (float)e.motion.y - sidebarScrollbarDragStartY_;
+        float scale = viewH > 0.f ? sidebarContentH_ / viewH : 1.f;
+        sidebarScrollY_ = sidebarScrollbarDragStartScrollY_ + delta * scale;
+        clampSidebarScroll();
+        return true;
+    }
+    if (e.type == SDL_MOUSEWHEEL && mouseX_ >= 0 && mouseX_ <= sidebarWidth_ && mouseY_ >= titlebarH && mouseY_ <= windowH - statusbarH) {
+        sidebarScrollY_ -= e.wheel.y * 44.f;
+        clampSidebarScroll();
+        return true;
+    }
+    if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == 1 && sidebarContentH_ > viewH && e.button.x >= sidebarWidth_ - 8 && e.button.x <= sidebarWidth_ && e.button.y >= titlebarH && e.button.y <= windowH - statusbarH) {
+        float thumbY = 0.f, thumbH = viewH;
+        sidebarThumb(thumbY, thumbH);
+        float my = (float)e.button.y;
+        if (my >= thumbY && my <= thumbY + thumbH) {
+            sidebarScrollbarDragging_ = true;
+            sidebarScrollbarDragStartY_ = my;
+            sidebarScrollbarDragStartScrollY_ = sidebarScrollY_;
+            return true;
+        }
     }
     if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == 1 && e.button.x >= sidebarWidth_ - 4 && e.button.x <= sidebarWidth_ + 4 && e.button.y >= titlebarH && e.button.y <= windowH - statusbarH) {
         sidebarResizing_ = true; return true;
@@ -1644,12 +1685,14 @@ void Application::handleEvents() {
             continue;
         }
         if (e.type == SDL_KEYDOWN) {
+            cursorLastInputTicks_ = SDL_GetTicks();
             auto mod = e.key.keysym.mod;
             if (e.key.keysym.sym == SDLK_x && (mod & KMOD_SHIFT) && !(mod & KMOD_CTRL) && !(mod & KMOD_ALT)) {
                 debugFpsVisible_ = !debugFpsVisible_;
                 continue;
             }
         }
+        if (e.type == SDL_TEXTINPUT) cursorLastInputTicks_ = SDL_GetTicks();
         // find mode input
         if (find_.active && e.type == SDL_KEYDOWN) {
             auto mod = e.key.keysym.mod; auto sym = e.key.keysym.sym;
@@ -1818,8 +1861,11 @@ void Application::handleEvents() {
                 scrollY_ = rel * maxScroll; clampScroll(); continue;
             }
             if (minimapDragging_) {
-                float rel = ((float)e.motion.y - tbH) / viewH;
-                scrollY_ = rel * maxScroll; clampScroll(); continue;
+                float minimapH = viewH;
+                float scale = minimapH > 0.f ? (contentH + scrollPad) / minimapH : 1.f;
+                scrollY_ = minimapDragStartScrollY_ + ((float)e.motion.y - minimapDragStartY_) * scale;
+                clampScroll();
+                continue;
             }
             if (selecting_) {
                 if (boxSelActive_) {
@@ -1933,9 +1979,21 @@ void Application::handleEvents() {
                 scrollY_ = rel * maxScroll; clampScroll(); continue;
             }
             if (mx >= mmX && my >= tbH && my < fwh - sbH) {
-                minimapDragging_ = true;
-                float rel = (my - tbH) / viewH;
-                scrollY_ = rel * maxScroll; clampScroll(); continue;
+                float minimapH = viewH;
+                float vpH = minimapH * 0.15f;
+                float vpTop = tbH + (maxScroll > 0.f ? (scrollY_ / maxScroll) * (minimapH - vpH) : 0.f);
+                if (vpTop < tbH) vpTop = tbH;
+                if (vpTop + vpH > fwh - sbH) vpTop = fwh - sbH - vpH;
+                if (my >= vpTop && my <= vpTop + vpH) {
+                    minimapDragging_ = true;
+                    minimapPendingJump_ = false;
+                    minimapDragStartY_ = my;
+                    minimapDragStartScrollY_ = scrollY_;
+                } else {
+                    minimapPendingJump_ = true;
+                    minimapPendingJumpY_ = my;
+                }
+                continue;
             }
             // status bar popup click
             if (statusPopup_ != StatusPopup::None) {
@@ -2039,9 +2097,24 @@ void Application::handleEvents() {
             }
         }
         else if (e.type == SDL_MOUSEBUTTONUP && e.button.button == 1) {
+            if (minimapPendingJump_) {
+                int rw = 0, rh = 0; SDL_GL_GetDrawableSize(window_, &rw, &rh);
+                float tbH = titlebar_->height() + tabBarH_;
+                float sbH = statusbar_->height();
+                float viewH = (float)rh - tbH - sbH;
+                float lineStep = fontAtlas().lineHeight();
+                float contentH = totalLines() * lineStep;
+                float scrollPad = scrollPastEnd_ ? lineStep * 5.f : 0.f;
+                float maxScroll = contentH + scrollPad > viewH ? contentH + scrollPad - viewH : 0.f;
+                float rel = viewH > 0.f ? (minimapPendingJumpY_ - tbH) / viewH : 0.f;
+                if (rel < 0.f) rel = 0.f;
+                if (rel > 1.f) rel = 1.f;
+                scrollY_ = rel * maxScroll;
+            }
             selecting_ = false;
             boxSelActive_ = false;
             minimapDragging_ = false;
+            minimapPendingJump_ = false;
             scrollbarDragging_ = false;
         }
         else if (e.type == SDL_KEYDOWN) {
@@ -2345,6 +2418,8 @@ void Application::render() {
     size_t currentLine = lineOfPos(selections_[0].cursor);
     size_t currentCol = colOfPos(selections_[0].cursor);
     size_t firstVisibleLine = (size_t)(scrollY_ / lineStep);
+    size_t firstRenderLine = firstVisibleLine > 2 ? firstVisibleLine - 2 : 0;
+    size_t lastRenderLine = lineCount > 0 ? std::min(lineCount - 1, (size_t)((scrollY_ + (fwh - sbH - tbH)) / lineStep) + 3) : 0;
     float firstVisibleY = textOriginY + firstVisibleLine * lineStep - scrollY_;
     float sidebarOffset = sidebarVisible_ ? sidebarWidth_ : 0.f;
     deferPopupDraw_ = titlebar_->isMenuOpen() || tabDropdownOpen_ || tabContextOpen_ || statusPopup_ != StatusPopup::None || (acActive_ && !acItems_.empty());
@@ -2376,6 +2451,9 @@ void Application::render() {
     for (auto& s : selections_) {
         if (!s.hasSelection()) continue;
         size_t a = s.min(), b = s.max(), la = lineOfPos(a), lb = lineOfPos(b);
+        if (lb < firstRenderLine || la > lastRenderLine) continue;
+        la = std::max(la, firstRenderLine);
+        lb = std::min(lb, lastRenderLine);
         for (size_t ln = la; ln <= lb; ++ln) {
             if (isFolded(ln)) continue;
             size_t ls = lineStartForLine(ln), le = lineEnd(ls);
@@ -2392,6 +2470,7 @@ void Application::render() {
         size_t qLen = find_.query.empty() ? 1 : find_.query.size();
         for (size_t mi = 0; mi < find_.matches.size(); ++mi) {
             size_t m = find_.matches[mi]; size_t ln = lineOfPos(m); size_t ls = lineStartForLine(ln);
+            if (ln < firstRenderLine || ln > lastRenderLine) continue;
             float sy = textOriginY + ln * lineStep - scrollY_;
             if (sy + lineStep < tbH || sy > fwh) continue;
             float sx = textX + fontAtlas().measureText(std::string_view(textBuffer.data()+ls, m-ls));
@@ -2409,8 +2488,8 @@ void Application::render() {
     computeLineIndents();
     // draw indent guides (vertical 1px lines at each indent level)
     {
-        float gy = textOriginY - scrollY_;
-        for (size_t ln = 0; ln < totalLines(); ++ln) {
+        float gy = textOriginY + firstRenderLine * lineStep - scrollY_;
+        for (size_t ln = firstRenderLine; ln <= lastRenderLine && ln < totalLines(); ++ln) {
             if (isFolded(ln)) continue;
             if (gy + lineStep < tbH) { gy += lineStep; continue; }
             if (gy > fwh) break;
@@ -2436,8 +2515,8 @@ void Application::render() {
 
     flushSolid();
     // text lines
-    y = textOriginY - scrollY_;
-    lineIdx = 0; lStart = 0;
+    y = textOriginY + firstRenderLine * lineStep - scrollY_;
+    lineIdx = firstRenderLine; lStart = lineStartForLine(firstRenderLine);
     while (lStart <= textBuffer.size()) {
         size_t lEnd = textBuffer.find('\n', lStart);
         if (lEnd == std::string::npos) lEnd = textBuffer.size();
@@ -2476,19 +2555,26 @@ void Application::render() {
         }
         y += isFolded(lineIdx) ? 0 : lineStep;
         ++lineIdx; lStart = lEnd + 1;
-        if (y > fwh) break;
+        if (lineIdx > lastRenderLine || y > fwh) break;
     }
 
     {
         for (auto& s : selections_) {
             if (!s.hasSelection()) continue;
             size_t sa = s.min(), sb = s.max();
-            for (size_t pos = sa; pos < sb; ++pos) {
-                char c = textBuffer[pos];
-                if (c != ' ' && c != '\t') continue;
-                size_t ln = lineOfPos(pos), ls = lineStartForLine(ln);
+            size_t la = lineOfPos(sa), lb = lineOfPos(sb);
+            if (lb < firstRenderLine || la > lastRenderLine) continue;
+            la = std::max(la, firstRenderLine);
+            lb = std::min(lb, lastRenderLine);
+            for (size_t ln = la; ln <= lb; ++ln) {
+                size_t ls = lineStartForLine(ln), le = lineEnd(ls);
+                size_t start = std::max(sa, ls);
+                size_t end = std::min(sb, le);
                 float wy = textOriginY + ln * lineStep - scrollY_;
                 if (wy + lineStep < tbH || wy > fwh) continue;
+                for (size_t pos = start; pos < end; ++pos) {
+                char c = textBuffer[pos];
+                if (c != ' ' && c != '\t') continue;
                 float wx = textX + fontAtlas().measureText(std::string_view(textBuffer.data() + ls, pos - ls));
                 if (c == ' ') {
                     float cx = wx + spaceWidth / 2.f, cy = wy + lineStep / 2.f, r = 1.2f;
@@ -2497,6 +2583,7 @@ void Application::render() {
                     float cx = wx + 2.f, cy = wy + lineStep * 0.3f;
                     addSolid(cx, cy, cx+5, cy+lineStep*0.2f, 0.45f, 0.45f, 0.5f, 0.6f);
                     addSolid(cx, cy+lineStep*0.4f, cx+5, cy+lineStep*0.2f, 0.45f, 0.45f, 0.5f, 0.6f);
+                }
                 }
             }
         }
@@ -2510,8 +2597,8 @@ void Application::render() {
         auto tri = [&](float x0,float y0,float x1,float y1,float x2,float y2,float r,float g,float b,float a) {
             fv.insert(fv.end(),{x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x2,y2,0,0,r,g,b,a});
         };
-        float gy = textOriginY - scrollY_;
-        for (size_t ln = 0; ln < totalLines(); ++ln) {
+        float gy = textOriginY + firstRenderLine * lineStep - scrollY_;
+        for (size_t ln = firstRenderLine; ln <= lastRenderLine && ln < totalLines(); ++ln) {
             if (isFolded(ln)) continue;
             if (gy + lineStep < tbH || gy > fwh) { gy += lineStep; continue; }
             bool foldable = isFoldableLine(ln) || isFoldStart(ln);
@@ -2533,7 +2620,9 @@ void Application::render() {
         if (!fv.empty()) { GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo()); glBufferData(GL_ARRAY_BUFFER, fv.size()*sizeof(float), fv.data(), GL_DYNAMIC_DRAW); glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(fv.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0); }
     }
 
-    for (auto& s : selections_) {
+    uint32_t cursorNowMs = SDL_GetTicks();
+    bool cursorVisible = (cursorNowMs - cursorLastInputTicks_ < 1000u) || (((cursorNowMs / 500u) % 2u) == 0u);
+    if (cursorVisible) for (auto& s : selections_) {
         size_t cl = lineOfPos(s.cursor), ls = lineStartForLine(cl);
         float cx = textX + fontAtlas().measureText(std::string_view(textBuffer.data()+ls, s.cursor-ls));
         float cy = textOriginY + cl * lineStep - scrollY_;
