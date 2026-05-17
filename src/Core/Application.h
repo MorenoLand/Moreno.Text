@@ -242,6 +242,7 @@ private:
     // popup window
     SDL_Window* popupWin_ = nullptr;
     float popupMainX_ = 0.f, popupMainY_ = 0.f, popupMainW_ = 0.f, popupMainH_ = 0.f;
+    int popupScreenX_ = 0, popupScreenY_ = 0;
     bool deferPopupDraw_ = false;
     void ensurePopupWindow();
     void renderPopupToWindow(int x, int y, int w, int h);

@@ -658,6 +658,7 @@ static void drawPopupClearRect(int w, int h) {
 
 void Application::renderPopupToWindow(int x, int y, int w, int h) {
     ensurePopupWindow();
+    popupScreenX_ = x; popupScreenY_ = y;
     SDL_SetWindowPosition(popupWin_, x, y);
     SDL_SetWindowSize(popupWin_, w, h);
     SDL_ShowWindow(popupWin_);
@@ -1151,6 +1152,14 @@ void Application::handleEvents() {
             }
         }
         if (e.type == SDL_WINDOWEVENT && e.window.windowID == SDL_GetWindowID(window_) && e.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
+            bool focusMovedToPopup = false;
+            if (popupWin_ && (SDL_GetWindowFlags(popupWin_) & SDL_WINDOW_SHOWN)) {
+                int gx = 0, gy = 0;
+                SDL_GetGlobalMouseState(&gx, &gy);
+                focusMovedToPopup = (SDL_GetWindowFlags(popupWin_) & SDL_WINDOW_INPUT_FOCUS) != 0
+                    || (gx >= popupScreenX_ && gx < popupScreenX_ + (int)popupMainW_ && gy >= popupScreenY_ && gy < popupScreenY_ + (int)popupMainH_);
+            }
+            if (focusMovedToPopup) continue;
             titlebar_->closeMenuPopup();
             tabDropdownOpen_ = false; tabContextOpen_ = false; statusPopup_ = StatusPopup::None; acActive_ = false; commandPalette_.active = false;
             hidePopupWindow();
