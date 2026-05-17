@@ -20,6 +20,7 @@ public:
     SyntaxHighlighter();
     void setLanguage(const std::string& ext);
     void setLanguageByName(const std::string& name);
+    void parse(const std::string& text);
     const std::string& languageName() const { return langName_; }
     std::vector<SyntaxToken> highlightLine(std::string_view line, size_t lineOffset) const;
     const SyntaxColor& scopeColor(int scope) const;
@@ -31,6 +32,10 @@ private:
     std::string langName_ = "Plain Text";
     int tabSize_ = 2;
     bool useTabs_ = false;
+    void* parser_ = nullptr;
+    void* tree_ = nullptr;
+    const void* language_ = nullptr;
+    std::vector<SyntaxToken> treeTokens_;
     std::unordered_set<std::string> keywords_;
     std::unordered_set<std::string> builtins_;
     std::unordered_set<std::string> types_;
@@ -53,4 +58,5 @@ private:
     void setupPython();
     void setupCPP();
     void setupPlainText();
+    void setTreeSitterLanguage(const std::string& name, const void* language);
 };

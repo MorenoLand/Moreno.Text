@@ -157,6 +157,7 @@ private:
     SDL_GLContext glContext_ = nullptr;
     AppPaths paths_;
     bool running_ = true, dirty_ = false;
+    bool syntaxDirty_ = true;
     std::string textBuffer;
     std::string openFilePath_;
     std::string openFile_ = "untitled";

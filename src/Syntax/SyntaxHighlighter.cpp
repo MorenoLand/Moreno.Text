@@ -1,16 +1,25 @@
 #include "Syntax/SyntaxHighlighter.h"
+#include "api.h"
 #include <cctype>
 #include <algorithm>
+#include <cstring>
 
 SyntaxHighlighter::SyntaxHighlighter() { setupPlainText(); }
 
+extern "C" const TSLanguage *tree_sitter_javascript(void);
+extern "C" const TSLanguage *tree_sitter_python(void);
+extern "C" const TSLanguage *tree_sitter_c(void);
+extern "C" const TSLanguage *tree_sitter_cpp(void);
+extern "C" const TSLanguage *tree_sitter_markdown(void);
+
 void SyntaxHighlighter::setLanguage(const std::string& ext) {
     keywords_.clear(); builtins_.clear(); types_.clear();
-    if (ext == "js" || ext == "jsx" || ext == "ts" || ext == "tsx" || ext == "mjs") setupJS();
-    else if (ext == "py" || ext == "pyw") setupPython();
-    else if (ext == "c" || ext == "cpp" || ext == "cc" || ext == "cxx" || ext == "h" || ext == "hpp" || ext == "hxx") setupCPP();
-    else if (ext == "json") { setupPlainText(); langName_ = "JSON"; }
-    else if (ext == "md" || ext == "markdown") { setupPlainText(); langName_ = "Markdown"; }
+    if (ext == "js" || ext == "jsx" || ext == "ts" || ext == "tsx" || ext == "mjs") { setupJS(); setTreeSitterLanguage("JavaScript", tree_sitter_javascript()); }
+    else if (ext == "py" || ext == "pyw") { setupPython(); setTreeSitterLanguage("Python", tree_sitter_python()); }
+    else if (ext == "c") { setupCPP(); setTreeSitterLanguage("C", tree_sitter_c()); }
+    else if (ext == "cpp" || ext == "cc" || ext == "cxx" || ext == "h" || ext == "hpp" || ext == "hxx") { setupCPP(); setTreeSitterLanguage("C++", tree_sitter_cpp()); }
+    else if (ext == "json") { setupPlainText(); langName_ = "JSON"; language_ = nullptr; }
+    else if (ext == "md" || ext == "markdown") { setupPlainText(); setTreeSitterLanguage("Markdown", tree_sitter_markdown()); }
     else if (ext == "xml") { setupPlainText(); langName_ = "XML"; }
     else if (ext == "yml" || ext == "yaml") { setupPlainText(); langName_ = "YAML"; }
     else if (ext == "toml") { setupPlainText(); langName_ = "TOML"; }
@@ -29,6 +38,50 @@ void SyntaxHighlighter::setLanguageByName(const std::string& name) {
     for (auto& m : map) if (name == m.name) { setLanguage(m.ext); return; }
     keywords_.clear(); builtins_.clear(); types_.clear();
     langName_ = name;
+}
+
+void SyntaxHighlighter::setTreeSitterLanguage(const std::string& name, const void* language) {
+    langName_ = name;
+    language_ = language;
+    if (!parser_) parser_ = ts_parser_new();
+    if (parser_ && language_) ts_parser_set_language((TSParser*)parser_, (const TSLanguage*)language_);
+}
+
+static int scopeForNodeType(const char* type) {
+    if (!type) return 0;
+    if (strstr(type, "comment")) return 3;
+    if (strstr(type, "string") || strstr(type, "char_literal")) return 2;
+    if (strstr(type, "number") || strstr(type, "integer") || strstr(type, "float")) return 4;
+    if (strstr(type, "type") || strstr(type, "primitive") || strstr(type, "class_name")) return 5;
+    if (strstr(type, "function") || strstr(type, "method")) return 6;
+    static const char* keywords[] = {"if","else","for","while","return","class","struct","def","function","const","let","var","import","from","try","catch","switch","case","break","continue","async","await","namespace","template","using","public","private","protected",nullptr};
+    for (int i = 0; keywords[i]; ++i) if (strcmp(type, keywords[i]) == 0) return 1;
+    static const char* operators[] = {"+","-","*","/","%","=","==","!=","<",">","<=",">=","&&","||","!","&","|","^","~","?",":",nullptr};
+    for (int i = 0; operators[i]; ++i) if (strcmp(type, operators[i]) == 0) return 7;
+    return 0;
+}
+
+void SyntaxHighlighter::parse(const std::string& text) {
+    treeTokens_.clear();
+    if (!parser_ || !language_) return;
+    if (tree_) ts_tree_delete((TSTree*)tree_);
+    tree_ = ts_parser_parse_string((TSParser*)parser_, nullptr, text.data(), (uint32_t)text.size());
+    if (!tree_) return;
+    std::vector<TSNode> stack;
+    stack.push_back(ts_tree_root_node((TSTree*)tree_));
+    while (!stack.empty()) {
+        TSNode node = stack.back();
+        stack.pop_back();
+        uint32_t childCount = ts_node_child_count(node);
+        const char* type = ts_node_type(node);
+        int scope = scopeForNodeType(type);
+        if (scope && (childCount == 0 || scope == 2 || scope == 3)) {
+            uint32_t start = ts_node_start_byte(node), end = ts_node_end_byte(node);
+            if (end > start) treeTokens_.push_back({start, end - start, scope});
+        }
+        for (uint32_t i = 0; i < childCount; ++i) stack.push_back(ts_node_child(node, childCount - 1 - i));
+    }
+    std::sort(treeTokens_.begin(), treeTokens_.end(), [](const SyntaxToken& a, const SyntaxToken& b) { return a.start < b.start; });
 }
 
 void SyntaxHighlighter::setupJS() {
@@ -63,6 +116,16 @@ void SyntaxHighlighter::setupPlainText() { langName_ = "Plain Text"; }
 static bool isWordChar(char c) { return isalnum(static_cast<unsigned char>(c)) || c == '_'; }
 
 std::vector<SyntaxToken> SyntaxHighlighter::highlightLine(std::string_view line, size_t lineOffset) const {
+    if (!treeTokens_.empty()) {
+        std::vector<SyntaxToken> out;
+        size_t lineEnd = lineOffset + line.size();
+        auto it = std::lower_bound(treeTokens_.begin(), treeTokens_.end(), lineOffset, [](const SyntaxToken& tok, size_t pos) { return tok.start + tok.length <= pos; });
+        for (; it != treeTokens_.end() && it->start < lineEnd; ++it) {
+            size_t s = std::max(it->start, lineOffset), e = std::min(it->start + it->length, lineEnd);
+            if (e > s) out.push_back({s, e - s, it->scope});
+        }
+        return out;
+    }
     std::vector<SyntaxToken> tokens;
     size_t i = 0, len = line.size();
     while (i < len) {

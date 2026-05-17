@@ -162,7 +162,7 @@ void Application::insertText(const std::string& text) {
     size_t pos = selections_[0].cursor;
     textBuffer.insert(pos, text);
     selections_[0].anchor = selections_[0].cursor = pos + text.size();
-    desiredCursorX_ = -1.f; dirty_ = true;
+    desiredCursorX_ = -1.f; dirty_ = true; syntaxDirty_ = true;
 }
 void Application::insertAtCursor(const std::string& text) { insertText(text); }
 void Application::deleteSelection() {
@@ -170,7 +170,7 @@ void Application::deleteSelection() {
     size_t a = selections_[0].min(), b = selections_[0].max();
     textBuffer.erase(a, b - a);
     selections_[0].anchor = selections_[0].cursor = a;
-    dirty_ = true;
+    dirty_ = true; syntaxDirty_ = true;
 }
 
 std::string Application::selectedTextOrLine() const {
@@ -281,10 +281,11 @@ void Application::doReplaceAll() {
 }
 
 void Application::detectSyntax() {
-    if (openFilePath_.empty()) { syntax_->setLanguage(""); return; }
+    if (openFilePath_.empty()) { syntax_->setLanguage(""); syntaxDirty_ = true; return; }
     std::string ext = fs::path(openFilePath_).extension().string();
     if (!ext.empty() && ext[0] == '.') ext = ext.substr(1);
     syntax_->setLanguage(ext);
+    syntaxDirty_ = true;
 }
 
 void Application::updateGitBranch() {
@@ -1273,6 +1274,7 @@ void Application::handleEvents() {
                 if (tl >= tot) tl = tot - 1;
                 size_t p = lineStartForLine(tl); if (shift) sel.cursor = p; else sel.anchor = sel.cursor = p; desiredCursorX_ = -1.f;
             }
+            if (dirty_) syntaxDirty_ = true;
             ensureCursorVisible();
         }
         else if (e.type == SDL_TEXTINPUT) { insertText(e.text.text); }
@@ -1283,6 +1285,10 @@ void Application::update() {
     if (sidebarRefreshPending_.exchange(false) && !sidebarRoot_.empty()) {
         sidebarTree_.children.clear();
         buildSidebarNode(sidebarTree_);
+    }
+    if (syntaxDirty_) {
+        syntax_->parse(textBuffer);
+        syntaxDirty_ = false;
     }
 }
 void Application::updateTitle() {
