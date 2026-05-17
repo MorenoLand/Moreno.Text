@@ -5,6 +5,7 @@
 #include "UI/MenuBar.h"
 #include "Settings/SettingsManager.h"
 #include "Theme/ThemeEngine.h"
+#include "Commands/KeyBindingManager.h"
 #include "UI/Gutter.h"
 #include "UI/Minimap.h"
 #include "UI/StatusBar.h"
@@ -91,6 +92,18 @@ bool Application::init(int argc, char** argv) {
         auto& theme = ThemeEngine::instance();
         if (!fs::exists(schemePath)) theme.writeDefault(schemePath);
         theme.load(schemePath);
+    }
+    // load keybindings
+    {
+        std::string defaultDir = paths_.dataDir + "/Packages/Default";
+        std::string keymapPath = defaultDir + "/Default (Windows).moreno-keymap";
+        auto& kb = KeyBindingManager::instance();
+        if (!fs::exists(keymapPath)) kb.writeDefault(keymapPath);
+        kb.load(keymapPath);
+        // user overrides
+        std::string userDir = paths_.dataDir + "/Packages/User";
+        std::string userKeymap = userDir + "/Default (Windows).moreno-keymap";
+        if (fs::exists(userKeymap)) kb.load(userKeymap);
     }
     selections_.emplace_back(0);
     TabBuffer initTab; initTab.fileName = "untitled"; initTab.selections.emplace_back(0);
