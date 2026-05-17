@@ -192,6 +192,9 @@ private:
     std::vector<SelRange> selections_;
     float desiredCursorX_ = -1.f;
     float scrollY_ = 0.f;
+    float scrollX_ = 0.f;
+    float maxLineWidth_ = 0.f;
+    bool maxLineWidthDirty_ = true;
     bool selecting_ = false;
     bool minimapDragging_ = false;
     bool minimapPendingJump_ = false;
@@ -202,7 +205,10 @@ private:
     bool fullscreen_ = false;
     bool scrollbarHovered_ = false;
     bool scrollbarDragging_ = false;
+    bool horizontalScrollbarHovered_ = false;
+    bool horizontalScrollbarDragging_ = false;
     float scrollbarDragOffset_ = 0.f;
+    float horizontalScrollbarDragOffset_ = 0.f;
     int mouseX_ = 0, mouseY_ = 0;
     float tabScrollX_ = 0.f;
     bool tabDropdownOpen_ = false;
@@ -289,6 +295,7 @@ private:
     float fpsSmoothedMs_ = 0.f;
     uint32_t cursorLastInputTicks_ = 0;
     void computeLineIndents();
+    void computeMaxLineWidth();
     bool useTabs_ = false;
     int tabSize_ = 2;
     struct UiColor { float r, g, b, a; };
