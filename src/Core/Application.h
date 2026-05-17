@@ -277,6 +277,9 @@ private:
     std::vector<int> lineIndents_;
     bool indentsDirty_ = true;
     std::vector<float> solidVerts_;
+    bool debugFpsVisible_ = false;
+    uint64_t fpsLastCounter_ = 0;
+    float fpsSmoothedMs_ = 0.f;
     void computeLineIndents();
     bool useTabs_ = false;
     int tabSize_ = 2;

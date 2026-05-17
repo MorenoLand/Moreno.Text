@@ -1643,6 +1643,13 @@ void Application::handleEvents() {
             }
             continue;
         }
+        if (e.type == SDL_KEYDOWN) {
+            auto mod = e.key.keysym.mod;
+            if (e.key.keysym.sym == SDLK_x && (mod & KMOD_SHIFT) && !(mod & KMOD_CTRL) && !(mod & KMOD_ALT)) {
+                debugFpsVisible_ = !debugFpsVisible_;
+                continue;
+            }
+        }
         // find mode input
         if (find_.active && e.type == SDL_KEYDOWN) {
             auto mod = e.key.keysym.mod; auto sym = e.key.keysym.sym;
@@ -2308,6 +2315,12 @@ void Application::updateTitle() {
 void Application::render() {
     GLRenderer::beginFrame();
     fontAtlas().resetMeasureCache();
+    uint64_t fpsNow = SDL_GetPerformanceCounter();
+    if (fpsLastCounter_ != 0) {
+        double dtMs = (double)(fpsNow - fpsLastCounter_) * 1000.0 / (double)SDL_GetPerformanceFrequency();
+        fpsSmoothedMs_ = fpsSmoothedMs_ <= 0.f ? (float)dtMs : fpsSmoothedMs_ * 0.9f + (float)dtMs * 0.1f;
+    }
+    fpsLastCounter_ = fpsNow;
     solidVerts_.clear();
     auto addSolid = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
         solidVerts_.insert(solidVerts_.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
@@ -2811,6 +2824,19 @@ void Application::render() {
         fontAtlas().drawText("Save", mx + 103.f, by + 6.f, 0.82f, 0.82f, 0.86f, 1.f);
         fontAtlas().drawText("Don't Save", mx + 198.f, by + 6.f, 0.82f, 0.82f, 0.86f, 1.f);
         fontAtlas().drawText("Cancel", mx + 315.f, by + 6.f, 0.82f, 0.82f, 0.86f, 1.f);
+    }
+    if (debugFpsVisible_) {
+        float ms = fpsSmoothedMs_ > 0.f ? fpsSmoothedMs_ : 0.f;
+        float fps = ms > 0.f ? 1000.f / ms : 0.f;
+        char fpsBuf[64];
+        snprintf(fpsBuf, sizeof(fpsBuf), "FPS %.0f  %.1f ms", fps, ms);
+        float pad = 6.f;
+        float w = fontAtlas().measureText(fpsBuf) + pad * 2.f;
+        float x = fww - w - 10.f;
+        float fpsY = titlebar_->height() + tabBarH_ + 8.f;
+        addSolid(x, fpsY, x + w, fpsY + 22.f, 0.05f, 0.05f, 0.06f, 0.82f);
+        flushSolid();
+        fontAtlas().drawText(fpsBuf, x + pad, fpsY + 4.f, 0.75f, 0.95f, 0.75f, 1.f);
     }
     GLRenderer::endFrame();
     SDL_GL_SwapWindow(window_);
