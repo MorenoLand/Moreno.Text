@@ -1,6 +1,15 @@
 #pragma once
 #include <SDL2/SDL.h>
 #include <string>
+#include <vector>
+#include <functional>
+
+struct TitlebarMenuItem {
+    std::string label;
+    std::string shortcut;
+    std::function<void()> action;
+    bool separator = false;
+};
 
 struct TitlebarButton {
     float x, y, w, h;
@@ -19,8 +28,8 @@ public:
     bool isCustom() const { return custom_; }
     void setCustom(bool c) { custom_ = c; }
     void setTitle(const std::string& t) { title_ = t; }
-    void loadIcon(const std::string& bmpPath);
     SDL_HitTestResult hitTest(int mx, int my, SDL_Window* window);
+    bool isMenuOpen() const { return menuOpen_; }
 private:
     float height_ = 32.f;
     float buttonSize_ = 46.f;
@@ -34,4 +43,11 @@ private:
     unsigned int iconTex_ = 0;
     int iconW_ = 0, iconH_ = 0;
     void updateButtonPositions(int windowWidth);
+    bool menuOpen_ = false;
+    int menuHovered_ = -1;
+    std::vector<TitlebarMenuItem> menuItems_;
+    void buildMenu();
+    void closeMenu() { menuOpen_ = false; menuHovered_ = -1; }
+    void drawMenu(class FontAtlas& font);
+    bool handleMenuEvent(const SDL_Event& e);
 };

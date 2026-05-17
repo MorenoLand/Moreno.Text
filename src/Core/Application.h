@@ -5,7 +5,6 @@
 #include <chrono>
 
 class Titlebar;
-class MenuBar;
 class Gutter;
 class Minimap;
 class StatusBar;
@@ -53,6 +52,18 @@ struct GotoState {
     int selected = 0;
 };
 
+struct TabBuffer {
+    std::string text;
+    std::string filePath;
+    std::string fileName = "untitled";
+    std::vector<SelRange> selections;
+    float scrollY = 0.f;
+    std::vector<UndoStep> undoStack, redoStack;
+    std::vector<bool> foldedLines;
+    bool dirty = false;
+    float desiredCursorX = -1.f;
+};
+
 enum class StatusPopup { None, Indent, Syntax };
 
 class Application {
@@ -66,6 +77,8 @@ public:
     void saveFile();
     void saveFileAs();
     void openFile(const std::string& path);
+    void switchToTab(size_t index);
+    void closeTab(size_t index);
 private:
     Application() = default;
     bool init(int argc, char** argv);
@@ -92,6 +105,14 @@ private:
     void doRedo();
     void doReplace();
     void doReplaceAll();
+    // tabs
+    std::vector<TabBuffer> tabs_;
+    size_t activeTab_ = 0;
+    void saveCurrentTab();
+    void loadTab(size_t index);
+    void drawTabBar(class FontAtlas& font, float windowW, float titlebarH);
+    bool handleTabBarEvent(const SDL_Event& e, float windowW, float titlebarH);
+    float tabBarH_ = 28.f;
     SDL_Window* window_ = nullptr;
     SDL_GLContext glContext_ = nullptr;
     AppPaths paths_;
@@ -106,28 +127,23 @@ private:
     std::chrono::milliseconds undoWindow_{500};
     FindState find_;
     GotoState goto_;
-    // folding
     std::vector<bool> foldedLines_;
     void toggleFold(size_t line);
     bool isFolded(size_t line) const;
     size_t findFoldEnd(size_t startLine) const;
     std::vector<int> lineIndents_;
     void computeLineIndents();
-    // indent / tab config
     bool useTabs_ = false;
     int tabSize_ = 2;
     void convertIndentation(bool toSpaces);
     void guessIndent();
-    // status bar popups
     StatusPopup statusPopup_ = StatusPopup::None;
     int popupSelected_ = 0;
     float popupX_ = 0, popupY_ = 0;
     int syntaxLangIndex_ = -1;
     static const char* syntaxLanguages[];
-    static constexpr int syntaxLangCount = 24;
-    // UI components
+    static constexpr int syntaxLangCount = 26;
     Titlebar* titlebar_ = nullptr;
-    MenuBar* menubar_ = nullptr;
     Gutter* gutter_ = nullptr;
     Minimap* minimap_ = nullptr;
     StatusBar* statusbar_ = nullptr;
