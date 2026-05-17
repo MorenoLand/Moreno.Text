@@ -20,7 +20,8 @@ public:
     bool mouseOver() const { return mouseOver_; }
     void updateHoverFade(float dt);
 private:
-    float width_ = 100.f;
+    float minimapWidth_ = 120.f;
+    float width_ = minimapWidth_;
     bool dirty_ = true;
     int lastLineCount_ = -1;
     bool mouseOver_ = false;

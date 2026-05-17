@@ -2495,19 +2495,12 @@ void Application::render() {
             if (gy > fwh) break;
             int indent = (ln < lineIndents_.size()) ? lineIndents_[ln] : 0;
             int cursorIndent = (currentLine < lineIndents_.size()) ? lineIndents_[currentLine] : 0;
-            for (int lvl = tabSize_; lvl <= indent && lvl < cursorIndent; lvl += tabSize_) {
+            int activeLvl = cursorIndent > 0 ? ((cursorIndent - 1) / tabSize_) * tabSize_ : 0;
+            for (int lvl = tabSize_; lvl <= indent; lvl += tabSize_) {
                 float gx = textX + lvl * spaceWidth;
-                bool draw = (ln + 1 < totalLines() && lineIndents_[ln+1] > lvl);
-                draw = draw || (ln > 0 && lineIndents_[ln-1] >= lvl);
-                if (draw) addSolid(gx, gy, gx + 1, gy + lineStep, 0.231f, 0.251f, 0.282f, 0.15f);
-            }
-            // active indent guide at cursor's indent level
-            if (indent > 0 && ln == currentLine) {
-                int activeLvl = ((cursorIndent - 1) / tabSize_) * tabSize_;
-                if (activeLvl > 0) {
-                    float gx = textX + activeLvl * spaceWidth;
-                    addSolid(gx, gy, gx + 1, gy + lineStep, 0.294f, 0.314f, 0.345f, 0.35f);
-                }
+                bool active = activeLvl > 0 && lvl == activeLvl;
+                if (active) addSolid(gx, gy, gx + 1, gy + lineStep, 0.420f, 0.447f, 0.502f, 0.75f);
+                else addSolid(gx, gy, gx + 1, gy + lineStep, 0.294f, 0.314f, 0.345f, 0.55f);
             }
             gy += lineStep;
         }
