@@ -2615,9 +2615,8 @@ void Application::render() {
         float rowH = 30.f, barH = find_.replaceActive ? rowH * 2.f + 2.f : rowH;
         float barY = fwh - sbH - barH;
         float barW = editorRight;
-        std::vector<float> fbv;
         auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
-            fbv.insert(fbv.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
+            addSolid(x0, y0, x1, y1, r, g, b, a);
         };
         // panel background
         ar(0, barY, barW, barY + barH, 0.16f, 0.16f, 0.19f, 1.f);
@@ -2626,10 +2625,36 @@ void Application::render() {
         float fieldX = 8.f, fieldW = barW - 220.f, fieldH = 22.f;
         float fy = barY + (rowH - fieldH) / 2.f;
         ar(fieldX, fy, fieldX + fieldW, fy + fieldH, 0.12f, 0.12f, 0.14f, 1.f);
-        // find text + cursor
+        // toggle buttons
+        float btnX = fieldX + fieldW + 8.f;
+        auto toggleBtn = [&](const char* label, bool active, float x) {
+            ar(x, fy, x + 28.f, fy + fieldH, active ? 0.25f : 0.14f, active ? 0.28f : 0.14f, active ? 0.35f : 0.16f, 1.f);
+        };
+        toggleBtn("/Re", find_.regex, btnX); btnX += 32.f;
+        toggleBtn("Aa", find_.caseSensitive, btnX); btnX += 32.f;
+        toggleBtn("\\b", find_.wholeWord, btnX); btnX += 32.f;
+        float findButtonX = btnX;
+        btnX += fontAtlas().measureText("Find") + 12.f;
+        float prevButtonX = btnX;
+        btnX += fontAtlas().measureText("Prev") + 12.f;
+        float allButtonX = btnX;
+        float replaceFieldY = 0.f;
+        float replaceButtonX = 0.f;
+        float replaceAllButtonX = 0.f;
+        // replace row
+        if (find_.replaceActive) {
+            float ry = barY + rowH + 2.f;
+            float rfy = ry + (rowH - fieldH) / 2.f;
+            replaceFieldY = rfy;
+            ar(fieldX, rfy, fieldX + fieldW, rfy + fieldH, 0.12f, 0.12f, 0.14f, 1.f);
+            float rbx = fieldX + fieldW + 8.f + 96.f; // skip toggle column
+            replaceButtonX = rbx;
+            rbx += fontAtlas().measureText("Replace") + 14.f;
+            replaceAllButtonX = rbx;
+        }
+        flushSolid();
         std::string findText = find_.query + (findFocus_ == 0 ? "|" : "");
         fontAtlas().drawText(findText, fieldX + 6.f, fy + 4.f, 0.85f, 0.85f, 0.88f, 1.f);
-        // match count
         if (!find_.matches.empty()) {
             std::string mc = std::to_string(find_.currentMatch + 1) + " of " + std::to_string(find_.matches.size());
             float mcW = fontAtlas().measureText(mc);
@@ -2638,40 +2663,19 @@ void Application::render() {
             float mw = fontAtlas().measureText("No matches");
             fontAtlas().drawText("No matches", fieldX + fieldW - mw - 8.f, fy + 4.f, 0.6f, 0.3f, 0.3f, 1.f);
         }
-        // toggle buttons
-        float btnX = fieldX + fieldW + 8.f;
-        auto toggleBtn = [&](const char* label, bool active, float x) {
-            ar(x, fy, x + 28.f, fy + fieldH, active ? 0.25f : 0.14f, active ? 0.28f : 0.14f, active ? 0.35f : 0.16f, 1.f);
-            fontAtlas().drawText(label, x + 4.f, fy + 4.f, active ? 0.95f : 0.45f, active ? 0.85f : 0.45f, active ? 0.95f : 0.5f, 1.f);
-        };
-        toggleBtn("/Re", find_.regex, btnX); btnX += 32.f;
-        toggleBtn("Aa", find_.caseSensitive, btnX); btnX += 32.f;
-        toggleBtn("\\b", find_.wholeWord, btnX); btnX += 32.f;
-        // find buttons
-        fontAtlas().drawText("Find", btnX + 4.f, fy + 4.f, 0.7f, 0.75f, 0.7f, 1.f);
-        btnX += fontAtlas().measureText("Find") + 12.f;
-        fontAtlas().drawText("Prev", btnX + 4.f, fy + 4.f, 0.5f, 0.55f, 0.5f, 1.f);
-        btnX += fontAtlas().measureText("Prev") + 12.f;
-        fontAtlas().drawText("All", btnX + 4.f, fy + 4.f, 0.5f, 0.55f, 0.5f, 1.f);
-        // close X
+        fontAtlas().drawText("/Re", fieldX + fieldW + 12.f, fy + 4.f, find_.regex ? 0.95f : 0.45f, find_.regex ? 0.85f : 0.45f, find_.regex ? 0.95f : 0.5f, 1.f);
+        fontAtlas().drawText("Aa", fieldX + fieldW + 44.f, fy + 4.f, find_.caseSensitive ? 0.95f : 0.45f, find_.caseSensitive ? 0.85f : 0.45f, find_.caseSensitive ? 0.95f : 0.5f, 1.f);
+        fontAtlas().drawText("\\b", fieldX + fieldW + 76.f, fy + 4.f, find_.wholeWord ? 0.95f : 0.45f, find_.wholeWord ? 0.85f : 0.45f, find_.wholeWord ? 0.95f : 0.5f, 1.f);
+        fontAtlas().drawText("Find", findButtonX + 4.f, fy + 4.f, 0.7f, 0.75f, 0.7f, 1.f);
+        fontAtlas().drawText("Prev", prevButtonX + 4.f, fy + 4.f, 0.5f, 0.55f, 0.5f, 1.f);
+        fontAtlas().drawText("All", allButtonX + 4.f, fy + 4.f, 0.5f, 0.55f, 0.5f, 1.f);
         fontAtlas().drawText("\xc3\x97", barW - 18.f, fy + 3.f, 0.6f, 0.6f, 0.6f, 1.f);
-        // replace row
         if (find_.replaceActive) {
-            float ry = barY + rowH + 2.f;
-            float rfy = ry + (rowH - fieldH) / 2.f;
-            ar(fieldX, rfy, fieldX + fieldW, rfy + fieldH, 0.12f, 0.12f, 0.14f, 1.f);
             std::string repText = find_.replace + (findFocus_ == 1 ? "|" : "");
-            fontAtlas().drawText(repText, fieldX + 6.f, rfy + 4.f, 0.85f, 0.85f, 0.88f, 1.f);
-            // replace buttons
-            float rbx = fieldX + fieldW + 8.f + 96.f; // skip toggle column
-            fontAtlas().drawText("Replace", rbx, rfy + 4.f, 0.7f, 0.75f, 0.7f, 1.f);
-            rbx += fontAtlas().measureText("Replace") + 14.f;
-            fontAtlas().drawText("Replace All", rbx, rfy + 4.f, 0.7f, 0.75f, 0.7f, 1.f);
+            fontAtlas().drawText(repText, fieldX + 6.f, replaceFieldY + 4.f, 0.85f, 0.85f, 0.88f, 1.f);
+            fontAtlas().drawText("Replace", replaceButtonX, replaceFieldY + 4.f, 0.7f, 0.75f, 0.7f, 1.f);
+            fontAtlas().drawText("Replace All", replaceAllButtonX, replaceFieldY + 4.f, 0.7f, 0.75f, 0.7f, 1.f);
         }
-        GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
-        glBufferData(GL_ARRAY_BUFFER, fbv.size()*sizeof(float), fbv.data(), GL_DYNAMIC_DRAW);
-        glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(fbv.size()/8));
-        glBindVertexArray(0); GLRenderer::setDrawMode(0);
     }
     // goto overlay
     if (goto_.active) {
