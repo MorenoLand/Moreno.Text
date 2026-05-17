@@ -70,6 +70,20 @@ void Titlebar::getMenuPopupBounds(FontAtlas& font, float& x, float& y, float& w,
         minY = std::min(minY, submenuRect.y);
         maxX = std::max(maxX, submenuRect.x + submenuRect.w);
         maxY = std::max(maxY, submenuRect.y + submenuRect.h);
+        if (submenuOpen_ == 0 && submenuHovered_ == 3) {
+            auto& recent = Application::instance().recentFiles();
+            int count = std::max(1, static_cast<int>(recent.size()));
+            int rw = 360;
+            for (auto& path : recent) rw = std::max(rw, static_cast<int>(font.measureText(path) + 28.f));
+            int rh = 2 + count * 24 + 1;
+            int rx = submenuRect.x + submenuRect.w + 2;
+            int ry = submenuRect.y + 2 + 3 * 24;
+            if (rx + rw > 32000 - 4) rx = submenuRect.x - rw - 2;
+            minX = std::min(minX, rx);
+            minY = std::min(minY, ry);
+            maxX = std::max(maxX, rx + rw);
+            maxY = std::max(maxY, ry + rh);
+        }
     }
     x = static_cast<float>(minX) - 3.f;
     y = height_ + static_cast<float>(minY) - 3.f;
@@ -129,6 +143,7 @@ void Titlebar::drawMenuPopup(FontAtlas& font, float ox, float oy) {
     float ddW = maxW, ddH = 2.f + visibleCount * itemH + arrowH * 2.f;
     lastMenuX_ = ddX + ox; lastMenuY_ = ddY + oy; lastMenuW_ = ddW; lastMenuH_ = ddH;
     lastHasSubmenu_ = false; lastSubmenuW_ = 0.f; lastSubmenuH_ = 0.f;
+    lastHasRecent_ = false; lastRecentW_ = 0.f; lastRecentH_ = 0.f;
     std::vector<float> v;
     auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
         v.insert(v.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
@@ -193,6 +208,29 @@ void Titlebar::drawMenuPopup(FontAtlas& font, float ox, float oy) {
             if (!item.shortcut.empty()) font.drawText(item.shortcut, sx + sw - font.measureText(item.shortcut) - 12.f, iy, 0.5f, 0.5f, 0.55f, 1.f);
         }
         glDisable(GL_SCISSOR_TEST);
+        if (submenuOpen_ == 0 && submenuHovered_ == 3) {
+            auto& recent = Application::instance().recentFiles();
+            int count = std::max(1, static_cast<int>(recent.size()));
+            float rx = sx + sw + 2.f, ry = sy + 2.f + 3.f * itemH;
+            float rw = 360.f, rh = 2.f + count * itemH;
+            for (auto& path : recent) rw = std::max(rw, font.measureText(path) + 28.f);
+            bool popupLocal = ox != 0.f || oy != 0.f;
+            if (!popupLocal && rx + rw > ww - 4.f) rx = sx - rw - 2.f;
+            lastHasRecent_ = true; lastRecentX_ = rx + ox; lastRecentY_ = ry + oy; lastRecentW_ = rw; lastRecentH_ = rh;
+            v.clear();
+            ar(rx, ry, rx + rw, ry + rh, 0.17f, 0.17f, 0.20f, 0.98f);
+            if (recentHovered_ >= 0 && recentHovered_ < static_cast<int>(recent.size()))
+                ar(rx + 2, ry + 2 + recentHovered_ * itemH, rx + rw - 2, ry + 2 + (recentHovered_ + 1) * itemH, 0.25f, 0.30f, 0.45f, 1.f);
+            flushSolid(v);
+            if (recent.empty()) {
+                font.drawText("(Empty)", rx + 12.f, ry + 6.f, 0.42f, 0.42f, 0.46f, 1.f);
+            } else {
+                for (int i = 0; i < static_cast<int>(recent.size()); ++i) {
+                    float b = recentHovered_ == i ? 1.f : 0.78f;
+                    font.drawText(recent[i], rx + 12.f, ry + 6.f + i * itemH, b, b, b, 1.f);
+                }
+            }
+        }
     }
 }
 
@@ -292,6 +330,13 @@ bool Titlebar::handleMenuEvent(const SDL_Event& e) {
     if (e.type == SDL_MOUSEMOTION) {
         float mx = (float)e.motion.x, my = (float)e.motion.y;
         menuHovered_ = -1;
+        recentHovered_ = -1;
+        if (lastHasRecent_ && mx >= lastRecentX_ && mx < lastRecentX_ + lastRecentW_ && my >= lastRecentY_ && my < lastRecentY_ + lastRecentH_) {
+            auto& recent = Application::instance().recentFiles();
+            int idx = (int)((my - lastRecentY_ - 2.f) / itemH);
+            if (idx >= 0 && idx < static_cast<int>(recent.size())) recentHovered_ = idx;
+            return true;
+        }
         if (mx >= ddX && mx < ddX + ddW && my >= ddY && my < ddY + ddH) {
             int idx = menuScroll_ + (int)((my - ddY - arrowH - 2) / itemH);
             if (idx >= 0 && idx < (int)menuItems_.size() && !menuItems_[idx].separator) { menuHovered_ = idx; submenuOpen_ = menuItems_[idx].submenu; submenuHovered_ = -1; }
@@ -317,11 +362,21 @@ bool Titlebar::handleMenuEvent(const SDL_Event& e) {
     }
     if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == 1) {
         float mx = (float)e.button.x, my = (float)e.button.y;
+        if (lastHasRecent_ && mx >= lastRecentX_ && mx < lastRecentX_ + lastRecentW_ && my >= lastRecentY_ && my < lastRecentY_ + lastRecentH_) {
+            auto& recent = Application::instance().recentFiles();
+            int idx = (int)((my - lastRecentY_ - 2.f) / itemH);
+            if (idx >= 0 && idx < static_cast<int>(recent.size())) {
+                Application::instance().openRecentFile(static_cast<size_t>(idx));
+                closeMenu();
+            }
+            return true;
+        }
         if (lastHasSubmenu_) {
             float sx = lastSubmenuX_, sy = lastSubmenuY_, sw = lastSubmenuW_;
             if (mx >= sx && mx < sx + sw && my >= sy + 2.f && my < sy + 2.f + submenus_[submenuOpen_].size() * itemH) {
                 int idx = (int)((my - sy - 2.f) / itemH);
                 auto& sm = submenus_[submenuOpen_];
+                if (submenuOpen_ == 0 && idx == 3) return true;
                 if (idx >= 0 && idx < (int)sm.size() && !sm[idx].separator && sm[idx].action) { sm[idx].action(); closeMenu(); submenuOpen_ = -1; return true; }
                 return true;
             }

@@ -97,6 +97,8 @@ public:
     void saveFile();
     void saveFileAs();
     void openFile(const std::string& path);
+    void openRecentFile(size_t index);
+    const std::vector<std::string>& recentFiles() const { return recentFiles_; }
     void switchToTab(size_t index);
     void closeTab(size_t index);
     void closeCurrentTab() { closeTab(activeTab_); }
@@ -141,6 +143,11 @@ private:
     bool init(int argc, char** argv);
     void shutdown();
     void initPaths();
+    void loadRecentFiles();
+    void saveRecentFiles() const;
+    void rememberRecentFile(const std::string& path);
+    bool loadSession();
+    void saveSession();
     void handleEvents();
     void update();
     void render();
@@ -304,6 +311,7 @@ private:
     std::mutex gitBranchMutex_;
     std::atomic<bool> gitBranchBusy_{false};
     std::vector<std::string> closedTabStack_;
+    std::vector<std::string> recentFiles_;
     bool closeConfirmOpen_ = false;
     size_t closeConfirmIndex_ = 0;
     std::string menuStyle_ = "icon";

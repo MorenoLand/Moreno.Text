@@ -11,6 +11,7 @@
 #include "UI/StatusBar.h"
 #include "Syntax/SyntaxHighlighter.h"
 #include "Platform/Platform.h"
+#include <nlohmann/json.hpp>
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_syswm.h>
 #include <GL/glew.h>
@@ -173,6 +174,8 @@ bool Application::init(int argc, char** argv) {
     minimap_ = new Minimap();
     statusbar_ = new StatusBar();
     syntax_ = new SyntaxHighlighter();
+    fs::create_directories(paths_.localDir);
+    loadRecentFiles();
     // window icon
     std::string iconPath = (fs::path(paths_.exeDir) / "Assets" / "moreno_text.ico").string();
     if (!fs::exists(iconPath)) iconPath = (fs::path(paths_.exeDir) / ".." / "Assets" / "moreno_text.ico").string();
@@ -189,6 +192,7 @@ bool Application::init(int argc, char** argv) {
     }
     SDL_StartTextInput();
     if (argc > 1 && fs::exists(argv[1])) openFile(argv[1]);
+    else if (!loadSession()) newBuffer();
     return true;
 }
 
@@ -222,6 +226,109 @@ void Application::initPaths() {
 }
 
 // ── buffer helpers ──
+
+void Application::loadRecentFiles() {
+    recentFiles_.clear();
+    std::ifstream f(fs::path(paths_.localDir) / "recent_files.json");
+    if (!f) return;
+    try {
+        auto data = nlohmann::json::parse(f);
+        if (!data.is_array()) return;
+        for (auto& item : data) {
+            if (!item.is_string()) continue;
+            std::string path = item.get<std::string>();
+            if (path.empty() || !fs::exists(path)) continue;
+            if (std::find(recentFiles_.begin(), recentFiles_.end(), path) == recentFiles_.end()) recentFiles_.push_back(path);
+            if (recentFiles_.size() >= 10) break;
+        }
+    } catch (...) {}
+}
+
+void Application::saveRecentFiles() const {
+    try {
+        fs::create_directories(paths_.localDir);
+        nlohmann::json data = nlohmann::json::array();
+        for (auto& path : recentFiles_) data.push_back(path);
+        std::ofstream f(fs::path(paths_.localDir) / "recent_files.json", std::ios::binary);
+        if (f) f << data.dump(2);
+    } catch (...) {}
+}
+
+void Application::rememberRecentFile(const std::string& path) {
+    if (path.empty()) return;
+    std::string absPath;
+    try { absPath = fs::absolute(path).string(); } catch (...) { absPath = path; }
+    recentFiles_.erase(std::remove(recentFiles_.begin(), recentFiles_.end(), absPath), recentFiles_.end());
+    recentFiles_.insert(recentFiles_.begin(), absPath);
+    if (recentFiles_.size() > 10) recentFiles_.resize(10);
+    saveRecentFiles();
+}
+
+void Application::openRecentFile(size_t index) {
+    if (index >= recentFiles_.size()) return;
+    std::string path = recentFiles_[index];
+    if (!fs::exists(path)) {
+        recentFiles_.erase(recentFiles_.begin() + index);
+        saveRecentFiles();
+        return;
+    }
+    openFile(path);
+}
+
+bool Application::loadSession() {
+    std::ifstream f(fs::path(paths_.localDir) / "session.json");
+    if (!f) return false;
+    try {
+        auto data = nlohmann::json::parse(f);
+        if (!data.is_object() || !data.contains("tabs") || !data["tabs"].is_array()) return false;
+        tabs_.clear();
+        size_t restoreActive = data.value("active_tab", 0);
+        for (auto& item : data["tabs"]) {
+            if (!item.is_object()) continue;
+            std::string path = item.value("path", "");
+            if (path.empty() || !fs::exists(path)) continue;
+            std::ifstream tf(path, std::ios::binary);
+            if (!tf) continue;
+            std::ostringstream ss; ss << tf.rdbuf();
+            TabBuffer tab;
+            tab.text = ss.str();
+            tab.filePath = path;
+            tab.fileName = fs::path(path).filename().string();
+            tab.scrollY = item.value("scrollY", 0.f);
+            size_t cursor = item.value("cursor", 0ull);
+            if (cursor > tab.text.size()) cursor = tab.text.size();
+            tab.selections.emplace_back(cursor);
+            tabs_.push_back(std::move(tab));
+            rememberRecentFile(path);
+        }
+        if (tabs_.empty()) return false;
+        if (restoreActive >= tabs_.size()) restoreActive = tabs_.size() - 1;
+        loadTab(restoreActive);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+void Application::saveSession() {
+    saveCurrentTab();
+    try {
+        fs::create_directories(paths_.localDir);
+        nlohmann::json data;
+        data["active_tab"] = activeTab_;
+        data["tabs"] = nlohmann::json::array();
+        for (auto& tab : tabs_) {
+            if (tab.filePath.empty()) continue;
+            nlohmann::json item;
+            item["path"] = tab.filePath;
+            item["scrollY"] = tab.scrollY;
+            item["cursor"] = tab.selections.empty() ? 0 : tab.selections[0].cursor;
+            data["tabs"].push_back(item);
+        }
+        std::ofstream f(fs::path(paths_.localDir) / "session.json", std::ios::binary);
+        if (f) f << data.dump(2);
+    } catch (...) {}
+}
 
 size_t Application::lineStart(size_t pos) const { if (pos == 0) return 0; size_t p = textBuffer.rfind('\n', pos - 1); return p == std::string::npos ? 0 : p + 1; }
 size_t Application::lineEnd(size_t pos) const { size_t p = textBuffer.find('\n', pos); return p == std::string::npos ? textBuffer.size() : p; }
@@ -417,14 +524,17 @@ void Application::openFile(const std::string& path) {
     saveCurrentTab();
     std::ifstream f(path, std::ios::binary); if (!f) return;
     std::ostringstream ss; ss << f.rdbuf();
-    TabBuffer tab; tab.text = ss.str(); tab.filePath = path; tab.fileName = fs::path(path).filename().string();
+    std::string absPath;
+    try { absPath = fs::absolute(path).string(); } catch (...) { absPath = path; }
+    TabBuffer tab; tab.text = ss.str(); tab.filePath = absPath; tab.fileName = fs::path(absPath).filename().string();
     tab.selections.emplace_back(tab.text.size());
     tabs_.push_back(std::move(tab)); activeTab_ = tabs_.size()-1;
-    textBuffer = tabs_[activeTab_].text; openFilePath_ = path; openFile_ = tabs_[activeTab_].fileName;
+    textBuffer = tabs_[activeTab_].text; openFilePath_ = absPath; openFile_ = tabs_[activeTab_].fileName;
     dirty_ = false; selections_.clear(); selections_.emplace_back(textBuffer.size());
     scrollY_ = 0; undoStack_.clear(); redoStack_.clear(); foldedRegions_.clear(); detectSyntax(); updateGitBranch();
+    rememberRecentFile(absPath);
 }
-void Application::saveFile() { if (openFilePath_.empty()) { saveFileAs(); return; } std::ofstream f(openFilePath_, std::ios::binary); if (!f) return; f << textBuffer; dirty_ = false; updateGitBranch(); }
+void Application::saveFile() { if (openFilePath_.empty()) { saveFileAs(); return; } std::ofstream f(openFilePath_, std::ios::binary); if (!f) return; f << textBuffer; dirty_ = false; rememberRecentFile(openFilePath_); updateGitBranch(); }
 void Application::saveFileAs() {
 #ifdef _WIN32
     closeAllPopups();
@@ -432,7 +542,7 @@ void Application::saveFileAs() {
     char buf[MAX_PATH] = {}; OPENFILENAMEA ofn = {}; ofn.lStructSize = sizeof(ofn);
     ofn.lpstrFilter = "All Files\0*.*\0Text Files\0*.txt\0"; ofn.lpstrFile = buf; ofn.nMaxFile = MAX_PATH;
     ofn.Flags = OFN_OVERWRITEPROMPT; ofn.lpstrDefExt = "txt";
-    if (GetSaveFileNameA(&ofn)) { openFilePath_ = buf; openFile_ = fs::path(buf).filename().string(); detectSyntax(); saveFile(); updateGitBranch(); }
+    if (GetSaveFileNameA(&ofn)) { try { openFilePath_ = fs::absolute(buf).string(); } catch (...) { openFilePath_ = buf; } openFile_ = fs::path(openFilePath_).filename().string(); detectSyntax(); saveFile(); updateGitBranch(); }
     inOsDialog_ = false;
 #endif
 }
@@ -441,7 +551,7 @@ void Application::saveAll() {
     for (auto& tab : tabs_) {
         if (tab.filePath.empty() || !tab.dirty) continue;
         std::ofstream f(tab.filePath, std::ios::binary);
-        if (f) { f << tab.text; tab.dirty = false; }
+        if (f) { f << tab.text; tab.dirty = false; rememberRecentFile(tab.filePath); }
     }
     loadTab(activeTab_);
 }
@@ -3197,6 +3307,8 @@ void Application::render() {
 }
 
 void Application::shutdown() {
+    saveSession();
+    saveRecentFiles();
     sidebarWatchRunning_ = false;
     if (popupWin_) { SDL_DestroyWindow(popupWin_); popupWin_ = nullptr; }
     delete syntax_; delete statusbar_; delete minimap_; delete gutter_; delete titlebar_;
