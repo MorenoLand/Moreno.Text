@@ -28,6 +28,7 @@ public:
     void setTabSize(int sz) { tabSize_ = sz; }
     bool useTabs() const { return useTabs_; }
     void setUseTabs(bool t) { useTabs_ = t; }
+    void notifyEdit(size_t startByte, size_t oldEndByte, size_t newEndByte, size_t startRow, size_t startCol, size_t oldEndRow, size_t oldEndCol, size_t newEndRow, size_t newEndCol);
 private:
     std::string langName_ = "Plain Text";
     int tabSize_ = 2;

@@ -84,6 +84,7 @@ void Titlebar::drawMenu(FontAtlas& font) {
             continue;
         }
         float ib = (menuHovered_ == i) ? 1.f : 0.78f;
+        if (!item.action && !item.separator) ib = 0.4f;
         font.drawText(item.label, ddX + 12.f, iy, ib, ib, ib, 1.f);
         if (!item.shortcut.empty())
             font.drawText(item.shortcut, ddX + ddW - font.measureText(item.shortcut) - 12.f, iy, 0.5f, 0.5f, 0.55f, 1.f);
@@ -113,6 +114,7 @@ void Titlebar::drawMenu(FontAtlas& font) {
             float iy = sy + 6.f + i * itemH;
             if (item.separator) { v.clear(); ar(sx + 8, sy + 13.f + i * itemH, sx + sw - 8, sy + 14.f + i * itemH, 0.3f, 0.3f, 0.33f, 1.f); flushSolid(v); continue; }
             float b = (submenuHovered_ == i) ? 1.f : 0.78f;
+            if (!item.action && !item.separator) b = 0.4f;
             font.drawText(item.label, sx + 12.f, iy, b, b, b, 1.f);
             if (!item.shortcut.empty()) font.drawText(item.shortcut, sx + sw - font.measureText(item.shortcut) - 12.f, iy, 0.5f, 0.5f, 0.55f, 1.f);
         }

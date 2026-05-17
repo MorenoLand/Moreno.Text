@@ -211,6 +211,7 @@ private:
     std::string menuStyle_ = "icon";
     void convertIndentation(bool toSpaces);
     void guessIndent();
+    void notifySyntaxEdit(size_t startByte, size_t oldEndByte, size_t newEndByte);
     StatusPopup statusPopup_ = StatusPopup::None;
     int popupSelected_ = 0;
     int popupScroll_ = 0;

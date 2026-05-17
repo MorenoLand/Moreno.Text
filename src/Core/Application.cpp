@@ -158,17 +158,25 @@ size_t Application::colOfPos(size_t pos) const { size_t ls = lineStart(pos); ret
 
 void Application::insertText(const std::string& text) {
     pushUndo();
+    size_t oldPos = selections_[0].cursor;
     if (selections_[0].hasSelection()) deleteSelection();
     size_t pos = selections_[0].cursor;
+    size_t startRow = lineOfPos(pos), startCol = pos - lineStart(pos);
     textBuffer.insert(pos, text);
-    selections_[0].anchor = selections_[0].cursor = pos + text.size();
+    size_t newPos = pos + text.size();
+    size_t newEndRow = lineOfPos(newPos), newEndCol = newPos - lineStart(newPos);
+    syntax_->notifyEdit(pos, pos, newPos, startRow, startCol, startRow, startCol, newEndRow, newEndCol);
+    selections_[0].anchor = selections_[0].cursor = newPos;
     desiredCursorX_ = -1.f; dirty_ = true; syntaxDirty_ = true;
 }
 void Application::insertAtCursor(const std::string& text) { insertText(text); }
 void Application::deleteSelection() {
     if (!selections_[0].hasSelection()) return;
     size_t a = selections_[0].min(), b = selections_[0].max();
+    size_t startRow = lineOfPos(a), startCol = a - lineStart(a);
+    size_t oldEndRow = lineOfPos(b), oldEndCol = b - lineStart(b);
     textBuffer.erase(a, b - a);
+    syntax_->notifyEdit(a, b, a, startRow, startCol, oldEndRow, oldEndCol, startRow, startCol);
     selections_[0].anchor = selections_[0].cursor = a;
     dirty_ = true; syntaxDirty_ = true;
 }
@@ -1531,6 +1539,60 @@ void Application::render() {
         std::vector<float> cv = {cx,ct,0,0,accentColor_.r,accentColor_.g,accentColor_.b,1.f, cx,cb,0,0,accentColor_.r,accentColor_.g,accentColor_.b,1.f, cx+2,cb,0,0,accentColor_.r,accentColor_.g,accentColor_.b,1.f, cx,ct,0,0,accentColor_.r,accentColor_.g,accentColor_.b,1.f, cx+2,cb,0,0,accentColor_.r,accentColor_.g,accentColor_.b,1.f, cx+2,ct,0,0,accentColor_.r,accentColor_.g,accentColor_.b,1.f};
         glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo()); glBufferData(GL_ARRAY_BUFFER, cv.size()*sizeof(float), cv.data(), GL_DYNAMIC_DRAW);
         glBindTexture(GL_TEXTURE_2D, fontAtlas().atlasTexture()); glDrawArrays(GL_TRIANGLES, 0, 6); glBindVertexArray(0);
+    }
+    // bracket matching
+    {
+        auto drawBracketBox = [&](size_t pos, float r, float g, float b) {
+            if (pos >= textBuffer.size()) return;
+            size_t ln = lineOfPos(pos), ls = lineStartForLine(ln);
+            float bx = textX + fontAtlas().measureText(std::string_view(textBuffer.data()+ls, pos-ls));
+            float by = textOriginY + ln * lineStep - scrollY_;
+            if (by + lineStep < tbH || by > fwh) return;
+            float bw = fontAtlas().getGlyph((uint8_t)textBuffer[pos]).advance;
+            float ct = by, cb = by + fontAtlas().ascent() - fontAtlas().descent();
+            std::vector<float> bv;
+            // draw 4 line segments as thin quads forming a box outline
+            float t = 1.f; // thickness
+            // top
+            bv.insert(bv.end(),{bx-t,ct-t,0,0,r,g,b,0.7f, bx+bw+t,ct-t,0,0,r,g,b,0.7f, bx+bw+t,ct,0,0,r,g,b,0.7f, bx-t,ct-t,0,0,r,g,b,0.7f, bx+bw+t,ct,0,0,r,g,b,0.7f, bx-t,ct,0,0,r,g,b,0.7f});
+            // bottom
+            bv.insert(bv.end(),{bx-t,cb,0,0,r,g,b,0.7f, bx+bw+t,cb,0,0,r,g,b,0.7f, bx+bw+t,cb+t,0,0,r,g,b,0.7f, bx-t,cb,0,0,r,g,b,0.7f, bx+bw+t,cb+t,0,0,r,g,b,0.7f, bx-t,cb+t,0,0,r,g,b,0.7f});
+            // left
+            bv.insert(bv.end(),{bx-t,ct,0,0,r,g,b,0.7f, bx,ct,0,0,r,g,b,0.7f, bx,cb,0,0,r,g,b,0.7f, bx-t,ct,0,0,r,g,b,0.7f, bx,cb,0,0,r,g,b,0.7f, bx-t,cb,0,0,r,g,b,0.7f});
+            // right
+            bv.insert(bv.end(),{bx+bw,ct,0,0,r,g,b,0.7f, bx+bw+t,ct,0,0,r,g,b,0.7f, bx+bw+t,cb,0,0,r,g,b,0.7f, bx+bw,ct,0,0,r,g,b,0.7f, bx+bw+t,cb,0,0,r,g,b,0.7f, bx+bw,cb,0,0,r,g,b,0.7f});
+            GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
+            glBufferData(GL_ARRAY_BUFFER, bv.size()*sizeof(float), bv.data(), GL_DYNAMIC_DRAW);
+            glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(bv.size()/8));
+            glBindVertexArray(0); GLRenderer::setDrawMode(0);
+        };
+        auto findMatch = [&](size_t pos) -> size_t {
+            if (pos >= textBuffer.size()) return (size_t)-1;
+            char c = textBuffer[pos];
+            char openCh = 0, closeCh = 0; bool forward = true;
+            if (c=='(') { openCh='('; closeCh=')'; }
+            else if (c==')') { openCh='('; closeCh=')'; forward=false; }
+            else if (c=='[') { openCh='['; closeCh=']'; }
+            else if (c==']') { openCh='['; closeCh=']'; forward=false; }
+            else if (c=='{') { openCh='{'; closeCh='}'; }
+            else if (c=='}') { openCh='{'; closeCh='}'; forward=false; }
+            else return (size_t)-1;
+            int depth = 1;
+            if (forward) { for (size_t p = pos+1; p < textBuffer.size(); ++p) { if (textBuffer[p]==openCh) ++depth; else if (textBuffer[p]==closeCh) { if (--depth==0) return p; } } }
+            else { for (size_t p = pos; p-- > 0; ) { if (textBuffer[p]==closeCh) ++depth; else if (textBuffer[p]==openCh) { if (--depth==0) return p; } } }
+            return (size_t)-1;
+        };
+        size_t cur = selections_[0].cursor;
+        for (int off : {0, (cur > 0 ? -1 : 0)}) {
+            size_t pos = (off == -1) ? cur - 1 : cur;
+            if (pos >= textBuffer.size()) continue;
+            char c = textBuffer[pos];
+            if (c!='(' && c!=')' && c!='[' && c!=']' && c!='{' && c!='}') continue;
+            size_t match = findMatch(pos);
+            if (match != (size_t)-1) { drawBracketBox(pos, 0.325f, 0.545f, 1.f); drawBracketBox(match, 0.325f, 0.545f, 1.f); }
+            else { drawBracketBox(pos, 0.878f, 0.424f, 0.459f); }
+            break;
+        }
     }
     glDisable(GL_SCISSOR_TEST);
     // scrollbar

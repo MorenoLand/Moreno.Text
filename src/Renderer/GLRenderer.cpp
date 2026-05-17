@@ -105,7 +105,7 @@ void GLRenderer::resize(int w, int h) { s_width = w; s_height = h; }
 
 void GLRenderer::beginFrame() {
     glViewport(0, 0, s_width, s_height);
-    glClearColor(0.12f, 0.12f, 0.14f, 1.f);
+    glClearColor(0.20f, 0.20f, 0.22f, 1.f);
     glClear(GL_COLOR_BUFFER_BIT);
     glUseProgram(s_shaderProgram);
     float proj[16];

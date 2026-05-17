@@ -64,9 +64,12 @@ static int scopeForNodeType(const char* type) {
 void SyntaxHighlighter::parse(const std::string& text) {
     treeTokens_.clear();
     if (!parser_ || !language_) return;
-    if (tree_) ts_tree_delete((TSTree*)tree_);
-    tree_ = ts_parser_parse_string((TSParser*)parser_, nullptr, text.data(), (uint32_t)text.size());
-    if (!tree_) return;
+    TSParser* p = (TSParser*)parser_;
+    TSTree* oldTree = (TSTree*)tree_;
+    TSTree* newTree = ts_parser_parse_string(p, oldTree, text.data(), (uint32_t)text.size());
+    if (oldTree) ts_tree_delete(oldTree);
+    tree_ = newTree;
+    if (!newTree) return;
     std::vector<TSNode> stack;
     stack.push_back(ts_tree_root_node((TSTree*)tree_));
     while (!stack.empty()) {
@@ -196,4 +199,16 @@ std::vector<SyntaxToken> SyntaxHighlighter::highlightLine(std::string_view line,
 
 const SyntaxColor& SyntaxHighlighter::scopeColor(int scope) const {
     return colors_[(scope >= 0 && scope < 9) ? scope : 0];
+}
+
+void SyntaxHighlighter::notifyEdit(size_t startByte, size_t oldEndByte, size_t newEndByte, size_t startRow, size_t startCol, size_t oldEndRow, size_t oldEndCol, size_t newEndRow, size_t newEndCol) {
+    if (!tree_) return;
+    TSInputEdit edit;
+    edit.start_byte = (uint32_t)startByte;
+    edit.old_end_byte = (uint32_t)oldEndByte;
+    edit.new_end_byte = (uint32_t)newEndByte;
+    edit.start_point = {static_cast<uint32_t>(startRow), static_cast<uint32_t>(startCol)};
+    edit.old_end_point = {static_cast<uint32_t>(oldEndRow), static_cast<uint32_t>(oldEndCol)};
+    edit.new_end_point = {static_cast<uint32_t>(newEndRow), static_cast<uint32_t>(newEndCol)};
+    ts_tree_edit((TSTree*)tree_, &edit);
 }
