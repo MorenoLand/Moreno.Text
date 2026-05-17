@@ -1702,6 +1702,38 @@ void Application::handleEvents() {
                 scrollY_ = rel * maxScroll; clampScroll(); continue;
             }
             if (selecting_) {
+                if (boxSelActive_) {
+                    float sidebarOffset = sidebarVisible_ ? sidebarWidth_ : 0.f;
+                    float gutterW = sidebarOffset + gutter_->width(), textX = gutterW + 8.0f;
+                    float clickY = (float)e.motion.y - tbH + scrollY_;
+                    int endLine = clickY > 0.f ? (int)std::floor(clickY / lineStep) : 0;
+                    if (endLine >= (int)totalLines()) endLine = (int)totalLines() - 1;
+                    float charW = std::max(1.f, fontAtlas().measureText(" "));
+                    boxSelEndCol_ = std::max(0, (int)std::floor(((float)e.motion.x - textX) / charW));
+                    boxSelEndLine_ = endLine;
+                    int minLine = std::min(boxSelStartLine_, boxSelEndLine_);
+                    int maxLine = std::max(boxSelStartLine_, boxSelEndLine_);
+                    int minCol = std::min(boxSelStartCol_, boxSelEndCol_);
+                    int maxCol = std::max(boxSelStartCol_, boxSelEndCol_);
+                    selections_.clear();
+                    for (int ln = minLine; ln <= maxLine; ++ln) {
+                        size_t ls = lineStartForLine(ln), le = lineEnd(ls);
+                        std::string_view lt(textBuffer.data() + ls, le - ls);
+                        size_t colA = 0, colB = 0; int vc = 0;
+                        for (size_t i = 0; i < lt.size();) {
+                            uint32_t cp = (uint8_t)lt[i]; int b = 1;
+                            if (cp>=0xF0) b=4; else if (cp>=0xE0) b=3; else if (cp>=0xC0) b=2;
+                            int step = (cp=='\t') ? tabSize_ : 1;
+                            if (vc == minCol) colA = i;
+                            if (vc + step > maxCol) { colB = i; break; }
+                            vc += step; i += b;
+                        }
+                        if (colA == 0 && minCol > 0) colA = lt.size();
+                        if (colB == 0) colB = lt.size();
+                        selections_.emplace_back(ls + colA, ls + colB);
+                    }
+                    continue;
+                }
                 float sidebarOffset = sidebarVisible_ ? sidebarWidth_ : 0.f;
                 float gutterW = sidebarOffset + gutter_->width(), textX = gutterW + 8.0f;
                 float clickY = (float)e.motion.y - tbH + scrollY_;
@@ -1870,7 +1902,14 @@ void Application::handleEvents() {
                     visualCol += step; col += b; i += b;
                 }
                 size_t clickPos = ls + col;
-                if (mod & KMOD_CTRL) selections_.emplace_back(clickPos);
+                if (mod & KMOD_CTRL) { selections_.emplace_back(clickPos); }
+                else if (mod & KMOD_ALT) {
+                    boxSelActive_ = true;
+                    int clickLine = (int)lineOfPos(clickPos);
+                    boxSelStartLine_ = clickLine; boxSelStartCol_ = (int)col;
+                    boxSelEndLine_ = clickLine; boxSelEndCol_ = (int)col;
+                    selections_.clear(); selections_.emplace_back(clickPos);
+                }
                 else if (mod & KMOD_SHIFT) selections_[0].cursor = clickPos;
                 else { selections_.clear(); selections_.emplace_back(clickPos); }
                 selecting_ = true;
@@ -1880,6 +1919,7 @@ void Application::handleEvents() {
         }
         else if (e.type == SDL_MOUSEBUTTONUP && e.button.button == 1) {
             selecting_ = false;
+            boxSelActive_ = false;
             minimapDragging_ = false;
             scrollbarDragging_ = false;
         }
@@ -1899,6 +1939,22 @@ void Application::handleEvents() {
             else if (ctrl && sym == SDLK_k) { pendingCtrlK_ = true; }
             else if (ctrl && shift && sym == SDLK_UP) { swapLineUp(); }
             else if (ctrl && shift && sym == SDLK_DOWN) { swapLineDown(); }
+            else if (ctrl && (mod & KMOD_ALT) && sym == SDLK_UP) {
+                int curLine = (int)lineOfPos(selections_[0].cursor);
+                if (curLine > 0) {
+                    size_t ls = lineStartForLine(curLine - 1);
+                    size_t col = std::min(selections_[0].cursor - lineStart(selections_[0].cursor), lineEnd(ls) - ls);
+                    selections_.insert(selections_.begin(), SelRange(ls + col));
+                }
+            }
+            else if (ctrl && (mod & KMOD_ALT) && sym == SDLK_DOWN) {
+                int curLine = (int)lineOfPos(selections_[0].cursor);
+                if (curLine < (int)totalLines() - 1) {
+                    size_t ls = lineStartForLine(curLine + 1);
+                    size_t col = std::min(selections_[0].cursor - lineStart(selections_[0].cursor), lineEnd(ls) - ls);
+                    selections_.emplace_back(ls + col);
+                }
+            }
             else if (ctrl && shift && sym == SDLK_d) { duplicateLine(); }
             else if (ctrl && shift && sym == SDLK_k) { deleteLine(); }
             else if (ctrl && shift && sym == SDLK_j) { joinLines(); }

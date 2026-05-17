@@ -261,6 +261,10 @@ private:
     float tabDragOffsetX_ = 0.f;
     // word wrap
     bool wordWrap_ = false;
+    // box/column selection
+    bool boxSelActive_ = false;
+    int boxSelStartLine_ = 0, boxSelStartCol_ = 0;
+    int boxSelEndLine_ = 0, boxSelEndCol_ = 0;
     // auto pair
     bool autoPair_ = true;
     bool inOsDialog_ = false;
