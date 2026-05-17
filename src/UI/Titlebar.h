@@ -56,6 +56,9 @@ private:
     int submenuHovered_ = -1;
     int menuScroll_ = 0;
     bool menuDeferred_ = false;
+    float lastMenuX_ = 0.f, lastMenuY_ = 0.f, lastMenuW_ = 150.f, lastMenuH_ = 0.f;
+    float lastSubmenuX_ = 0.f, lastSubmenuY_ = 0.f, lastSubmenuW_ = 0.f, lastSubmenuH_ = 0.f;
+    bool lastHasSubmenu_ = false;
     std::vector<TitlebarMenuItem> menuItems_;
     std::vector<std::vector<TitlebarMenuItem>> submenus_;
     void buildMenu();
