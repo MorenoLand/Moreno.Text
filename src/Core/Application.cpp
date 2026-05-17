@@ -2680,16 +2680,15 @@ void Application::render() {
     // goto overlay
     if (goto_.active) {
         float ow = 400.f, oh = 200.f, ox = (fww - ow) / 2.f, oy = tbH + 20.f;
-        std::vector<float> gv;
         auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
-            gv.insert(gv.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
+            addSolid(x0, y0, x1, y1, r, g, b, a);
         };
         ar(ox, oy, ox + ow, oy + oh, 0.15f, 0.15f, 0.18f, 0.97f);
         ar(ox, oy, ox + ow, oy + 28, 0.12f, 0.12f, 0.14f, 1.f);
         // selected item highlight
         if (goto_.selected >= 0 && goto_.selected < (int)goto_.items.size())
             ar(ox, oy + 28 + goto_.selected * 22, ox + ow, oy + 28 + (goto_.selected + 1) * 22, 0.22f, 0.28f, 0.42f, 1.f);
-        GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo()); glBufferData(GL_ARRAY_BUFFER, gv.size()*sizeof(float), gv.data(), GL_DYNAMIC_DRAW); glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(gv.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0);
+        flushSolid();
         fontAtlas().drawText("Goto: " + goto_.query + "|", ox + 8, oy + 6, 0.8f, 0.8f, 0.8f, 1.f);
         const char* modeLabel = gotoMode_ == Symbols ? "Symbols" : gotoMode_ == Lines ? "Go to Line" : gotoMode_ == Words ? "Words" : "Files";
         float mlW = fontAtlas().measureText(modeLabel);
