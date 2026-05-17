@@ -125,7 +125,6 @@ void Titlebar::drawMenuPopup(FontAtlas& font, float ox, float oy) {
     float ddX = -ox, ddY = height_ - oy;
     float itemH = 24.f;
     int visibleCount = (int)menuItems_.size();
-    bool scrollable = false;
     float arrowH = 0.f;
     float ddW = maxW, ddH = 2.f + visibleCount * itemH + arrowH * 2.f;
     lastMenuX_ = ddX + ox; lastMenuY_ = ddY + oy; lastMenuW_ = ddW; lastMenuH_ = ddH;
@@ -275,7 +274,6 @@ bool Titlebar::handleMenuEvent(const SDL_Event& e) {
     float ddX = lastMenuX_, ddY = lastMenuY_;
     float ddW = lastMenuW_, itemH = 24.f;
     int visibleCount = (int)menuItems_.size();
-    bool scrollable = false;
     float arrowH = 0.f;
     float ddH = lastMenuH_ > 0.f ? lastMenuH_ : 2.f + visibleCount * itemH + arrowH * 2.f;
     auto clampMenuScroll = [&] {
@@ -336,15 +334,19 @@ bool Titlebar::handleMenuEvent(const SDL_Event& e) {
 
 SDL_HitTestResult Titlebar::hitTest(int mx, int my, SDL_Window* window) {
     int ww, wh; SDL_GetWindowSize(window, &ww, &wh);
-    float re = resizeEdge_;
-    if (mx < re && my < re) return SDL_HITTEST_RESIZE_TOPLEFT;
-    if (mx >= ww-re && my < re) return SDL_HITTEST_RESIZE_TOPRIGHT;
-    if (mx < re && my >= wh-re) return SDL_HITTEST_RESIZE_BOTTOMLEFT;
-    if (mx >= ww-re && my >= wh-re) return SDL_HITTEST_RESIZE_BOTTOMRIGHT;
-    if (my < re) return SDL_HITTEST_RESIZE_TOP;
-    if (my >= wh-re) return SDL_HITTEST_RESIZE_BOTTOM;
-    if (mx < re) return SDL_HITTEST_RESIZE_LEFT;
-    if (mx >= ww-re) return SDL_HITTEST_RESIZE_RIGHT;
+    int re = static_cast<int>(resizeEdge_);
+    bool left = mx >= 0 && mx < re;
+    bool right = mx >= ww - re && mx < ww;
+    bool top = my >= 0 && my < re;
+    bool bottom = my >= wh - re && my < wh;
+    if (left && top) return SDL_HITTEST_RESIZE_TOPLEFT;
+    if (right && top) return SDL_HITTEST_RESIZE_TOPRIGHT;
+    if (left && bottom) return SDL_HITTEST_RESIZE_BOTTOMLEFT;
+    if (right && bottom) return SDL_HITTEST_RESIZE_BOTTOMRIGHT;
+    if (top) return SDL_HITTEST_RESIZE_TOP;
+    if (bottom) return SDL_HITTEST_RESIZE_BOTTOM;
+    if (left) return SDL_HITTEST_RESIZE_LEFT;
+    if (right) return SDL_HITTEST_RESIZE_RIGHT;
     if (my < static_cast<int>(height_)) {
         for (auto& btn : buttons_)
             if (mx >= static_cast<int>(btn.x) && mx <= static_cast<int>(btn.x + btn.w)) return SDL_HITTEST_NORMAL;

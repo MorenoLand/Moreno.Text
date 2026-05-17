@@ -15,7 +15,7 @@ void StatusBar::draw(FontAtlas& font, float windowW, float windowH, float minima
         verts.insert(verts.end(), { x0,y0, 0,0, r,g,b,a, x0,y1, 0,0, r,g,b,a, x1,y1, 0,0, r,g,b,a });
         verts.insert(verts.end(), { x0,y0, 0,0, r,g,b,a, x1,y1, 0,0, r,g,b,a, x1,y0, 0,0, r,g,b,a });
     };
-    addRect(0, barY, windowW - minimapW, windowH, 0.15f, 0.15f, 0.18f, 1.f);
+    addRect(0, barY, windowW, windowH, 0.15f, 0.15f, 0.18f, 1.f);
     GLRenderer::setDrawMode(2);
     glBindVertexArray(gl_vao());
     glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
@@ -55,7 +55,7 @@ void StatusBar::draw(FontAtlas& font, float windowW, float windowH, float minima
     snprintf(indentBuf, sizeof(indentBuf), useTabs ? "Tab Size: %d" : "Spaces: %d", tabSize);
     float synW = font.measureText(syntaxName);
     float indW = font.measureText(indentBuf);
-    float rightEdge = windowW - minimapW - 12.f;
+    float rightEdge = windowW - 12.f;
     syntaxLabelX_ = rightEdge - synW;
     syntaxLabelW_ = synW + 6.f;
     indentLabelX_ = syntaxLabelX_ - indW - 24.f;

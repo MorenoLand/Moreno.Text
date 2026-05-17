@@ -155,6 +155,7 @@ bool Application::init(int argc, char** argv) {
     window_ = SDL_CreateWindow("Moreno Text", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         1280, 720, SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_BORDERLESS);
     if (!window_) { fprintf(stderr, "SDL_CreateWindow: %s\n", SDL_GetError()); return false; }
+    SDL_SetWindowResizable(window_, SDL_TRUE);
     SDL_SetWindowMinimumSize(window_, 400, 300);
     glContext_ = SDL_GL_CreateContext(window_);
     if (!glContext_) { fprintf(stderr, "GL context: %s\n", SDL_GetError()); return false; }
@@ -1792,7 +1793,7 @@ void Application::handleEvents() {
                 continue;
             }
         }
-        if (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
+        if (e.type == SDL_WINDOWEVENT && (e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED || e.window.event == SDL_WINDOWEVENT_RESIZED)) {
             SDL_GL_GetDrawableSize(window_, &ww, &wh); GLRenderer::resize(ww, wh); titlebar_->layout(ww);
         }
         else if (e.type == SDL_MOUSEMOTION) {
@@ -1970,7 +1971,7 @@ void Application::handleEvents() {
             }
             // status bar click
             if (my >= fwh - sbH && my < fwh) {
-                float editorRight = fww - (minimapVisible_ ? minimap_->width() : 0.f);
+                float editorRight = fww;
                 std::string indentLabel = useTabs_ ? ("Tab Size: " + std::to_string(tabSize_)) : ("Spaces: " + std::to_string(tabSize_));
                 float indentW = fontAtlas().measureText(indentLabel);
                 std::string synLabel = syntax_->languageName();
