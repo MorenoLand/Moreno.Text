@@ -546,9 +546,8 @@ void Application::drawSidebar(FontAtlas& font, float windowH, float titlebarH, f
     std::vector<float> v;
     addSolidRect(v, 0, titlebarH, sidebarWidth_, windowH - statusbarH, 0.129f, 0.145f, 0.169f, 1.f);
     addSolidRect(v, sidebarWidth_ - 1.f, titlebarH, sidebarWidth_, windowH - statusbarH, 0.08f, 0.09f, 0.11f, 1.f);
-    GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
-    glBufferData(GL_ARRAY_BUFFER, v.size()*sizeof(float), v.data(), GL_DYNAMIC_DRAW);
-    glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(v.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0);
+    struct SidebarTextDraw { std::string text; float x, y, r, g, b; };
+    std::vector<SidebarTextDraw> textDraws;
     float rowH = 22.f, y = titlebarH + 6.f - sidebarScrollY_;
     sidebarContentH_ = 0.f;
     std::function<void(SidebarNode&)> countNode = [&](SidebarNode& node) {
@@ -565,18 +564,16 @@ void Application::drawSidebar(FontAtlas& font, float windowH, float titlebarH, f
             if (rowY + rowH < titlebarH || rowY > windowH - statusbarH) return;
             float x = 8.f + node.depth * 14.f;
             bool active = !node.folder && !openFilePath_.empty() && fs::absolute(node.path).string() == fs::absolute(openFilePath_).string();
-            std::vector<float> rv;
-            if (active) addSolidRect(rv, 2.f, rowY - 3.f, sidebarWidth_ - 4.f, rowY + rowH - 3.f, 0.25f, 0.30f, 0.45f, 1.f);
+            if (active) addSolidRect(v, 2.f, rowY - 3.f, sidebarWidth_ - 4.f, rowY + rowH - 3.f, 0.25f, 0.30f, 0.45f, 1.f);
             float ir = node.folder ? 0.86f : 0.45f, ig = node.folder ? 0.66f : 0.55f, ib = node.folder ? 0.22f : 0.65f;
             std::string ext = node.extension;
             if (ext == ".h") { ir = 0.2f; ig = 0.75f; ib = 0.75f; } else if (ext == ".py") { ir = 0.9f; ig = 0.78f; ib = 0.25f; }
             else if (ext == ".js") { ir = 0.9f; ig = 0.55f; ib = 0.2f; } else if (ext == ".json") { ir = 0.45f; ig = 0.75f; ib = 0.35f; }
             else if (ext == ".md") { ir = ig = ib = 0.85f; } else if (ext == ".txt") { ir = ig = ib = 0.55f; }
-            addSolidRect(rv, x + 12.f, rowY + 3.f, x + 20.f, rowY + 13.f, ir, ig, ib, 1.f);
-            if (!rv.empty()) { GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo()); glBufferData(GL_ARRAY_BUFFER, rv.size()*sizeof(float), rv.data(), GL_DYNAMIC_DRAW); glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(rv.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0); }
-            if (node.folder) font.drawText(node.expanded ? "v" : ">", x, rowY, 0.55f, 0.55f, 0.58f, 1.f);
+            addSolidRect(v, x + 12.f, rowY + 3.f, x + 20.f, rowY + 13.f, ir, ig, ib, 1.f);
+            if (node.folder) textDraws.push_back({node.expanded ? "v" : ">", x, rowY, 0.55f, 0.55f, 0.58f});
             float b = active ? 0.95f : 0.68f;
-            font.drawText(node.name, x + 26.f, rowY, b, b, b + 0.03f, 1.f);
+            textDraws.push_back({node.name, x + 26.f, rowY, b, b, b + 0.03f});
         }
         if (node.folder && node.expanded) for (auto& child : node.children) drawNode(child);
     };
@@ -584,12 +581,14 @@ void Application::drawSidebar(FontAtlas& font, float windowH, float titlebarH, f
     if (sidebarContentH_ > viewH) {
         float thumbH = std::max(20.f, viewH * (viewH / sidebarContentH_));
         float thumbY = titlebarH + (sidebarScrollY_ / maxScroll) * (viewH - thumbH);
-        std::vector<float> sv;
-        addSolidRect(sv, sidebarWidth_ - 5.f, thumbY, sidebarWidth_ - 1.f, thumbY + thumbH, 0.29f, 0.29f, 0.29f, 1.f);
-        GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
-        glBufferData(GL_ARRAY_BUFFER, sv.size()*sizeof(float), sv.data(), GL_DYNAMIC_DRAW);
-        glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(sv.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0);
+        addSolidRect(v, sidebarWidth_ - 5.f, thumbY, sidebarWidth_ - 1.f, thumbY + thumbH, 0.29f, 0.29f, 0.29f, 1.f);
     }
+    if (!v.empty()) {
+        GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
+        glBufferData(GL_ARRAY_BUFFER, v.size()*sizeof(float), v.data(), GL_DYNAMIC_DRAW);
+        glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(v.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0);
+    }
+    for (const auto& td : textDraws) font.drawText(td.text, td.x, td.y, td.r, td.g, td.b, 1.f);
 }
 
 bool Application::handleSidebarEvent(const SDL_Event& e, float windowH, float titlebarH, float statusbarH) {
@@ -2614,7 +2613,9 @@ void Application::render() {
     // status bar
     std::string branch;
     { std::lock_guard<std::mutex> lock(gitBranchMutex_); branch = gitBranch_; }
-    statusbar_->draw(fontAtlas(), fww, fwh, mmW, currentLine, currentCol, syntax_->languageName(), useTabs_, tabSize_, branch);
+    statusbar_->appendSolidRects(fontAtlas(), solidVerts_, fww, fwh, currentLine, currentCol, branch);
+    flushSolid();
+    statusbar_->drawText(fontAtlas(), fww, fwh, currentLine, currentCol, syntax_->languageName(), useTabs_, tabSize_, branch);
     // find bar
     if (find_.active) {
         float rowH = 30.f, barH = find_.replaceActive ? rowH * 2.f + 2.f : rowH;
