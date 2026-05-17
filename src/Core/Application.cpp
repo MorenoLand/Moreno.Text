@@ -2702,17 +2702,14 @@ void Application::render() {
     }
     if (commandPalette_.active) {
         float ow = 560.f, oh = 286.f, ox = (fww - ow) / 2.f, oy = tbH + 36.f;
-        std::vector<float> cv;
         auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
-            cv.insert(cv.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
+            addSolid(x0, y0, x1, y1, r, g, b, a);
         };
         ar(ox, oy, ox + ow, oy + oh, 0.15f, 0.15f, 0.18f, 0.98f);
         ar(ox, oy, ox + ow, oy + 32.f, 0.12f, 0.12f, 0.14f, 1.f);
         if (commandPalette_.selected >= 0 && commandPalette_.selected < (int)commandPalette_.results.size())
             ar(ox + 2.f, oy + 34.f + commandPalette_.selected * 24.f, ox + ow - 2.f, oy + 34.f + (commandPalette_.selected + 1) * 24.f, 0.25f, 0.30f, 0.45f, 1.f);
-        GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
-        glBufferData(GL_ARRAY_BUFFER, cv.size()*sizeof(float), cv.data(), GL_DYNAMIC_DRAW);
-        glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(cv.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0);
+        flushSolid();
         fontAtlas().drawText("Command Palette: " + commandPalette_.query + "|", ox + 10.f, oy + 8.f, 0.84f, 0.84f, 0.86f, 1.f);
         int visible = std::min(10, (int)commandPalette_.results.size());
         for (int row = 0; row < visible; ++row) {
