@@ -2543,7 +2543,12 @@ void Application::render() {
         if (!sv.empty()) { GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo()); glBufferData(GL_ARRAY_BUFFER, sv.size()*sizeof(float), sv.data(), GL_DYNAMIC_DRAW); glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(sv.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0); }
     }
     // minimap
-    if (minimapVisible_) minimap_->draw(fontAtlas(), *syntax_, textBuffer, fww - mmW, textOriginY, fwh, tbH, gutterW, lineStep, scrollY_, mouseX_ >= (int)(fww - mmW) && mouseY_ >= (int)tbH && mouseY_ < (int)(fwh - sbH));
+    if (minimapVisible_) {
+        bool mmOver = mouseX_ >= (int)(fww - mmW) && mouseY_ >= (int)tbH && mouseY_ < (int)(fwh - sbH);
+        minimap_->setMouseOver(mmOver);
+        minimap_->updateHoverFade(1.f/60.f);
+        minimap_->draw(fontAtlas(), *syntax_, textBuffer, fww - mmW, textOriginY, fwh, tbH, gutterW, lineStep, scrollY_, mmOver);
+    }
     // status bar
     std::string branch;
     { std::lock_guard<std::mutex> lock(gitBranchMutex_); branch = gitBranch_; }

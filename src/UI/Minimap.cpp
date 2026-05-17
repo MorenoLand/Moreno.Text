@@ -82,15 +82,15 @@ void Minimap::draw(FontAtlas& font, SyntaxHighlighter& syntax, const std::string
         y += miniLineStep;
         lineStart = lineEnd + 1;
     }
+    // fixed-size viewport ~15% of minimap height
     {
-        float visibleLines = lineStep > 0.f ? viewH / lineStep : (float)lineCount;
-        float frac = lineCount > 0 ? visibleLines / (float)lineCount : 1.f;
-        if (frac > 1.f) frac = 1.f;
-        float vpH = minimapH * frac;
+        float vpH = minimapH * 0.15f;
+        float contentH = lineCount * lineStep;
+        float maxScroll = contentH > viewH ? contentH - viewH : 0.f;
         float vpTop = top + (maxScroll > 0.f ? (scrollY / maxScroll) * (minimapH - vpH) : 0.f);
         if (vpTop < top) vpTop = top;
         if (vpTop + vpH > bottom) vpTop = bottom - vpH;
-        float a = hovered ? 0.44f : 0.376f;
+        float a = hoverFade_;
         addRect(originX, vpTop, originX + width_, vpTop + vpH, 0.267f, 0.267f, 0.267f, a);
         addRect(originX, vpTop, originX + width_, vpTop + 1, 0.34f, 0.34f, 0.34f, a);
         addRect(originX, vpTop + vpH - 1, originX + width_, vpTop + vpH, 0.34f, 0.34f, 0.34f, a);
@@ -101,4 +101,11 @@ void Minimap::draw(FontAtlas& font, SyntaxHighlighter& syntax, const std::string
 bool Minimap::handleClick(float mx, float my, float& scrollRatio) {
     scrollRatio = 0.f;
     return false;
+}
+
+void Minimap::updateHoverFade(float dt) {
+    float target = mouseOver_ ? 0.376f : 0.078f;
+    float speed = 1.0f / 0.15f;
+    if (hoverFade_ < target) hoverFade_ = std::min(target, hoverFade_ + speed * dt);
+    else if (hoverFade_ > target) hoverFade_ = std::max(target, hoverFade_ - speed * dt);
 }

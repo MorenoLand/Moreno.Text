@@ -16,8 +16,13 @@ public:
     bool isDirty() const { return dirty_; }
     void markDirty() { dirty_ = true; }
     void markClean() { dirty_ = false; }
+    void setMouseOver(bool over) { mouseOver_ = over; }
+    bool mouseOver() const { return mouseOver_; }
+    void updateHoverFade(float dt);
 private:
     float width_ = 100.f;
     bool dirty_ = true;
     int lastLineCount_ = -1;
+    bool mouseOver_ = false;
+    float hoverFade_ = 0.2f;
 };
