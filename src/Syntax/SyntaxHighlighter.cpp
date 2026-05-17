@@ -1,4 +1,5 @@
 #include "Syntax/SyntaxHighlighter.h"
+#include "Theme/ThemeEngine.h"
 #include "api.h"
 #include <cctype>
 #include <algorithm>
@@ -226,7 +227,14 @@ std::vector<SyntaxToken> SyntaxHighlighter::highlightLine(std::string_view line,
 }
 
 const SyntaxColor& SyntaxHighlighter::scopeColor(int scope) const {
-    return colors_[(scope >= 0 && scope < 9) ? scope : 0];
+    static const char* scopeNames[] = {"","keyword","string","comment","number","type","function","operator","punctuation"};
+    static thread_local SyntaxColor cached[9];
+    if (scope >= 1 && scope < 9) {
+        ThemeColor tc = ThemeEngine::instance().colorForScope(scopeNames[scope]);
+        cached[scope] = {tc.r, tc.g, tc.b}; return cached[scope];
+    }
+    ThemeColor tc = ThemeEngine::instance().fgColor();
+    cached[0] = {tc.r, tc.g, tc.b}; return cached[0];
 }
 
 void SyntaxHighlighter::notifyEdit(size_t startByte, size_t oldEndByte, size_t newEndByte, size_t startRow, size_t startCol, size_t oldEndRow, size_t oldEndCol, size_t newEndRow, size_t newEndCol) {
