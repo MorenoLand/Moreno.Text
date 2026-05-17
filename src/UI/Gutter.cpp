@@ -12,7 +12,7 @@ extern GLuint gl_vbo();
 int Gutter::digitCount(size_t n) { int d = 1; while (n >= 10) { n /= 10; ++d; } return d; }
 
 void Gutter::draw(FontAtlas& font, size_t totalLines, size_t currentLine,
-                  float originY, float lineStep, float windowH, float titlebarH) {
+                  size_t firstVisibleLine, float originY, float lineStep, float windowH, float titlebarH) {
     int digits = digitCount(totalLines);
     float charW = font.measureText("8");
     width_ = digits * charW + padding_ * 2 + 12.f;
@@ -41,7 +41,7 @@ void Gutter::draw(FontAtlas& font, size_t totalLines, size_t currentLine,
     }
     // line numbers (font atlas mode — drawText handles mode internally)
     float y = originY;
-    for (size_t line = 0; line < totalLines; ++line) {
+    for (size_t line = firstVisibleLine; line < totalLines; ++line) {
         if (y - font.ascent() > windowH) break;
         if (y + font.descent() >= titlebarH) {
             std::string num = std::to_string(line + 1);

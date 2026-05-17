@@ -410,20 +410,39 @@ void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
         v.insert(v.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
     };
     float barY = titlebarH;
-    ar(0, barY, windowW, barY + tabBarH_, 0.14f, 0.14f, 0.17f, 1.f);
-    ar(0, barY + tabBarH_, windowW, barY + tabBarH_ + 1, 0.10f, 0.10f, 0.12f, 1.f);
-    float tx = 4.f;
+    float controlsW = 60.f;
+    float visibleW = windowW - controlsW;
+    ar(0, barY, windowW, barY + tabBarH_, 0.25f, 0.25f, 0.28f, 1.f);
+    float totalTabsW = 0.f;
+    for (auto& tab : tabs_) {
+        std::string label = tab.fileName.empty() ? "untitled" : tab.fileName;
+        if (tab.dirty) label += "\xe2\x80\xa2";
+        totalTabsW += std::clamp(font.measureText(label) + 48.f, 48.f, 180.f) - 17.f;
+    }
+    float maxTabScroll = totalTabsW > visibleW ? totalTabsW - visibleW : 0.f;
+    if (tabScrollX_ > maxTabScroll) tabScrollX_ = maxTabScroll;
+    if (tabScrollX_ < 0.f) tabScrollX_ = 0.f;
+    float tx = -tabScrollX_;
+    struct TabDrawLabel { size_t index; float x; std::string text; };
+    std::vector<TabDrawLabel> labels;
+    labels.reserve(tabs_.size());
     for (size_t i = 0; i < tabs_.size(); ++i) {
-        std::string label = tabs_[i].fileName;
+        std::string label = tabs_[i].fileName.empty() ? "untitled" : tabs_[i].fileName;
         if (tabs_[i].dirty) label += "\xe2\x80\xa2";
-        float tw = font.measureText(label) + 28.f;
+        float tw = std::clamp(font.measureText(label) + 48.f, 48.f, 180.f);
+        if (tx + tw < 0.f) { tx += tw; continue; }
+        if (tx > visibleW) break;
         if (i == activeTab_) {
-            ar(tx, barY, tx + tw, barY + tabBarH_, 0.18f, 0.18f, 0.21f, 1.f);
-            ar(tx, barY + tabBarH_, tx + tw, barY + tabBarH_ + 1, 0.22f, 0.44f, 0.72f, 1.f);
+            ar(tx, barY, tx + tw, barY + tabBarH_, 0.20f, 0.20f, 0.23f, 1.f);
+            ar(tx, barY, tx + tw, barY + 2, 0.22f, 0.48f, 0.78f, 1.f);
         }
-        font.drawText(label, tx + 8.f, barY + 5.f, (i==activeTab_)?0.9f:0.65f, (i==activeTab_)?0.9f:0.65f, (i==activeTab_)?0.95f:0.7f, 1.f);
-        font.drawText("\xc3\x97", tx + tw - 16.f, barY + tabBarH_/2.f - 4.f, 0.5f, 0.5f, 0.55f, 1.f);
-        tx += tw + 1.f;
+        labels.push_back({i, tx, label});
+        tx += tw - 17.f;
+    }
+    ar(visibleW, barY, windowW, barY + tabBarH_, 0.18f, 0.18f, 0.21f, 1.f);
+    for (int i = 0; i < 3; ++i) {
+        float x = visibleW + i * 20.f;
+        ar(x, barY, x + 20.f, barY + tabBarH_, 0.21f, 0.21f, 0.24f, 1.f);
     }
     if (!v.empty()) {
         GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
@@ -431,25 +450,87 @@ void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
         glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(v.size()/8));
         glBindVertexArray(0); GLRenderer::setDrawMode(0);
     }
+    for (auto& label : labels) {
+        float lx = label.x;
+        float textBright = (label.index == activeTab_) ? 0.85f : 0.55f;
+        font.drawText(label.text, lx + 12.f, barY + 5.f, textBright, textBright, textBright+0.05f, 1.f);
+        float tw = std::clamp(font.measureText(label.text) + 48.f, 48.f, 180.f);
+        font.drawText("\xc3\x97", lx + tw - 20.f, barY + tabBarH_/2.f - 8.f, 0.55f, 0.55f, 0.60f, 1.f);
+    }
+    float activeBright = maxTabScroll > 0.f ? 0.8f : 0.35f;
+    font.drawText("<", visibleW + 7.f, barY + 5.f, tabScrollX_ > 0.f ? activeBright : 0.35f, tabScrollX_ > 0.f ? activeBright : 0.35f, tabScrollX_ > 0.f ? activeBright : 0.35f, 1.f);
+    font.drawText(">", visibleW + 27.f, barY + 5.f, tabScrollX_ < maxTabScroll ? activeBright : 0.35f, tabScrollX_ < maxTabScroll ? activeBright : 0.35f, tabScrollX_ < maxTabScroll ? activeBright : 0.35f, 1.f);
+    font.drawText("v", visibleW + 47.f, barY + 5.f, 0.75f, 0.75f, 0.78f, 1.f);
+    if (tabDropdownOpen_) {
+        float popW = 260.f, itemH = 24.f, popH = tabs_.size() * itemH + 4.f, popX = windowW - popW - 2.f, popY = barY + tabBarH_;
+        std::vector<float> pv;
+        auto pr = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
+            pv.insert(pv.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
+        };
+        pr(popX, popY, popX + popW, popY + popH, 0.17f, 0.17f, 0.20f, 0.98f);
+        if (tabDropdownHover_ >= 0 && tabDropdownHover_ < (int)tabs_.size())
+            pr(popX + 2, popY + 2 + tabDropdownHover_ * itemH, popX + popW - 2, popY + 2 + (tabDropdownHover_ + 1) * itemH, 0.25f, 0.30f, 0.45f, 1.f);
+        GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
+        glBufferData(GL_ARRAY_BUFFER, pv.size()*sizeof(float), pv.data(), GL_DYNAMIC_DRAW);
+        glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(pv.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0);
+        for (size_t i = 0; i < tabs_.size(); ++i) {
+            std::string label = tabs_[i].fileName.empty() ? "untitled" : tabs_[i].fileName;
+            if (tabs_[i].dirty) label += "\xe2\x80\xa2";
+            float b = i == activeTab_ ? 0.95f : 0.70f;
+            font.drawText(label, popX + 10.f, popY + 6.f + i * itemH, b, b, b + 0.03f, 1.f);
+        }
+    }
 }
 
 bool Application::handleTabBarEvent(const SDL_Event& e, float windowW, float titlebarH) {
     float barY = titlebarH;
-    if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == 1) {
+    float controlsW = 60.f, visibleW = windowW - controlsW;
+    float totalTabsW = 0.f;
+    for (auto& tab : tabs_) {
+        std::string label = tab.fileName.empty() ? "untitled" : tab.fileName;
+        if (tab.dirty) label += "\xe2\x80\xa2";
+        totalTabsW += std::clamp(fontAtlas().measureText(label) + 48.f, 48.f, 180.f) - 17.f;
+    }
+    float maxTabScroll = totalTabsW > visibleW ? totalTabsW - visibleW : 0.f;
+    if (e.type == SDL_MOUSEMOTION && tabDropdownOpen_) {
+        float mx = (float)e.motion.x, my = (float)e.motion.y;
+        float popW = 260.f, itemH = 24.f, popX = windowW - popW - 2.f, popY = barY + tabBarH_;
+        tabDropdownHover_ = (mx >= popX && mx <= popX + popW && my >= popY && my <= popY + tabs_.size() * itemH + 4.f) ? (int)((my - popY - 2.f) / itemH) : -1;
+        return true;
+    }
+    if (e.type == SDL_MOUSEBUTTONDOWN && (e.button.button == 1 || e.button.button == 2)) {
         float mx = (float)e.button.x, my = (float)e.button.y;
+        if (tabDropdownOpen_) {
+            float popW = 260.f, itemH = 24.f, popX = windowW - popW - 2.f, popY = barY + tabBarH_;
+            if (mx >= popX && mx <= popX + popW && my >= popY && my <= popY + tabs_.size() * itemH + 4.f) {
+                int idx = (int)((my - popY - 2.f) / itemH);
+                if (idx >= 0 && idx < (int)tabs_.size()) switchToTab((size_t)idx);
+                tabDropdownOpen_ = false; return true;
+            }
+            tabDropdownOpen_ = false;
+        }
         if (my < barY || my >= barY + tabBarH_) return false;
-        float tx = 4.f;
+        if (mx >= visibleW) {
+            int btn = (int)((mx - visibleW) / 20.f);
+            if (btn == 0 && maxTabScroll > 0.f) tabScrollX_ -= 80.f;
+            else if (btn == 1 && maxTabScroll > 0.f) tabScrollX_ += 80.f;
+            else if (btn == 2) { tabDropdownOpen_ = !tabDropdownOpen_; tabDropdownHover_ = -1; }
+            if (tabScrollX_ < 0.f) tabScrollX_ = 0.f;
+            if (tabScrollX_ > maxTabScroll) tabScrollX_ = maxTabScroll;
+            return true;
+        }
+        float tx = -tabScrollX_;
         for (size_t i = 0; i < tabs_.size(); ++i) {
-            std::string label = tabs_[i].fileName;
+            std::string label = tabs_[i].fileName.empty() ? "untitled" : tabs_[i].fileName;
             if (tabs_[i].dirty) label += "\xe2\x80\xa2";
-            float tw = fontAtlas().measureText(label) + 28.f;
+            float tw = std::clamp(fontAtlas().measureText(label) + 48.f, 48.f, 180.f);
             if (mx >= tx && mx < tx + tw) {
-                if (mx >= tx + tw - 18.f) { closeTab(i); return true; }
+                if (e.button.button == 2 || mx >= tx + tw - 24.f) { closeTab(i); return true; }
                 switchToTab(i); return true;
             }
-            tx += tw + 1.f;
+            tx += tw - 17.f;
         }
-        newBuffer(); return true;
+        return false;
     }
     return false;
 }
@@ -520,12 +601,57 @@ void Application::handleEvents() {
         if (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
             SDL_GL_GetDrawableSize(window_, &ww, &wh); GLRenderer::resize(ww, wh); titlebar_->layout(ww);
         }
-        else if (e.type == SDL_MOUSEMOTION && statusPopup_ != StatusPopup::None) {
+        else if (e.type == SDL_MOUSEMOTION) {
+            mouseX_ = e.motion.x; mouseY_ = e.motion.y;
+            float tbH = titlebar_->height() + tabBarH_;
+            float sbH = statusbar_->height();
+            float lineStep = fontAtlas().lineHeight();
+            float viewH = (float)wh - tbH - sbH;
+            float contentH = totalLines() * lineStep;
+            float maxScroll = contentH > viewH ? contentH - viewH : 0.f;
+            float mmX = (float)ww - minimap_->width();
+            float sbX = mmX - 10.f;
+            scrollbarHovered_ = e.motion.x >= (int)sbX && e.motion.x < (int)mmX && e.motion.y >= (int)tbH && e.motion.y < wh - (int)sbH;
+            auto clampScroll = [&] { if (scrollY_ < 0.f) scrollY_ = 0.f; if (scrollY_ > maxScroll) scrollY_ = maxScroll; };
+            if (scrollbarDragging_) {
+                float thumbH = contentH > 0.f ? viewH * (viewH / contentH) : viewH;
+                if (thumbH > viewH) thumbH = viewH;
+                if (thumbH < 20.f) thumbH = 20.f;
+                float usable = viewH - thumbH;
+                float rel = usable > 0.f ? ((float)e.motion.y - tbH - scrollbarDragOffset_) / usable : 0.f;
+                scrollY_ = rel * maxScroll; clampScroll(); continue;
+            }
+            if (minimapDragging_) {
+                float rel = ((float)e.motion.y - tbH) / viewH;
+                scrollY_ = rel * maxScroll; clampScroll(); continue;
+            }
+            if (selecting_) {
+                float textOriginY = tbH + fontAtlas().ascent() + 4.0f;
+                float gutterW = gutter_->width(), textX = gutterW + 8.0f;
+                float clickY = (float)e.motion.y + scrollY_ - textOriginY;
+                size_t clickLine = clickY > 0.f ? (size_t)(clickY / lineStep) : 0;
+                if (clickLine >= totalLines()) clickLine = totalLines() - 1;
+                size_t ls = lineStartForLine(clickLine), le = lineEnd(ls);
+                std::string_view lt(textBuffer.data() + ls, le - ls);
+                float cx = (float)e.motion.x - textX; size_t col = 0; float advance = 0;
+                for (size_t i = 0; i < lt.size();) {
+                    uint32_t cp = (uint8_t)lt[i]; int b = 1;
+                    if (cp >= 0xF0) b = 4; else if (cp >= 0xE0) b = 3; else if (cp >= 0xC0) b = 2;
+                    int cw = (cp == '\t') ? (int)fontAtlas().measureText(" ") * tabSize_ : fontAtlas().getGlyph(cp).advance;
+                    if (advance + cw / 2.f > cx) break;
+                    advance += cw; col += b; i += b;
+                }
+                selections_[0].cursor = ls + col;
+                ensureCursorVisible();
+                continue;
+            }
+            if (statusPopup_ != StatusPopup::None) {
             int itemCount = (statusPopup_ == StatusPopup::Indent) ? 12 : syntaxLangCount;
             float popW = 240.f, popH = itemCount * 24.f + 4.f;
             if (e.motion.x >= popupX_ && e.motion.x <= popupX_ + popW && e.motion.y >= popupY_ && e.motion.y <= popupY_ + popH)
                 popupSelected_ = (int)((e.motion.y - popupY_ - 2) / 24.f);
             else popupSelected_ = -1;
+            }
         }
         else if (e.type == SDL_MOUSEWHEEL) {
             scrollY_ -= e.wheel.y * fontAtlas().lineHeight() * 3;
@@ -547,6 +673,28 @@ void Application::handleEvents() {
             float textX = gutterW + 8.0f;
             float sbH = statusbar_->height();
             float fww = (float)ww, fwh = (float)wh;
+            float mmX = fww - minimap_->width();
+            float sbX = mmX - 10.f;
+            float viewH = fwh - tbH - sbH;
+            float contentH = totalLines() * lineStep;
+            float maxScroll = contentH > viewH ? contentH - viewH : 0.f;
+            auto clampScroll = [&] { if (scrollY_ < 0.f) scrollY_ = 0.f; if (scrollY_ > maxScroll) scrollY_ = maxScroll; };
+            if (mx >= sbX && mx < mmX && my >= tbH && my < fwh - sbH) {
+                float thumbH = contentH > 0.f ? viewH * (viewH / contentH) : viewH;
+                if (thumbH > viewH) thumbH = viewH;
+                if (thumbH < 20.f) thumbH = 20.f;
+                float thumbY = maxScroll > 0.f ? tbH + (scrollY_ / maxScroll) * (viewH - thumbH) : tbH;
+                scrollbarDragging_ = true;
+                scrollbarDragOffset_ = my >= thumbY && my <= thumbY + thumbH ? my - thumbY : thumbH / 2.f;
+                float usable = viewH - thumbH;
+                float rel = usable > 0.f ? (my - tbH - scrollbarDragOffset_) / usable : 0.f;
+                scrollY_ = rel * maxScroll; clampScroll(); continue;
+            }
+            if (mx >= mmX && my >= tbH && my < fwh - sbH) {
+                minimapDragging_ = true;
+                float rel = (my - tbH) / viewH;
+                scrollY_ = rel * maxScroll; clampScroll(); continue;
+            }
             // status bar popup click
             if (statusPopup_ != StatusPopup::None) {
                 int itemCount = (statusPopup_ == StatusPopup::Indent) ? 12 : syntaxLangCount;
@@ -624,14 +772,22 @@ void Application::handleEvents() {
                 if (mod & KMOD_CTRL) selections_.emplace_back(clickPos);
                 else if (mod & KMOD_SHIFT) selections_[0].cursor = clickPos;
                 else { selections_.clear(); selections_.emplace_back(clickPos); }
+                selecting_ = true;
                 desiredCursorX_ = -1.f;
             }
+        }
+        else if (e.type == SDL_MOUSEBUTTONUP && e.button.button == 1) {
+            selecting_ = false;
+            minimapDragging_ = false;
+            scrollbarDragging_ = false;
         }
         else if (e.type == SDL_KEYDOWN) {
             auto mod = e.key.keysym.mod; auto sym = e.key.keysym.sym;
             auto& sel = selections_[0];
             bool shift = mod & KMOD_SHIFT, ctrl = mod & KMOD_CTRL;
             if (ctrl && sym == SDLK_q) running_ = false;
+            else if (sym == SDLK_ESCAPE) { selections_.clear(); selections_.emplace_back(sel.cursor); find_.active = false; goto_.active = false; tabDropdownOpen_ = false; }
+            else if (ctrl && sym == SDLK_a) { sel.anchor = 0; sel.cursor = textBuffer.size(); }
             else if (ctrl && sym == SDLK_z) { if (shift) doRedo(); else doUndo(); }
             else if (ctrl && sym == SDLK_y) doRedo();
             else if (ctrl && sym == SDLK_f) { find_.active = true; find_.replaceActive = false; find_.query.clear(); find_.matches.clear(); }
@@ -646,7 +802,7 @@ void Application::handleEvents() {
 #endif
             }
             else if (ctrl && sym == SDLK_n) newBuffer();
-            else if (ctrl && sym == SDLK_w) { if (dirty_) saveFile(); newBuffer(); }
+            else if (ctrl && sym == SDLK_w) closeTab(activeTab_);
             else if (ctrl && sym == SDLK_d) {
                 size_t pos = sel.cursor, ls = lineStart(pos), le = lineEnd(ls);
                 std::string_view lt(textBuffer.data() + ls, le - ls);
@@ -784,8 +940,8 @@ void Application::render() {
     updateTitle();
     int ww, wh; SDL_GL_GetDrawableSize(window_, &ww, &wh);
     float fww = (float)ww, fwh = (float)wh;
-    titlebar_->draw(fontAtlas(), 0, 0, 0, 0);
-    drawTabBar(fontAtlas(), fww, titlebar_->height());
+    float mmW = minimap_->width();
+    float scrollbarW = 10.f;
     float tbH = titlebar_->height() + tabBarH_;
     float sbH = statusbar_->height();
     float lineStep = fontAtlas().lineHeight();
@@ -793,16 +949,35 @@ void Application::render() {
     size_t lineCount = totalLines();
     size_t currentLine = lineOfPos(selections_[0].cursor);
     size_t currentCol = colOfPos(selections_[0].cursor);
-    // gutter
-    size_t visibleCount = lineCount;
-    gutter_->draw(fontAtlas(), visibleCount, currentLine, textOriginY, lineStep, fwh - sbH, tbH);
+    size_t firstVisibleLine = (size_t)(scrollY_ / lineStep);
+    float firstVisibleY = textOriginY + firstVisibleLine * lineStep - scrollY_;
+    if (activeTab_ < tabs_.size()) {
+        tabs_[activeTab_].fileName = openFile_.empty() ? "untitled" : openFile_;
+        tabs_[activeTab_].filePath = openFilePath_;
+        tabs_[activeTab_].dirty = dirty_;
+    }
+
+    drawTabBar(fontAtlas(), fww, titlebar_->height());
+
+    gutter_->draw(fontAtlas(), lineCount, currentLine, firstVisibleLine, firstVisibleY, lineStep, fwh - sbH, tbH);
     float gutterW = gutter_->width();
     float textX = gutterW + 8.0f;
-    float editorRight = fww - minimap_->width();
-    // scissor
+    float editorRight = fww - mmW - scrollbarW;
+
     glEnable(GL_SCISSOR_TEST);
     glScissor((int)gutterW, (int)sbH, ww - (int)gutterW - (int)minimap_->width(), wh - (int)(tbH + sbH));
-    // selection highlights
+
+    {
+        float cy = textOriginY + currentLine * lineStep - scrollY_;
+        if (cy + lineStep >= tbH && cy <= fwh - sbH) {
+            std::vector<float> hv = {gutterW,cy,0,0,.17f,.19f,.23f,1.f, gutterW,cy+lineStep,0,0,.17f,.19f,.23f,1.f, editorRight,cy+lineStep,0,0,.17f,.19f,.23f,1.f,
+                gutterW,cy,0,0,.17f,.19f,.23f,1.f, editorRight,cy+lineStep,0,0,.17f,.19f,.23f,1.f, editorRight,cy,0,0,.17f,.19f,.23f,1.f};
+            GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
+            glBufferData(GL_ARRAY_BUFFER, hv.size()*sizeof(float), hv.data(), GL_DYNAMIC_DRAW);
+            glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, 6); glBindVertexArray(0); GLRenderer::setDrawMode(0);
+        }
+    }
+
     for (auto& s : selections_) {
         if (!s.hasSelection()) continue;
         size_t a = s.min(), b = s.max(), la = lineOfPos(a), lb = lineOfPos(b);
@@ -822,7 +997,7 @@ void Application::render() {
         }
         if (!sv.empty()) { GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo()); glBufferData(GL_ARRAY_BUFFER, sv.size()*sizeof(float), sv.data(), GL_DYNAMIC_DRAW); glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(sv.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0); }
     }
-    // find match highlights
+
     if (find_.active && !find_.matches.empty()) {
         std::vector<float> fv;
         auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a2) {
@@ -870,14 +1045,14 @@ void Application::render() {
             gy += lineStep;
         }
     }
-    // flush indent guides
+
     if (!guideVerts.empty()) {
         GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
         glBufferData(GL_ARRAY_BUFFER, guideVerts.size()*sizeof(float), guideVerts.data(), GL_DYNAMIC_DRAW);
         glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(guideVerts.size()/8));
         glBindVertexArray(0); GLRenderer::setDrawMode(0);
     }
-    // text lines
+
     y = textOriginY - scrollY_;
     lineIdx = 0; lStart = 0;
     while (lStart <= textBuffer.size()) {
@@ -916,7 +1091,7 @@ void Application::render() {
         ++lineIdx; lStart = lEnd + 1;
         if (y > fwh) break;
     }
-    // folded line ... indicators
+
     {
         float fy = textOriginY - scrollY_;
         for (size_t ln = 0; ln < totalLines(); ++ln) {
@@ -926,7 +1101,7 @@ void Application::render() {
             fy += lineStep;
         }
     }
-    // whitespace dots in selection
+
     {
         for (auto& s : selections_) {
             if (!s.hasSelection()) continue;
@@ -941,10 +1116,7 @@ void Application::render() {
                 size_t ln = lineOfPos(pos), ls = lineStartForLine(ln);
                 float wy = textOriginY + ln * lineStep - scrollY_;
                 if (wy + lineStep < tbH || wy > fwh) continue;
-                float colOff = 0;
-                // calculate pixel X for this position
-                std::string_view before(textBuffer.data() + ls, pos - ls);
-                float wx = textX + fontAtlas().measureText(before);
+                float wx = textX + fontAtlas().measureText(std::string_view(textBuffer.data() + ls, pos - ls));
                 if (c == ' ') {
                     float cx = wx + spaceWidth / 2.f, cy = wy + lineStep / 2.f, r = 1.2f;
                     ar(cx-r, cy-r, cx+r, cy+r, 0.45f, 0.45f, 0.5f, 0.6f);
@@ -958,7 +1130,7 @@ void Application::render() {
             if (!wv.empty()) { GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo()); glBufferData(GL_ARRAY_BUFFER, wv.size()*sizeof(float), wv.data(), GL_DYNAMIC_DRAW); glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(wv.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0); }
         }
     }
-    // fold indicators in gutter (triangles for foldable lines)
+
     {
         std::vector<float> fv;
         auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
@@ -985,7 +1157,7 @@ void Application::render() {
         }
         if (!fv.empty()) { GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo()); glBufferData(GL_ARRAY_BUFFER, fv.size()*sizeof(float), fv.data(), GL_DYNAMIC_DRAW); glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(fv.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0); }
     }
-    // cursors
+
     for (auto& s : selections_) {
         size_t cl = lineOfPos(s.cursor), ls = lineStartForLine(cl);
         float cx = textX + fontAtlas().measureText(std::string_view(textBuffer.data()+ls, s.cursor-ls));
@@ -997,10 +1169,32 @@ void Application::render() {
         glBindTexture(GL_TEXTURE_2D, fontAtlas().atlasTexture()); glDrawArrays(GL_TRIANGLES, 0, 6); glBindVertexArray(0);
     }
     glDisable(GL_SCISSOR_TEST);
+    // scrollbar
+    {
+        float sbX = fww - mmW - scrollbarW;
+        float contentH = totalLines() * lineStep;
+        float viewH = fwh - tbH - sbH;
+        float thumbFrac = (contentH > 0) ? viewH / contentH : 1.f;
+        if (thumbFrac > 1.f) thumbFrac = 1.f;
+        float thumbH = viewH * thumbFrac;
+        if (thumbH < 20.f) thumbH = 20.f;
+        float maxScroll = contentH - viewH;
+        float thumbY = (maxScroll > 0) ? tbH + (scrollY_ / maxScroll) * (viewH - thumbH) : tbH;
+        std::vector<float> sv;
+        auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
+            sv.insert(sv.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
+        };
+        float regionW = (scrollbarHovered_ || scrollbarDragging_) ? 10.f : 6.f;
+        float thumbW = 4.f;
+        float thumbX = sbX + regionW - thumbW;
+        float c = scrollbarDragging_ ? 0.416f : (scrollbarHovered_ ? 0.353f : 0.290f);
+        ar(thumbX, thumbY, thumbX + thumbW, thumbY + thumbH, c, c, c, 1.f);
+        if (!sv.empty()) { GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo()); glBufferData(GL_ARRAY_BUFFER, sv.size()*sizeof(float), sv.data(), GL_DYNAMIC_DRAW); glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(sv.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0); }
+    }
     // minimap
-    minimap_->draw(fontAtlas(), textBuffer, editorRight, textOriginY, fwh, tbH, gutterW, lineStep);
+    minimap_->draw(fontAtlas(), *syntax_, textBuffer, fww - mmW, textOriginY, fwh, tbH, gutterW, lineStep, scrollY_, mouseX_ >= (int)(fww - mmW) && mouseY_ >= (int)tbH && mouseY_ < (int)(fwh - sbH));
     // status bar
-    statusbar_->draw(fontAtlas(), fww, fwh, minimap_->width(), currentLine, currentCol, syntax_->languageName(), useTabs_, tabSize_, "");
+    statusbar_->draw(fontAtlas(), fww, fwh, mmW, currentLine, currentCol, syntax_->languageName(), useTabs_, tabSize_, "");
     // find bar
     if (find_.active) {
         float barH = find_.replaceActive ? 64.f : 32.f, barY = fwh - sbH - barH;
@@ -1009,7 +1203,6 @@ void Application::render() {
             fbv.insert(fbv.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
         };
         ar(0, barY, editorRight, barY + barH, 0.18f, 0.18f, 0.21f, 1.f);
-        ar(0, barY, editorRight, barY + 1, 0.3f, 0.3f, 0.35f, 1.f);
         GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo()); glBufferData(GL_ARRAY_BUFFER, fbv.size()*sizeof(float), fbv.data(), GL_DYNAMIC_DRAW); glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(fbv.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0);
         std::string fl = "Find: " + find_.query + "|";
         if (find_.regex) fl += "  [REGEX]"; if (find_.caseSensitive) fl += "  [CASE]"; if (find_.wholeWord) fl += "  [WORD]";
@@ -1048,7 +1241,7 @@ void Application::render() {
             fontAtlas().drawText(goto_.items[i], ox + 8, oy + 30 + i * 22, ib, ib, ib, 1.f);
         }
     }
-    // status bar popup (indent settings or syntax picker)
+
     if (statusPopup_ != StatusPopup::None) {
         int itemCount = (statusPopup_ == StatusPopup::Indent) ? 12 : syntaxLangCount;
         // compute popup width from content
@@ -1070,7 +1263,7 @@ void Application::render() {
             ar(popupX_ + 2, popupY_ + 2 + popupSelected_ * 24.f, popupX_ + popW - 2, popupY_ + 2 + (popupSelected_ + 1) * 24.f, 0.25f, 0.30f, 0.45f, 1.f);
         GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo()); glBufferData(GL_ARRAY_BUFFER, pv.size()*sizeof(float), pv.data(), GL_DYNAMIC_DRAW); glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(pv.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0);
         glEnable(GL_SCISSOR_TEST);
-        glScissor((int)popupX_, (int)(popupY_), (int)popW + 2, (int)popH + 2);
+        glScissor((int)popupX_, wh - (int)(popupY_ + popH + 2), (int)popW + 2, (int)popH + 2);
         if (statusPopup_ == StatusPopup::Indent) {
             fontAtlas().drawText(useTabs_ ? "  \xe2\x80\xa2  Indent Using Spaces" : "  \xe2\x80\xa2  Indent Using Spaces", popupX_ + 8, popupY_ + 6, 0.75f, 0.75f, 0.78f, 1.f);
             for (int i = 1; i <= 8; ++i) {
@@ -1090,6 +1283,8 @@ void Application::render() {
         }
         glDisable(GL_SCISSOR_TEST);
     }
+
+    titlebar_->draw(fontAtlas(), 0, 0, 0, 0);
     GLRenderer::endFrame();
     SDL_GL_SwapWindow(window_);
 }

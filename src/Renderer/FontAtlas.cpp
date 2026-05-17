@@ -131,6 +131,36 @@ void FontAtlas::drawText(std::string_view text, float x, float y, float r, float
     glBindVertexArray(0);
 }
 
+void FontAtlas::drawTextScaled(std::string_view text, float x, float y, float scale, float r, float g, float b, float a) {
+    if (text.empty() || scale <= 0.f) return;
+    std::vector<float> verts;
+    verts.reserve(text.size() * 6 * 8);
+    float cursorX = x;
+    for (size_t i = 0; i < text.size();) {
+        uint32_t cp = decodeUtf8(text, i);
+        if (cp == '\n') { cursorX = x; continue; }
+        if (cp == '\t') { cursorX += getGlyph(' ').advance * 4 * scale; continue; }
+        if (cp == '\r') { cursorX = x; continue; }
+        const AtlasGlyph& gl = getGlyph(cp);
+        if (gl.width > 0 && gl.height > 0) {
+            float x0 = cursorX + gl.bearingX * scale;
+            float y0 = y + (ascent_ - gl.bearingY) * scale;
+            float x1 = x0 + gl.width * scale;
+            float y1 = y0 + gl.height * scale;
+            verts.insert(verts.end(), { x0, y0, gl.u0, gl.v0, r, g, b, a, x0, y1, gl.u0, gl.v1, r, g, b, a, x1, y1, gl.u1, gl.v1, r, g, b, a });
+            verts.insert(verts.end(), { x0, y0, gl.u0, gl.v0, r, g, b, a, x1, y1, gl.u1, gl.v1, r, g, b, a, x1, y0, gl.u1, gl.v0, r, g, b, a });
+        }
+        cursorX += gl.advance * scale;
+    }
+    if (verts.empty()) return;
+    glBindVertexArray(gl_vao());
+    glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
+    glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(float), verts.data(), GL_DYNAMIC_DRAW);
+    glBindTexture(GL_TEXTURE_2D, atlasTex_);
+    glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(verts.size() / 8));
+    glBindVertexArray(0);
+}
+
 void FontAtlas::destroy() {
     if (atlasTex_) { glDeleteTextures(1, &atlasTex_); atlasTex_ = 0; }
     glyphs_.clear();

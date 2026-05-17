@@ -12,23 +12,71 @@ extern GLuint gl_vbo();
 
 void Titlebar::buildMenu() {
     menuItems_ = {
+        {"File", "", nullptr},
         {"New File", "Ctrl+N", []{ Application::instance().newBuffer(); }},
         {"Open File...", "Ctrl+O", []{}},
+        {"Open Folder...", "", []{}},
+        {"Open Recent", ">", []{}},
         {"", "", nullptr, true},
         {"Save", "Ctrl+S", []{ Application::instance().saveFile(); }},
         {"Save As...", "Ctrl+Shift+S", []{ Application::instance().saveFileAs(); }},
+        {"Save All", "", []{}},
         {"", "", nullptr, true},
-        {"Close File", "Ctrl+W", []{ Application::instance().newBuffer(); }},
+        {"Close File", "Ctrl+W", []{}},
+        {"Revert File", "", []{}},
         {"", "", nullptr, true},
+        {"Edit", "", nullptr},
         {"Undo", "Ctrl+Z", []{}},
         {"Redo", "Ctrl+Y", []{}},
         {"", "", nullptr, true},
+        {"Cut", "Ctrl+X", []{}},
+        {"Copy", "Ctrl+C", []{}},
+        {"Paste", "Ctrl+V", []{}},
+        {"Paste and Indent", "Ctrl+Shift+V", []{}},
+        {"", "", nullptr, true},
+        {"Select All", "Ctrl+A", []{}},
+        {"", "", nullptr, true},
+        {"Selection", "", nullptr},
+        {"Expand Selection to Line", "Ctrl+L", []{}},
+        {"Expand Selection to Word", "Ctrl+D", []{}},
+        {"Split into Lines", "Ctrl+Shift+L", []{}},
+        {"Single Selection", "Esc", []{}},
+        {"", "", nullptr, true},
+        {"Find", "", nullptr},
         {"Find...", "Ctrl+F", []{}},
+        {"Find Next", "F3", []{}},
+        {"Find Previous", "Shift+F3", []{}},
+        {"Find All", "Alt+F3", []{}},
         {"Replace...", "Ctrl+H", []{}},
+        {"Find in Files...", "Ctrl+Shift+F", []{}},
         {"", "", nullptr, true},
+        {"View", "", nullptr},
+        {"Hide Minimap", "", []{}},
+        {"Hide Tabs", "", []{}},
+        {"Hide Status Bar", "", []{}},
+        {"Word Wrap", "", []{}},
+        {"Enter Full Screen", "F11", []{}},
+        {"Enter Distraction Free", "Shift+F11", []{}},
+        {"", "", nullptr, true},
+        {"Goto", "", nullptr},
         {"Goto Anything...", "Ctrl+P", []{}},
+        {"Goto Symbol...", "Ctrl+R", []{}},
+        {"Goto Line...", "Ctrl+G", []{}},
+        {"Goto Word...", "Ctrl+;", []{}},
+        {"Jump Back", "Alt+-", []{}},
+        {"Jump Forward", "Alt+Shift+-", []{}},
         {"", "", nullptr, true},
-        {"Preferences", "Ctrl+,", []{}},
+        {"Tools", "", nullptr},
+        {"Command Palette...", "Ctrl+Shift+P", []{}},
+        {"Record Macro", "", []{}},
+        {"Playback Macro", "", []{}},
+        {"", "", nullptr, true},
+        {"Preferences", "", nullptr},
+        {"Settings", "", []{}},
+        {"Key Bindings", "", []{}},
+        {"Color Scheme", ">", []{}},
+        {"Font", ">", []{}},
+        {"Theme", ">", []{}},
         {"", "", nullptr, true},
         {"Exit", "Ctrl+Q", []{ Application::instance().quit(); }},
     };
@@ -49,6 +97,9 @@ static void flushSolid(std::vector<float>& v) {
 
 void Titlebar::drawMenu(FontAtlas& font) {
     if (!menuOpen_) return;
+    SDL_Window* window = SDL_GL_GetCurrentWindow();
+    int ww = 1280, wh = 720;
+    if (window) SDL_GL_GetDrawableSize(window, &ww, &wh);
     float maxW = 160.f;
     for (auto& item : menuItems_) {
         float w = font.measureText(item.label);
@@ -56,27 +107,45 @@ void Titlebar::drawMenu(FontAtlas& font) {
         if (w + 32.f > maxW) maxW = w + 32.f;
     }
     float ddX = 0.f, ddY = height_;
-    float ddW = maxW, ddH = 2.f + menuItems_.size() * 24.f;
+    float itemH = 24.f;
+    int maxVisible = (int)((wh * 0.8f - 28.f) / itemH);
+    if (maxVisible < 1) maxVisible = 1;
+    int visibleCount = (int)menuItems_.size() < maxVisible ? (int)menuItems_.size() : maxVisible;
+    if (menuScroll_ > (int)menuItems_.size() - visibleCount) menuScroll_ = (int)menuItems_.size() - visibleCount;
+    if (menuScroll_ < 0) menuScroll_ = 0;
+    bool scrollable = visibleCount < (int)menuItems_.size();
+    float arrowH = scrollable ? 14.f : 0.f;
+    float ddW = maxW, ddH = 2.f + visibleCount * itemH + arrowH * 2.f;
     std::vector<float> v;
     auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
         v.insert(v.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
     };
     ar(ddX, ddY, ddX + ddW, ddY + ddH, 0.17f, 0.17f, 0.20f, 0.98f);
     ar(ddX, ddY, ddX + ddW, ddY + 1, 0.30f, 0.30f, 0.35f, 1.f);
-    if (menuHovered_ >= 0 && menuHovered_ < (int)menuItems_.size() && !menuItems_[menuHovered_].separator)
-        ar(ddX + 2, ddY + 2 + menuHovered_ * 24.f, ddX + ddW - 2, ddY + 2 + (menuHovered_ + 1) * 24.f, 0.25f, 0.30f, 0.45f, 1.f);
+    if (scrollable) {
+        ar(ddX, ddY, ddX + ddW, ddY + arrowH, 0.14f, 0.14f, 0.17f, 1.f);
+        ar(ddX, ddY + ddH - arrowH, ddX + ddW, ddY + ddH, 0.14f, 0.14f, 0.17f, 1.f);
+    }
+    if (menuHovered_ >= menuScroll_ && menuHovered_ < menuScroll_ + visibleCount && !menuItems_[menuHovered_].separator)
+        ar(ddX + 2, ddY + arrowH + 2 + (menuHovered_ - menuScroll_) * itemH, ddX + ddW - 2, ddY + arrowH + 2 + (menuHovered_ - menuScroll_ + 1) * itemH, 0.25f, 0.30f, 0.45f, 1.f);
     flushSolid(v);
+    if (scrollable) {
+        font.drawText("^", ddX + ddW * 0.5f - 4.f, ddY - 1.f, menuScroll_ > 0 ? 0.7f : 0.35f, menuScroll_ > 0 ? 0.7f : 0.35f, menuScroll_ > 0 ? 0.7f : 0.35f, 1.f);
+        font.drawText("v", ddX + ddW * 0.5f - 4.f, ddY + ddH - arrowH - 1.f, menuScroll_ + visibleCount < (int)menuItems_.size() ? 0.7f : 0.35f, menuScroll_ + visibleCount < (int)menuItems_.size() ? 0.7f : 0.35f, menuScroll_ + visibleCount < (int)menuItems_.size() ? 0.7f : 0.35f, 1.f);
+    }
     glEnable(GL_SCISSOR_TEST);
-    glScissor((int)ddX, 0, (int)ddW, (int)(ddY + ddH + 4));
-    for (int i = 0; i < (int)menuItems_.size(); ++i) {
+    glScissor((int)ddX, wh - (int)(ddY + ddH + 4), (int)ddW, (int)(ddH + 4));
+    for (int i = menuScroll_; i < menuScroll_ + visibleCount && i < (int)menuItems_.size(); ++i) {
         auto& item = menuItems_[i];
-        float iy = ddY + 2 + i * 24.f + 4.f;
+        float rowY = ddY + arrowH + 2 + (i - menuScroll_) * itemH;
+        float iy = rowY + 4.f;
         if (item.separator) {
-            ar(ddX + 8, ddY + 2 + i * 24.f + 11, ddX + ddW - 8, ddY + 2 + i * 24.f + 12, 0.3f, 0.3f, 0.33f, 1.f);
+            ar(ddX + 8, rowY + 11, ddX + ddW - 8, rowY + 12, 0.3f, 0.3f, 0.33f, 1.f);
             flushSolid(v);
             continue;
         }
-        float ib = (menuHovered_ == i) ? 1.f : 0.78f;
+        bool heading = !item.action && item.shortcut.empty();
+        float ib = heading ? 0.55f : ((menuHovered_ == i) ? 1.f : 0.78f);
         font.drawText(item.label, ddX + 12.f, iy, ib, ib, ib, 1.f);
         if (!item.shortcut.empty())
             font.drawText(item.shortcut, ddX + ddW - font.measureText(item.shortcut) - 12.f, iy, 0.5f, 0.5f, 0.55f, 1.f);
@@ -150,33 +219,52 @@ void Titlebar::draw(FontAtlas& font, float, float, float, float) {
     font.drawText("_", buttons_[1].x + 16.f, mid - 4.f, 0.7f, 0.7f, 0.7f, 1.f);
     font.drawText("\xe2\x96\xa1", buttons_[2].x + 16.f, mid - 8.f, 0.7f, 0.7f, 0.7f, 1.f);
     font.drawText("\xc3\x97", buttons_[3].x + 16.f, mid - 8.f, 1.f, 1.f, 1.f, 1.f);
-    ar(0, height_-1, buttons_[1].x, height_, 0.1f, 0.1f, 0.12f, 1.f);
-    flushSolid(v);
     drawMenu(font);
 }
 
 bool Titlebar::handleMenuEvent(const SDL_Event& e) {
     if (!menuOpen_) return false;
+    SDL_Window* window = SDL_GL_GetCurrentWindow();
+    int ww = 1280, wh = 720;
+    if (window) SDL_GL_GetDrawableSize(window, &ww, &wh);
     float ddX = 0.f, ddY = height_;
-    float maxW = 160.f;
-    // need font to measure — but we don't have it here, use cached or fixed width
-    // We'll match the same width calculation. Since we can't access font here, we use a reasonable estimate.
-    // Actually we only need hit testing, so we can use a fixed width for hit-test purposes.
-    // The dropdown will be at most ~280px wide based on the draw code. Use that.
-    float ddW = 280.f, ddH = 2.f + menuItems_.size() * 24.f;
+    float ddW = 320.f, itemH = 24.f;
+    int maxVisible = (int)((wh * 0.8f - 28.f) / itemH);
+    if (maxVisible < 1) maxVisible = 1;
+    int visibleCount = (int)menuItems_.size() < maxVisible ? (int)menuItems_.size() : maxVisible;
+    bool scrollable = visibleCount < (int)menuItems_.size();
+    float arrowH = scrollable ? 14.f : 0.f;
+    float ddH = 2.f + visibleCount * itemH + arrowH * 2.f;
+    auto clampMenuScroll = [&] {
+        int maxScroll = (int)menuItems_.size() - visibleCount;
+        if (menuScroll_ < 0) menuScroll_ = 0;
+        if (menuScroll_ > maxScroll) menuScroll_ = maxScroll;
+    };
     if (e.type == SDL_MOUSEMOTION) {
         float mx = (float)e.motion.x, my = (float)e.motion.y;
         menuHovered_ = -1;
         if (mx >= ddX && mx <= ddX + ddW && my >= ddY && my <= ddY + ddH) {
-            int idx = (int)((my - ddY - 2) / 24.f);
+            int idx = menuScroll_ + (int)((my - ddY - arrowH - 2) / itemH);
             if (idx >= 0 && idx < (int)menuItems_.size() && !menuItems_[idx].separator) menuHovered_ = idx;
         }
         return true;
     }
+    if (e.type == SDL_MOUSEWHEEL) {
+        menuScroll_ -= e.wheel.y;
+        clampMenuScroll();
+        return true;
+    }
+    if (e.type == SDL_KEYDOWN) {
+        if (e.key.keysym.sym == SDLK_ESCAPE) { closeMenu(); return true; }
+        if (e.key.keysym.sym == SDLK_UP) { --menuScroll_; clampMenuScroll(); return true; }
+        if (e.key.keysym.sym == SDLK_DOWN) { ++menuScroll_; clampMenuScroll(); return true; }
+    }
     if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == 1) {
         float mx = (float)e.button.x, my = (float)e.button.y;
         if (mx >= ddX && mx <= ddX + ddW && my >= ddY && my <= ddY + ddH) {
-            int idx = (int)((my - ddY - 2) / 24.f);
+            if (scrollable && my < ddY + arrowH) { --menuScroll_; clampMenuScroll(); return true; }
+            if (scrollable && my > ddY + ddH - arrowH) { ++menuScroll_; clampMenuScroll(); return true; }
+            int idx = menuScroll_ + (int)((my - ddY - arrowH - 2) / itemH);
             if (idx >= 0 && idx < (int)menuItems_.size() && !menuItems_[idx].separator && menuItems_[idx].action) {
                 menuItems_[idx].action();
                 closeMenu();

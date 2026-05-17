@@ -45,6 +45,7 @@ private:
     void updateButtonPositions(int windowWidth);
     bool menuOpen_ = false;
     int menuHovered_ = -1;
+    int menuScroll_ = 0;
     std::vector<TitlebarMenuItem> menuItems_;
     void buildMenu();
     void closeMenu() { menuOpen_ = false; menuHovered_ = -1; }

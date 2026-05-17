@@ -1,15 +1,15 @@
 #pragma once
 #include <string>
-#include <vector>
 
 class FontAtlas;
+class SyntaxHighlighter;
 
 class Minimap {
 public:
     Minimap() = default;
-    void draw(FontAtlas& font, const std::string& buffer,
+    void draw(FontAtlas& font, SyntaxHighlighter& syntax, const std::string& buffer,
               float originX, float originY, float windowH, float titlebarH,
-              float gutterW, float lineStep);
+              float gutterW, float lineStep, float scrollY, bool hovered);
     float width() const { return width_; }
     float contentWidth() const { return width_; }
     bool handleClick(float mx, float my, float& scrollRatio);
@@ -18,7 +18,6 @@ public:
     void markClean() { dirty_ = false; }
 private:
     float width_ = 100.f;
-    float scale_ = 0.4f;
     bool dirty_ = true;
     int lastLineCount_ = -1;
 };

@@ -112,7 +112,7 @@ private:
     void loadTab(size_t index);
     void drawTabBar(class FontAtlas& font, float windowW, float titlebarH);
     bool handleTabBarEvent(const SDL_Event& e, float windowW, float titlebarH);
-    float tabBarH_ = 28.f;
+    float tabBarH_ = 35.f;
     SDL_Window* window_ = nullptr;
     SDL_GLContext glContext_ = nullptr;
     AppPaths paths_;
@@ -123,6 +123,15 @@ private:
     std::vector<SelRange> selections_;
     float desiredCursorX_ = -1.f;
     float scrollY_ = 0.f;
+    bool selecting_ = false;
+    bool minimapDragging_ = false;
+    bool scrollbarHovered_ = false;
+    bool scrollbarDragging_ = false;
+    float scrollbarDragOffset_ = 0.f;
+    int mouseX_ = 0, mouseY_ = 0;
+    float tabScrollX_ = 0.f;
+    bool tabDropdownOpen_ = false;
+    int tabDropdownHover_ = -1;
     std::vector<UndoStep> undoStack_, redoStack_;
     std::chrono::milliseconds undoWindow_{500};
     FindState find_;
@@ -135,6 +144,7 @@ private:
     void computeLineIndents();
     bool useTabs_ = false;
     int tabSize_ = 2;
+    std::string menuStyle_ = "icon";
     void convertIndentation(bool toSpaces);
     void guessIndent();
     StatusPopup statusPopup_ = StatusPopup::None;
