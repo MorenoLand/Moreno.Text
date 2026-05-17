@@ -1143,7 +1143,7 @@ const char* Application::syntaxLanguages[] = {
     "Plain Text","ActionScript","AppleScript","ASP","Batch File","C","C#","C++","Clojure","CSS",
     "D","Diff","Erlang","Go","Graphviz","Groovy","Haskell","HTML","Java","JavaScript",
     "JSON","LaTeX","Lisp","Lua","Makefile","Markdown","MATLAB","Objective-C","OCaml","Pascal",
-    "Perl","PHP","Python","R","Ruby","Rust","Scala","ShellScript","SQL","SublimeRC",
+    "Perl","PHP","Python","R","Ruby","Rust","Scala","ShellScript","SQL","MorenoRC",
     "TCL","TOML","XML","YAML"
 };
 
