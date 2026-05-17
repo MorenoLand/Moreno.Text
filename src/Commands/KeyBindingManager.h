@@ -1,6 +1,8 @@
 #pragma once
 #include <string>
 #include <vector>
+#include <functional>
+#include <unordered_map>
 #include <nlohmann/json.hpp>
 
 struct KeyBinding {
@@ -77,8 +79,38 @@ public:
         };
         f << j.dump(2);
     }
+    void addCommandHandler(const std::string& cmd, std::function<void()> fn) {
+        handlers_[cmd] = std::move(fn);
+    }
+    bool dispatch(const std::string& keyCombo) const {
+        for (auto& kb : bindings_) {
+            if (kb.keys.size() == 1 && kb.keys[0] == keyCombo) {
+                auto it = handlers_.find(kb.command);
+                if (it != handlers_.end()) { it->second(); return true; }
+                return false;
+            }
+        }
+        return false;
+    }
+    bool hasChord(const std::string& firstKey) const {
+        for (auto& kb : bindings_) {
+            if (kb.keys.size() == 2 && kb.keys[0] == firstKey) return true;
+        }
+        return false;
+    }
+    bool dispatchChord(const std::string& firstKey, const std::string& secondKey) const {
+        for (auto& kb : bindings_) {
+            if (kb.keys.size() == 2 && kb.keys[0] == firstKey && kb.keys[1] == secondKey) {
+                auto it = handlers_.find(kb.command);
+                if (it != handlers_.end()) { it->second(); return true; }
+                return false;
+            }
+        }
+        return false;
+    }
     const std::vector<KeyBinding>& bindings() const { return bindings_; }
 private:
     KeyBindingManager() = default;
     std::vector<KeyBinding> bindings_;
+    std::unordered_map<std::string, std::function<void()>> handlers_;
 };

@@ -104,6 +104,42 @@ bool Application::init(int argc, char** argv) {
         std::string userDir = paths_.dataDir + "/Packages/User";
         std::string userKeymap = userDir + "/Default (Windows).moreno-keymap";
         if (fs::exists(userKeymap)) kb.load(userKeymap);
+        kb.addCommandHandler("new_file", [this](){ newBuffer(); });
+        kb.addCommandHandler("open_file", [this](){ openFileDialog(); });
+        kb.addCommandHandler("save", [this](){ saveFile(); });
+        kb.addCommandHandler("save_as", [this](){ saveFileAs(); });
+        kb.addCommandHandler("close_file", [this](){ closeCurrentTab(); });
+        kb.addCommandHandler("reopen_closed_tab", [this](){ reopenClosedTab(); });
+        kb.addCommandHandler("undo", [this](){ doUndo(); });
+        kb.addCommandHandler("redo", [this](){ doRedo(); });
+        kb.addCommandHandler("cut", [this](){ cutSelectionOrLine(); });
+        kb.addCommandHandler("copy", [this](){ copySelectionOrLine(); });
+        kb.addCommandHandler("paste", [this](){ pasteClipboard(false); });
+        kb.addCommandHandler("paste_and_indent", [this](){ pasteClipboard(true); });
+        kb.addCommandHandler("select_all", [this](){ commandSelectAll(); });
+        kb.addCommandHandler("find", [this](){ commandFind(); });
+        kb.addCommandHandler("replace", [this](){ commandReplace(); });
+        kb.addCommandHandler("goto_anything", [this](){ commandGotoAnything(); });
+        kb.addCommandHandler("command_palette", [this](){ commandPalette(); });
+        kb.addCommandHandler("find_under_expand", [this](){ /* Ctrl+D next occurrence */ });
+        kb.addCommandHandler("select_line", [this](){ /* Ctrl+L */ });
+        kb.addCommandHandler("split_selection_into_lines", [this](){ /* Ctrl+Shift+L */ });
+        kb.addCommandHandler("toggle_comment", [this](){ toggleLineComment(); });
+        kb.addCommandHandler("toggle_block_comment", [this](){ toggleBlockComment(); });
+        kb.addCommandHandler("swap_line_up", [this](){ swapLineUp(); });
+        kb.addCommandHandler("swap_line_down", [this](){ swapLineDown(); });
+        kb.addCommandHandler("duplicate_line", [this](){ duplicateLine(); });
+        kb.addCommandHandler("delete_line", [this](){ deleteLine(); });
+        kb.addCommandHandler("join_lines", [this](){ joinLines(); });
+        kb.addCommandHandler("upper_case", [this](){ convertCaseUpper(); });
+        kb.addCommandHandler("lower_case", [this](){ convertCaseLower(); });
+        kb.addCommandHandler("toggle_full_screen", [this](){ toggleFullscreen(); });
+        kb.addCommandHandler("toggle_word_wrap", [this](){ toggleWordWrap(); });
+        kb.addCommandHandler("toggle_bookmark", [this](){ toggleBookmark(); });
+        kb.addCommandHandler("next_bookmark", [this](){ nextBookmark(); });
+        kb.addCommandHandler("prev_bookmark", [this](){ prevBookmark(); });
+        kb.addCommandHandler("clear_bookmarks", [this](){ clearBookmarks(); });
+        kb.addCommandHandler("toggle_side_bar", [this](){ toggleSidebar(); });
     }
     selections_.emplace_back(0);
     TabBuffer initTab; initTab.fileName = "untitled"; initTab.selections.emplace_back(0);
@@ -2006,6 +2042,52 @@ void Application::handleEvents() {
             auto mod = e.key.keysym.mod; auto sym = e.key.keysym.sym;
             auto& sel = selections_[0];
             bool shift = mod & KMOD_SHIFT, ctrl = mod & KMOD_CTRL;
+            // convert to key string for keybinding dispatch
+            {
+                std::string keyStr;
+                if (ctrl) keyStr += "ctrl+";
+                if (mod & KMOD_ALT) keyStr += "alt+";
+                if (shift && !ctrl) keyStr += "shift+";
+                if (ctrl && shift) keyStr += "shift+";
+                if (sym >= SDLK_a && sym <= SDLK_z) keyStr += (char)(sym);
+                else if (sym >= SDLK_0 && sym <= SDLK_9) keyStr += (char)(sym);
+                else if (sym >= SDLK_F1 && sym <= SDLK_F12) keyStr += "f" + std::to_string(sym - SDLK_F1 + 1);
+                else if (sym == SDLK_SLASH) keyStr += "/";
+                else if (sym == SDLK_BACKSLASH) keyStr += "\\";
+                else if (sym == SDLK_SPACE) keyStr += "space";
+                else if (sym == SDLK_RETURN) keyStr += "enter";
+                else if (sym == SDLK_TAB) keyStr += "tab";
+                else if (sym == SDLK_BACKSPACE) keyStr += "backspace";
+                else if (sym == SDLK_UP) keyStr += "up";
+                else if (sym == SDLK_DOWN) keyStr += "down";
+                else if (sym == SDLK_LEFT) keyStr += "left";
+                else if (sym == SDLK_RIGHT) keyStr += "right";
+                else if (sym == SDLK_HOME) keyStr += "home";
+                else if (sym == SDLK_END) keyStr += "end";
+                else if (sym == SDLK_PAGEUP) keyStr += "pageup";
+                else if (sym == SDLK_PAGEDOWN) keyStr += "pagedown";
+                else if (sym == SDLK_INSERT) keyStr += "insert";
+                else if (sym == SDLK_DELETE) keyStr += "delete";
+                else if (sym == SDLK_BACKQUOTE) keyStr += "`";
+                else if (sym == SDLK_MINUS) keyStr += "-";
+                else if (sym == SDLK_EQUALS) keyStr += "=";
+                else if (sym == SDLK_LEFTBRACKET) keyStr += "[";
+                else if (sym == SDLK_RIGHTBRACKET) keyStr += "]";
+                else if (sym == SDLK_SEMICOLON) keyStr += ";";
+                else if (sym == SDLK_QUOTE) keyStr += "'";
+                else if (sym == SDLK_COMMA) keyStr += ",";
+                else if (sym == SDLK_PERIOD) keyStr += ".";
+                if (!keyStr.empty()) {
+                    // try chord dispatch
+                    if (pendingCtrlK_) {
+                        pendingCtrlK_ = false;
+                        if (KeyBindingManager::instance().dispatchChord("ctrl+k", keyStr)) continue;
+                    }
+                    if (KeyBindingManager::instance().dispatch(keyStr)) continue;
+                    // check if this starts a chord
+                    if (KeyBindingManager::instance().hasChord(keyStr)) { pendingCtrlK_ = false; /* use as generic chord flag */ continue; }
+                }
+            }
             if (pendingCtrlK_) {
                 pendingCtrlK_ = false;
                 if (ctrl && sym == SDLK_1) { foldAll(); continue; }
