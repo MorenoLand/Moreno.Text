@@ -4,6 +4,11 @@
 #include <vector>
 #include <unordered_map>
 #include <unordered_set>
+#include <atomic>
+#include <condition_variable>
+#include <memory>
+#include <mutex>
+#include <thread>
 #include "../Theme/ThemeEngine.h"
 
 struct SyntaxToken {
@@ -19,6 +24,7 @@ struct SyntaxColor {
 class SyntaxHighlighter {
 public:
     SyntaxHighlighter();
+    ~SyntaxHighlighter();
     void setLanguage(const std::string& ext);
     void setLanguageByName(const std::string& name);
     void parse(const std::string& text);
@@ -37,7 +43,19 @@ private:
     void* parser_ = nullptr;
     void* tree_ = nullptr;
     const void* language_ = nullptr;
-    std::vector<SyntaxToken> treeTokens_;
+    std::shared_ptr<const std::vector<SyntaxToken>> treeTokens_;
+    mutable std::mutex tokenMutex_;
+    std::thread parseWorker_;
+    std::mutex parseMutex_;
+    std::condition_variable parseCv_;
+    std::string pendingText_;
+    const void* pendingLanguage_ = nullptr;
+    uint64_t pendingGeneration_ = 0;
+    std::atomic<uint64_t> latestGeneration_{0};
+    bool parseRequested_ = false;
+    bool parseStop_ = false;
+    void ensureParseWorker();
+    void parseWorkerLoop();
     std::unordered_set<std::string> keywords_;
     std::unordered_set<std::string> builtins_;
     std::unordered_set<std::string> types_;

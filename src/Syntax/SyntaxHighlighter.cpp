@@ -4,8 +4,21 @@
 #include <cctype>
 #include <algorithm>
 #include <cstring>
+#include <utility>
 
 SyntaxHighlighter::SyntaxHighlighter() { setupPlainText(); }
+
+SyntaxHighlighter::~SyntaxHighlighter() {
+    {
+        std::lock_guard<std::mutex> lock(parseMutex_);
+        parseStop_ = true;
+        parseRequested_ = false;
+    }
+    parseCv_.notify_one();
+    if (parseWorker_.joinable()) parseWorker_.join();
+    if (tree_) ts_tree_delete((TSTree*)tree_);
+    if (parser_) ts_parser_delete((TSParser*)parser_);
+}
 
 extern "C" const TSLanguage *tree_sitter_javascript(void);
 extern "C" const TSLanguage *tree_sitter_python(void);
@@ -15,7 +28,8 @@ extern "C" const TSLanguage *tree_sitter_markdown(void);
 
 void SyntaxHighlighter::setLanguage(const std::string& ext) {
     keywords_.clear(); builtins_.clear(); types_.clear();
-    treeTokens_.clear(); language_ = nullptr;
+    { std::lock_guard<std::mutex> lock(tokenMutex_); treeTokens_ = std::make_shared<const std::vector<SyntaxToken>>(); }
+    language_ = nullptr;
     if (ext == "js" || ext == "jsx" || ext == "ts" || ext == "tsx" || ext == "mjs") { setupJS(); setTreeSitterLanguage("JavaScript", tree_sitter_javascript()); }
     else if (ext == "py" || ext == "pyw") { setupPython(); setTreeSitterLanguage("Python", tree_sitter_python()); }
     else if (ext == "c") { setupCPP(); setTreeSitterLanguage("C", tree_sitter_c()); }
@@ -39,15 +53,14 @@ void SyntaxHighlighter::setLanguageByName(const std::string& name) {
     };
     for (auto& m : map) if (name == m.name) { setLanguage(m.ext); return; }
     keywords_.clear(); builtins_.clear(); types_.clear();
-    treeTokens_.clear(); language_ = nullptr;
+    { std::lock_guard<std::mutex> lock(tokenMutex_); treeTokens_ = std::make_shared<const std::vector<SyntaxToken>>(); }
+    language_ = nullptr;
     setupGenericCode(name);
 }
 
 void SyntaxHighlighter::setTreeSitterLanguage(const std::string& name, const void* language) {
     langName_ = name;
     language_ = language;
-    if (!parser_) parser_ = ts_parser_new();
-    if (parser_ && language_) ts_parser_set_language((TSParser*)parser_, (const TSLanguage*)language_);
 }
 
 static int scopeForNodeType(const char* type) {
@@ -64,17 +77,17 @@ static int scopeForNodeType(const char* type) {
     return 0;
 }
 
-void SyntaxHighlighter::parse(const std::string& text) {
-    treeTokens_.clear();
-    if (!parser_ || !language_) return;
-    TSParser* p = (TSParser*)parser_;
-    TSTree* oldTree = (TSTree*)tree_;
-    TSTree* newTree = ts_parser_parse_string(p, oldTree, text.data(), (uint32_t)text.size());
-    if (oldTree) ts_tree_delete(oldTree);
-    tree_ = newTree;
-    if (!newTree) return;
+static std::vector<SyntaxToken> parseTreeTokens(const std::string& text, const void* language) {
+    std::vector<SyntaxToken> tokens;
+    if (!language) return tokens;
+    TSParser* p = ts_parser_new();
+    if (!p) return tokens;
+    ts_parser_set_language(p, (const TSLanguage*)language);
+    TSTree* newTree = ts_parser_parse_string(p, nullptr, text.data(), (uint32_t)text.size());
+    ts_parser_delete(p);
+    if (!newTree) return tokens;
     std::vector<TSNode> stack;
-    stack.push_back(ts_tree_root_node((TSTree*)tree_));
+    stack.push_back(ts_tree_root_node(newTree));
     while (!stack.empty()) {
         TSNode node = stack.back();
         stack.pop_back();
@@ -83,14 +96,15 @@ void SyntaxHighlighter::parse(const std::string& text) {
         int scope = scopeForNodeType(type);
         if (scope && (childCount == 0 || scope == 2 || scope == 3)) {
             uint32_t start = ts_node_start_byte(node), end = ts_node_end_byte(node);
-            if (end > start) treeTokens_.push_back({start, end - start, scope});
+            if (end > start) tokens.push_back({start, end - start, scope});
         }
         for (uint32_t i = 0; i < childCount; ++i) stack.push_back(ts_node_child(node, childCount - 1 - i));
     }
-    std::sort(treeTokens_.begin(), treeTokens_.end(), [](const SyntaxToken& a, const SyntaxToken& b) { return a.start < b.start; });
+    ts_tree_delete(newTree);
+    std::sort(tokens.begin(), tokens.end(), [](const SyntaxToken& a, const SyntaxToken& b) { return a.start < b.start; });
     std::vector<SyntaxToken> nonOverlapping;
     size_t coveredEnd = 0;
-    for (auto tok : treeTokens_) {
+    for (auto tok : tokens) {
         if (tok.start < coveredEnd) {
             size_t tokEnd = tok.start + tok.length;
             if (tokEnd <= coveredEnd) continue;
@@ -100,7 +114,51 @@ void SyntaxHighlighter::parse(const std::string& text) {
         coveredEnd = tok.start + tok.length;
         nonOverlapping.push_back(tok);
     }
-    treeTokens_ = std::move(nonOverlapping);
+    return nonOverlapping;
+}
+
+void SyntaxHighlighter::ensureParseWorker() {
+    if (!parseWorker_.joinable()) parseWorker_ = std::thread(&SyntaxHighlighter::parseWorkerLoop, this);
+}
+
+void SyntaxHighlighter::parseWorkerLoop() {
+    for (;;) {
+        std::string text;
+        const void* language = nullptr;
+        uint64_t generation = 0;
+        {
+            std::unique_lock<std::mutex> lock(parseMutex_);
+            parseCv_.wait(lock, [&] { return parseStop_ || parseRequested_; });
+            if (parseStop_) return;
+            text = std::move(pendingText_);
+            language = pendingLanguage_;
+            generation = pendingGeneration_;
+            parseRequested_ = false;
+        }
+        auto parsed = std::make_shared<const std::vector<SyntaxToken>>(parseTreeTokens(text, language));
+        if (generation == latestGeneration_.load()) {
+            std::lock_guard<std::mutex> lock(tokenMutex_);
+            treeTokens_ = std::move(parsed);
+        }
+    }
+}
+
+void SyntaxHighlighter::parse(const std::string& text) {
+    if (!language_) {
+        std::lock_guard<std::mutex> lock(tokenMutex_);
+        treeTokens_ = std::make_shared<const std::vector<SyntaxToken>>();
+        return;
+    }
+    ensureParseWorker();
+    {
+        std::lock_guard<std::mutex> lock(parseMutex_);
+        pendingText_ = text;
+        pendingLanguage_ = language_;
+        pendingGeneration_++;
+        latestGeneration_.store(pendingGeneration_);
+        parseRequested_ = true;
+    }
+    parseCv_.notify_one();
 }
 
 void SyntaxHighlighter::setupJS() {
@@ -144,11 +202,16 @@ void SyntaxHighlighter::setupPlainText() { langName_ = "Plain Text"; }
 static bool isWordChar(char c) { return isalnum(static_cast<unsigned char>(c)) || c == '_'; }
 
 std::vector<SyntaxToken> SyntaxHighlighter::highlightLine(std::string_view line, size_t lineOffset) const {
-    if (!treeTokens_.empty()) {
+    std::shared_ptr<const std::vector<SyntaxToken>> treeSnapshot;
+    {
+        std::lock_guard<std::mutex> lock(tokenMutex_);
+        treeSnapshot = treeTokens_;
+    }
+    if (treeSnapshot && !treeSnapshot->empty()) {
         std::vector<SyntaxToken> out;
         size_t lineEnd = lineOffset + line.size();
-        auto it = std::lower_bound(treeTokens_.begin(), treeTokens_.end(), lineOffset, [](const SyntaxToken& tok, size_t pos) { return tok.start + tok.length <= pos; });
-        for (; it != treeTokens_.end() && it->start < lineEnd; ++it) {
+        auto it = std::lower_bound(treeSnapshot->begin(), treeSnapshot->end(), lineOffset, [](const SyntaxToken& tok, size_t pos) { return tok.start + tok.length <= pos; });
+        for (; it != treeSnapshot->end() && it->start < lineEnd; ++it) {
             size_t s = std::max(it->start, lineOffset), e = std::min(it->start + it->length, lineEnd);
             if (!out.empty()) {
                 size_t prevEnd = out.back().start + out.back().length;
@@ -238,13 +301,6 @@ const SyntaxColor& SyntaxHighlighter::scopeColor(int scope) const {
 }
 
 void SyntaxHighlighter::notifyEdit(size_t startByte, size_t oldEndByte, size_t newEndByte, size_t startRow, size_t startCol, size_t oldEndRow, size_t oldEndCol, size_t newEndRow, size_t newEndCol) {
-    if (!tree_) return;
-    TSInputEdit edit;
-    edit.start_byte = (uint32_t)startByte;
-    edit.old_end_byte = (uint32_t)oldEndByte;
-    edit.new_end_byte = (uint32_t)newEndByte;
-    edit.start_point = {static_cast<uint32_t>(startRow), static_cast<uint32_t>(startCol)};
-    edit.old_end_point = {static_cast<uint32_t>(oldEndRow), static_cast<uint32_t>(oldEndCol)};
-    edit.new_end_point = {static_cast<uint32_t>(newEndRow), static_cast<uint32_t>(newEndCol)};
-    ts_tree_edit((TSTree*)tree_, &edit);
+    (void)startByte; (void)oldEndByte; (void)newEndByte;
+    (void)startRow; (void)startCol; (void)oldEndRow; (void)oldEndCol; (void)newEndRow; (void)newEndCol;
 }
