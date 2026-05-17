@@ -1468,6 +1468,42 @@ void Application::closeAllPopups() {
     hidePopupWindow();
 }
 
+void Application::buildVisualLineMap(float editorWidth, float gutterWidth) {
+    visualLines_.clear();
+    if (!wordWrap_) return;
+    float wrapWidth = editorWidth - gutterWidth - 16.f;
+    if (wrapWidth < 50.f) wrapWidth = 50.f;
+    float charW = std::max(1.f, fontAtlas().measureText(" "));
+    int maxCols = std::max(10, (int)(wrapWidth / charW));
+    size_t nLines = totalLines();
+    for (size_t ln = 0; ln < nLines; ++ln) {
+        if (isFolded(ln)) continue;
+        size_t ls = lineStartForLine(ln), le = lineEnd(ls);
+        int lineLen = (int)(le - ls);
+        if (lineLen <= maxCols) {
+            visualLines_.push_back({(int)ln, 0, lineLen});
+            continue;
+        }
+        int col = 0;
+        while (col < lineLen) {
+            int remaining = lineLen - col;
+            if (remaining <= maxCols) {
+                visualLines_.push_back({(int)ln, col, lineLen});
+                break;
+            }
+            // find wrap point at word boundary
+            int breakCol = col + maxCols;
+            int bestBreak = breakCol;
+            for (int i = breakCol; i > col + maxCols / 2; --i) {
+                char c = textBuffer[ls + i];
+                if (c == ' ' || c == '\t') { bestBreak = i + 1; break; }
+            }
+            visualLines_.push_back({(int)ln, col, bestBreak});
+            col = bestBreak;
+        }
+    }
+}
+
 // ── events ──
 
 void Application::handleEvents() {
@@ -1978,6 +2014,8 @@ void Application::handleEvents() {
             else if (ctrl && shift && sym == SDLK_F2) { clearBookmarks(); }
             else if (sym == SDLK_F2 && (mod & KMOD_SHIFT)) { prevBookmark(); }
             else if (sym == SDLK_F2 && !(mod & KMOD_CTRL)) { nextBookmark(); }
+            else if (sym == SDLK_F11 && !(mod & KMOD_SHIFT)) { toggleFullscreen(); }
+            else if ((mod & KMOD_ALT) && sym == SDLK_z) { wordWrap_ = !wordWrap_; visualLines_.clear(); }
             else if (ctrl && sym == SDLK_n) newBuffer();
             else if (ctrl && sym == SDLK_w) closeTab(activeTab_);
             else if (ctrl && shift && sym == SDLK_LEFTBRACKET) toggleFold(lineOfPos(sel.cursor));

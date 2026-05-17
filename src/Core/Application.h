@@ -119,6 +119,7 @@ public:
     void commandPalette() { commandPalette_.active = true; commandPalette_.query.clear(); commandPalette_.selected = 0; updateCommandPalette(); }
     void toggleFullscreen();
     void toggleMinimap() { minimapVisible_ = !minimapVisible_; }
+    void toggleWordWrap() { wordWrap_ = !wordWrap_; visualLines_.clear(); }
     void swapLineUp();
     void swapLineDown();
     void duplicateLine();
@@ -261,6 +262,9 @@ private:
     float tabDragOffsetX_ = 0.f;
     // word wrap
     bool wordWrap_ = false;
+    struct VisualLine { int bufferLine; int startCol; int endCol; };
+    std::vector<VisualLine> visualLines_;
+    void buildVisualLineMap(float editorWidth, float gutterWidth);
     // box/column selection
     bool boxSelActive_ = false;
     int boxSelStartLine_ = 0, boxSelStartCol_ = 0;
