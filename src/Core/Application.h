@@ -247,6 +247,8 @@ private:
     void ensurePopupWindow();
     void renderPopupToWindow(int x, int y, int w, int h);
     void hidePopupWindow();
+    void shapePopupWindowForMenu();
+    void clearPopupWindowShape();
     void convertIndentation(bool toSpaces);
     void guessIndent();
     void notifySyntaxEdit(size_t startByte, size_t oldEndByte, size_t newEndByte);

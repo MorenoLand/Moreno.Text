@@ -657,6 +657,32 @@ void Application::hidePopupWindow() {
     if (popupWin_) SDL_HideWindow(popupWin_);
 }
 
+void Application::shapePopupWindowForMenu() {
+#ifdef _WIN32
+    if (!popupWin_) return;
+    SDL_SysWMinfo wmInfo; SDL_VERSION(&wmInfo.version);
+    if (!SDL_GetWindowWMInfo(popupWin_, &wmInfo)) return;
+    SDL_Rect mainRect{}, submenuRect{}; bool hasSubmenu = false;
+    int pw = 1, ph = 1; SDL_GetWindowSize(popupWin_, &pw, &ph);
+    titlebar_->getMenuPanelRects(fontAtlas(), pw, ph, mainRect, submenuRect, hasSubmenu);
+    HRGN region = CreateRectRgn(mainRect.x, mainRect.y, mainRect.x + mainRect.w, mainRect.y + mainRect.h);
+    if (hasSubmenu && submenuRect.w > 0 && submenuRect.h > 0) {
+        HRGN submenu = CreateRectRgn(submenuRect.x, submenuRect.y, submenuRect.x + submenuRect.w, submenuRect.y + submenuRect.h);
+        CombineRgn(region, region, submenu, RGN_OR);
+        DeleteObject(submenu);
+    }
+    SetWindowRgn(reinterpret_cast<HWND>(wmInfo.info.win.window), region, TRUE);
+#endif
+}
+
+void Application::clearPopupWindowShape() {
+#ifdef _WIN32
+    if (!popupWin_) return;
+    SDL_SysWMinfo wmInfo; SDL_VERSION(&wmInfo.version);
+    if (SDL_GetWindowWMInfo(popupWin_, &wmInfo)) SetWindowRgn(reinterpret_cast<HWND>(wmInfo.info.win.window), nullptr, TRUE);
+#endif
+}
+
 static void drawPopupClearRect(int w, int h) {
     std::vector<float> verts = {0,0,0,0,0.118f,0.118f,0.118f,1.f, 0,(float)h,0,0,0.118f,0.118f,0.118f,1.f, (float)w,(float)h,0,0,0.118f,0.118f,0.118f,1.f,
         0,0,0,0,0.118f,0.118f,0.118f,1.f, (float)w,(float)h,0,0,0.118f,0.118f,0.118f,1.f, (float)w,0,0,0,0.118f,0.118f,0.118f,1.f};
@@ -1172,6 +1198,15 @@ void Application::handleEvents() {
             titlebar_->closeMenuPopup();
             tabDropdownOpen_ = false; tabContextOpen_ = false; statusPopup_ = StatusPopup::None; acActive_ = false; commandPalette_.active = false;
             hidePopupWindow();
+            continue;
+        }
+        if (popupWin_ && e.type == SDL_WINDOWEVENT && e.window.windowID == SDL_GetWindowID(popupWin_) && e.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
+            SDL_Window* focused = SDL_GetKeyboardFocus();
+            if (focused != window_ && focused != popupWin_) {
+                titlebar_->closeMenuPopup();
+                tabDropdownOpen_ = false; tabContextOpen_ = false; statusPopup_ = StatusPopup::None; acActive_ = false; commandPalette_.active = false;
+                hidePopupWindow();
+            }
             continue;
         }
         if (closeConfirmOpen_) {
@@ -2210,6 +2245,8 @@ void Application::render() {
         int winX = 0, winY = 0; SDL_GetWindowPosition(window_, &winX, &winY);
         popupMainX_ = mainX; popupMainY_ = mainY; popupMainW_ = mainW; popupMainH_ = mainH;
         renderPopupToWindow(winX + static_cast<int>(mainX), winY + static_cast<int>(mainY), static_cast<int>(mainW), static_cast<int>(mainH));
+        if (popupKind == PopupKind::Menu) shapePopupWindowForMenu();
+        else clearPopupWindowShape();
         auto drawRect = [](std::vector<float>& verts, float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
             verts.insert(verts.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
         };

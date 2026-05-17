@@ -34,6 +34,7 @@ public:
     void closeMenuPopup() { closeMenu(); }
     void deferMenuDraw() { menuDeferred_ = true; }
     void getMenuBounds(float& x, float& y, float& w, float& h) const;
+    void getMenuPanelRects(class FontAtlas& font, int windowW, int windowH, SDL_Rect& mainRect, SDL_Rect& submenuRect, bool& hasSubmenu) const;
     void drawMenuPopup(FontAtlas& font, float ox, float oy);
 private:
     float height_ = 30.f;

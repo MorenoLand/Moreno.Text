@@ -4,6 +4,7 @@
 #include "Renderer/GLRenderer.h"
 #include "icon_data.h"
 #include <GL/glew.h>
+#include <algorithm>
 #include <cstdio>
 
 extern GLuint gl_shaderProgram();
@@ -58,6 +59,34 @@ void Titlebar::getMenuBounds(float& x, float& y, float& w, float& h) const {
         float sh = sy + 2.f + static_cast<float>(submenus_[submenuOpen_].size()) * itemH;
         if (sh > h) h = sh;
     }
+}
+
+void Titlebar::getMenuPanelRects(FontAtlas& font, int windowW, int windowH, SDL_Rect& mainRect, SDL_Rect& submenuRect, bool& hasSubmenu) const {
+    float maxW = 140.f;
+    for (auto& item : menuItems_) {
+        float w = font.measureText(item.label);
+        if (!item.shortcut.empty()) w += font.measureText(item.shortcut) + 24.f;
+        if (w + 32.f > maxW) maxW = w + 32.f;
+    }
+    float itemH = 24.f;
+    float ddW = maxW, ddH = 2.f + static_cast<float>(menuItems_.size()) * itemH;
+    mainRect = {0, 0, static_cast<int>(ddW + 1.f), static_cast<int>(ddH + 1.f)};
+    hasSubmenu = submenuOpen_ >= 0 && submenuOpen_ < static_cast<int>(submenus_.size());
+    submenuRect = {0, 0, 0, 0};
+    if (!hasSubmenu) return;
+    auto& sm = submenus_[submenuOpen_];
+    float sw = 180.f;
+    for (auto& item : sm) {
+        float w = font.measureText(item.label);
+        if (!item.shortcut.empty()) w += font.measureText(item.shortcut) + 30.f;
+        if (w + 32.f > sw) sw = w + 32.f;
+    }
+    float sx = ddW + 2.f, sy = 2.f + submenuOpen_ * itemH;
+    float maxH = windowH * 0.8f, sh = 2.f + sm.size() * itemH;
+    if (sy + sh > windowH - 8.f) sy = windowH - sh - 8.f;
+    if (sh > maxH) sh = maxH;
+    if (sx + sw > windowW - 4.f) sx = std::max(0.f, -sw - 2.f);
+    submenuRect = {static_cast<int>(sx), static_cast<int>(sy), static_cast<int>(sw + 1.f), static_cast<int>(sh + 1.f)};
 }
 
 void Titlebar::drawMenu(FontAtlas& font) {
