@@ -663,8 +663,7 @@ void Application::shapePopupWindowForMenu() {
     SDL_SysWMinfo wmInfo; SDL_VERSION(&wmInfo.version);
     if (!SDL_GetWindowWMInfo(popupWin_, &wmInfo)) return;
     SDL_Rect mainRect{}, submenuRect{}; bool hasSubmenu = false;
-    int pw = 1, ph = 1; SDL_GetWindowSize(popupWin_, &pw, &ph);
-    titlebar_->getMenuPanelRects(fontAtlas(), pw, ph, mainRect, submenuRect, hasSubmenu);
+    titlebar_->getMenuPanelRects(fontAtlas(), 32000, 32000, mainRect, submenuRect, hasSubmenu);
     HRGN region = CreateRectRgn(mainRect.x, mainRect.y, mainRect.x + mainRect.w, mainRect.y + mainRect.h);
     if (hasSubmenu && submenuRect.w > 0 && submenuRect.h > 0) {
         HRGN submenu = CreateRectRgn(submenuRect.x, submenuRect.y, submenuRect.x + submenuRect.w, submenuRect.y + submenuRect.h);
@@ -2211,7 +2210,7 @@ void Application::render() {
     float mainX = 0.f, mainY = 0.f, mainW = 0.f, mainH = 0.f;
     enum class PopupKind { None, Menu, TabDropdown, TabContext, Status, Autocomplete } popupKind = PopupKind::None;
     if (titlebar_->isMenuOpen()) {
-        titlebar_->getMenuBounds(mainX, mainY, mainW, mainH);
+        titlebar_->getMenuPopupBounds(fontAtlas(), mainX, mainY, mainW, mainH);
         popupKind = PopupKind::Menu; hasPopup = true;
     } else if (tabDropdownOpen_) {
         mainX = tabChevronX_; mainY = titlebar_->height() + tabBarH_;

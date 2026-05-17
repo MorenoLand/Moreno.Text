@@ -61,6 +61,22 @@ void Titlebar::getMenuBounds(float& x, float& y, float& w, float& h) const {
     }
 }
 
+void Titlebar::getMenuPopupBounds(FontAtlas& font, float& x, float& y, float& w, float& h) const {
+    SDL_Rect mainRect{}, submenuRect{}; bool hasSubmenu = false;
+    getMenuPanelRects(font, 32000, 32000, mainRect, submenuRect, hasSubmenu);
+    int minX = mainRect.x, minY = mainRect.y, maxX = mainRect.x + mainRect.w, maxY = mainRect.y + mainRect.h;
+    if (hasSubmenu) {
+        minX = std::min(minX, submenuRect.x);
+        minY = std::min(minY, submenuRect.y);
+        maxX = std::max(maxX, submenuRect.x + submenuRect.w);
+        maxY = std::max(maxY, submenuRect.y + submenuRect.h);
+    }
+    x = static_cast<float>(minX);
+    y = height_ + static_cast<float>(minY);
+    w = static_cast<float>(maxX - minX);
+    h = static_cast<float>(maxY - minY);
+}
+
 void Titlebar::getMenuPanelRects(FontAtlas& font, int windowW, int windowH, SDL_Rect& mainRect, SDL_Rect& submenuRect, bool& hasSubmenu) const {
     float maxW = 140.f;
     for (auto& item : menuItems_) {
@@ -85,7 +101,7 @@ void Titlebar::getMenuPanelRects(FontAtlas& font, int windowW, int windowH, SDL_
     float maxH = windowH * 0.8f, sh = 2.f + sm.size() * itemH;
     if (sy + sh > windowH - 8.f) sy = windowH - sh - 8.f;
     if (sh > maxH) sh = maxH;
-    if (sx + sw > windowW - 4.f) sx = std::max(0.f, -sw - 2.f);
+    if (windowW < 30000 && sx + sw > windowW - 4.f) sx = -sw - 2.f;
     submenuRect = {static_cast<int>(sx), static_cast<int>(sy), static_cast<int>(sw + 1.f), static_cast<int>(sh + 1.f)};
 }
 
@@ -151,7 +167,8 @@ void Titlebar::drawMenuPopup(FontAtlas& font, float ox, float oy) {
         float maxH = wh * 0.8f, sh = 2.f + sm.size() * itemH;
         if (sy + sh > wh - 8.f) sy = wh - sh - 8.f;
         if (sh > maxH) sh = maxH;
-        if (sx + sw > ww - 4.f) sx = std::max(0.f, ddX - sw - 2.f);
+        bool popupLocal = ox != 0.f || oy != 0.f;
+        if (!popupLocal && sx + sw > ww - 4.f) sx = ddX - sw - 2.f;
         v.clear();
         ar(sx, sy, sx + sw, sy + sh, 0.17f, 0.17f, 0.20f, 0.98f);
         if (submenuHovered_ >= 0 && submenuHovered_ < (int)sm.size() && !sm[submenuHovered_].separator)
