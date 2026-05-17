@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <atomic>
 #include <mutex>
+#include <set>
 
 class Titlebar;
 class Gutter;
@@ -63,7 +64,7 @@ struct TabBuffer {
     std::vector<SelRange> selections;
     float scrollY = 0.f;
     std::vector<UndoStep> undoStack, redoStack;
-    std::vector<bool> foldedLines;
+    std::set<std::pair<int,int>> foldedRegions;
     bool dirty = false;
     float desiredCursorX = -1.f;
 };
@@ -205,10 +206,15 @@ private:
     size_t acPrefixStart_ = 0;
     void updateAutocomplete();
     void acceptAutocomplete();
-    std::vector<bool> foldedLines_;
+    std::set<std::pair<int,int>> foldedRegions_;
     void toggleFold(size_t line);
     bool isFolded(size_t line) const;
+    bool isFoldStart(size_t line) const;
+    bool isFoldableLine(size_t line) const;
     size_t findFoldEnd(size_t startLine) const;
+    void foldAll();
+    void unfoldAll();
+    bool pendingCtrlK_ = false;
     std::vector<int> lineIndents_;
     void computeLineIndents();
     bool useTabs_ = false;

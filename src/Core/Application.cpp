@@ -344,7 +344,7 @@ void Application::openFile(const std::string& path) {
     tabs_.push_back(std::move(tab)); activeTab_ = tabs_.size()-1;
     textBuffer = tabs_[activeTab_].text; openFilePath_ = path; openFile_ = tabs_[activeTab_].fileName;
     dirty_ = false; selections_.clear(); selections_.emplace_back(textBuffer.size());
-    scrollY_ = 0; undoStack_.clear(); redoStack_.clear(); foldedLines_.clear(); detectSyntax(); updateGitBranch();
+    scrollY_ = 0; undoStack_.clear(); redoStack_.clear(); foldedRegions_.clear(); detectSyntax(); updateGitBranch();
 }
 void Application::saveFile() { if (openFilePath_.empty()) { saveFileAs(); return; } std::ofstream f(openFilePath_, std::ios::binary); if (!f) return; f << textBuffer; dirty_ = false; updateGitBranch(); }
 void Application::saveFileAs() {
@@ -383,7 +383,7 @@ void Application::newBuffer() {
     TabBuffer tab; tab.fileName = "untitled"; tab.selections.emplace_back(0);
     tabs_.push_back(std::move(tab)); activeTab_ = tabs_.size()-1;
     textBuffer.clear(); openFilePath_.clear(); openFile_ = "untitled"; dirty_ = false;
-    selections_.clear(); selections_.emplace_back(0); scrollY_ = 0; undoStack_.clear(); redoStack_.clear(); foldedLines_.clear(); detectSyntax();
+    selections_.clear(); selections_.emplace_back(0); scrollY_ = 0; undoStack_.clear(); redoStack_.clear(); foldedRegions_.clear(); detectSyntax();
 }
 
 void Application::toggleFullscreen() {
@@ -555,24 +555,85 @@ void Application::doRedo() { if (redoStack_.empty()) return; undoStack_.push_bac
 
 // ── folding ──
 
-bool Application::isFolded(size_t line) const { return line < foldedLines_.size() && foldedLines_[line]; }
+bool Application::isFolded(size_t line) const {
+    int ln = static_cast<int>(line);
+    for (const auto& region : foldedRegions_)
+        if (ln > region.first && ln <= region.second) return true;
+    return false;
+}
+
+bool Application::isFoldStart(size_t line) const {
+    int ln = static_cast<int>(line);
+    return std::any_of(foldedRegions_.begin(), foldedRegions_.end(), [ln](const auto& region) {
+        return region.first == ln;
+    });
+}
+
+bool Application::isFoldableLine(size_t line) const {
+    if (line >= totalLines()) return false;
+    size_t ls = lineStartForLine(line), le = lineEnd(ls);
+    while (le > ls && (textBuffer[le - 1] == ' ' || textBuffer[le - 1] == '\t')) --le;
+    if (le > ls && textBuffer[le - 1] == '{') return true;
+    if (line + 1 < totalLines()) {
+        int curInd = (line < lineIndents_.size()) ? lineIndents_[line] : 0;
+        int nxtInd = (line + 1 < lineIndents_.size()) ? lineIndents_[line + 1] : 0;
+        return nxtInd > curInd;
+    }
+    return false;
+}
+
 size_t Application::findFoldEnd(size_t startLine) const {
     size_t ls = lineStartForLine(startLine), le = lineEnd(ls);
-    if (le >= textBuffer.size()) return startLine;
-    char openCh = textBuffer[le]; // the '{', '[', '(' at end of line
-    char closeCh = (openCh == '{') ? '}' : (openCh == '[') ? ']' : (openCh == '(') ? ')' : 0;
-    if (!closeCh) return startLine;
-    int depth = 1; size_t pos = le + 1;
-    while (pos < textBuffer.size() && depth > 0) {
-        if (textBuffer[pos] == openCh) ++depth;
-        else if (textBuffer[pos] == closeCh) --depth;
-        ++pos;
+    size_t trimmed = le;
+    while (trimmed > ls && (textBuffer[trimmed - 1] == ' ' || textBuffer[trimmed - 1] == '\t')) --trimmed;
+    if (trimmed > ls && textBuffer[trimmed - 1] == '{') {
+        int depth = 1;
+        for (size_t pos = trimmed; pos < textBuffer.size(); ++pos) {
+            if (textBuffer[pos] == '{') ++depth;
+            else if (textBuffer[pos] == '}') {
+                if (--depth == 0) return lineOfPos(pos);
+            }
+        }
     }
-    return lineOfPos(pos);
+    if (startLine + 1 < totalLines()) {
+        int baseInd = (startLine < lineIndents_.size()) ? lineIndents_[startLine] : 0;
+        size_t end = startLine;
+        for (size_t ln = startLine + 1; ln < totalLines(); ++ln) {
+            int ind = (ln < lineIndents_.size()) ? lineIndents_[ln] : 0;
+            size_t rowStart = lineStartForLine(ln), rowEnd = lineEnd(rowStart);
+            bool blank = rowStart == rowEnd;
+            if (!blank && ind <= baseInd) break;
+            end = ln;
+        }
+        return end;
+    }
+    return startLine;
 }
+
 void Application::toggleFold(size_t line) {
-    if (foldedLines_.size() <= line) foldedLines_.resize(line + 20, false);
-    foldedLines_[line] = !foldedLines_[line];
+    int ln = static_cast<int>(line);
+    auto it = std::find_if(foldedRegions_.begin(), foldedRegions_.end(), [ln](const auto& region) {
+        return region.first == ln;
+    });
+    if (it != foldedRegions_.end()) { foldedRegions_.erase(it); return; }
+    computeLineIndents();
+    if (!isFoldableLine(line)) return;
+    size_t end = findFoldEnd(line);
+    if (end > line) foldedRegions_.insert({ln, static_cast<int>(end)});
+}
+
+void Application::foldAll() {
+    computeLineIndents();
+    foldedRegions_.clear();
+    for (size_t ln = 0; ln < totalLines(); ++ln) {
+        if (!isFoldableLine(ln)) continue;
+        size_t end = findFoldEnd(ln);
+        if (end > ln) foldedRegions_.insert({static_cast<int>(ln), static_cast<int>(end)});
+    }
+}
+
+void Application::unfoldAll() {
+    foldedRegions_.clear();
 }
 
 void Application::ensurePopupWindow() {
@@ -674,7 +735,7 @@ void Application::saveCurrentTab() {
     tab.text = textBuffer; tab.filePath = openFilePath_; tab.fileName = openFile_;
     tab.selections = selections_; tab.scrollY = scrollY_;
     tab.undoStack = std::move(undoStack_); tab.redoStack = std::move(redoStack_);
-    tab.foldedLines = foldedLines_; tab.dirty = dirty_; tab.desiredCursorX = desiredCursorX_;
+    tab.foldedRegions = foldedRegions_; tab.dirty = dirty_; tab.desiredCursorX = desiredCursorX_;
 }
 
 void Application::loadTab(size_t index) {
@@ -683,7 +744,7 @@ void Application::loadTab(size_t index) {
     textBuffer = tab.text; openFilePath_ = tab.filePath; openFile_ = tab.fileName;
     selections_ = tab.selections; scrollY_ = tab.scrollY;
     undoStack_ = std::move(tab.undoStack); redoStack_ = std::move(tab.redoStack);
-    foldedLines_ = tab.foldedLines; dirty_ = tab.dirty; desiredCursorX_ = tab.desiredCursorX;
+    foldedRegions_ = tab.foldedRegions; dirty_ = tab.dirty; desiredCursorX_ = tab.desiredCursorX;
     activeTab_ = index; detectSyntax(); updateGitBranch();
 }
 
@@ -1276,15 +1337,8 @@ void Application::handleEvents() {
                 float clickY = my + scrollY_ - textOriginY;
                 size_t clickLine = (size_t)(clickY / lineStep);
                 if (clickLine < totalLines()) {
-                    size_t le = lineEnd(lineStartForLine(clickLine));
-                    bool bracketFold = (le < textBuffer.size() && (textBuffer[le] == '{' || textBuffer[le] == '[' || textBuffer[le] == '('));
-                    bool indentFold = false;
-                    if (!bracketFold && clickLine + 1 < totalLines()) {
-                        int curInd = (clickLine < lineIndents_.size()) ? lineIndents_[clickLine] : 0;
-                        int nxtInd = (clickLine + 1 < lineIndents_.size()) ? lineIndents_[clickLine+1] : 0;
-                        indentFold = (nxtInd > curInd);
-                    }
-                    if (bracketFold || indentFold) { toggleFold(clickLine); continue; }
+                    computeLineIndents();
+                    if (isFoldableLine(clickLine) || isFoldStart(clickLine)) { toggleFold(clickLine); continue; }
                 }
             }
             if (my > tbH && mx >= gutterW) {
@@ -1320,8 +1374,14 @@ void Application::handleEvents() {
             auto mod = e.key.keysym.mod; auto sym = e.key.keysym.sym;
             auto& sel = selections_[0];
             bool shift = mod & KMOD_SHIFT, ctrl = mod & KMOD_CTRL;
+            if (pendingCtrlK_) {
+                pendingCtrlK_ = false;
+                if (ctrl && sym == SDLK_1) { foldAll(); continue; }
+                if (ctrl && sym == SDLK_j) { unfoldAll(); continue; }
+            }
             if (ctrl && sym == SDLK_q) running_ = false;
             else if (sym == SDLK_ESCAPE) { selections_.clear(); selections_.emplace_back(sel.cursor); find_.active = false; goto_.active = false; tabDropdownOpen_ = false; acActive_ = false; }
+            else if (ctrl && sym == SDLK_k) { pendingCtrlK_ = true; }
             else if (ctrl && sym == SDLK_a) { sel.anchor = 0; sel.cursor = textBuffer.size(); }
             else if (ctrl && sym == SDLK_c) copySelectionOrLine();
             else if (ctrl && sym == SDLK_x) cutSelectionOrLine();
@@ -1337,6 +1397,14 @@ void Application::handleEvents() {
             else if (ctrl && sym == SDLK_o) openFileDialog();
             else if (ctrl && sym == SDLK_n) newBuffer();
             else if (ctrl && sym == SDLK_w) closeTab(activeTab_);
+            else if (ctrl && shift && sym == SDLK_LEFTBRACKET) toggleFold(lineOfPos(sel.cursor));
+            else if (ctrl && shift && sym == SDLK_RIGHTBRACKET) {
+                size_t line = lineOfPos(sel.cursor);
+                int ln = static_cast<int>(line);
+                for (auto it = foldedRegions_.begin(); it != foldedRegions_.end(); ++it) {
+                    if (it->first == ln || (ln > it->first && ln <= it->second)) { foldedRegions_.erase(it); break; }
+                }
+            }
             else if (ctrl && sym == SDLK_d) {
                 size_t pos = sel.cursor, ls = lineStart(pos), le = lineEnd(ls);
                 std::string_view lt(textBuffer.data() + ls, le - ls);
@@ -1643,20 +1711,14 @@ void Application::render() {
                     fontAtlas().drawText(rest, cx, y, c.r, c.g, c.b, 1.0f);
                 }
             }
+            if (isFoldStart(lineIdx)) {
+                float ellipsisX = textX + fontAtlas().measureText(line) + fontAtlas().measureText(" ");
+                fontAtlas().drawText("...", ellipsisX, y, 0.55f, 0.55f, 0.60f, 1.f);
+            }
         }
         y += isFolded(lineIdx) ? 0 : lineStep;
         ++lineIdx; lStart = lEnd + 1;
         if (y > fwh) break;
-    }
-
-    {
-        float fy = textOriginY - scrollY_;
-        for (size_t ln = 0; ln < totalLines(); ++ln) {
-            if (isFolded(ln) && fy + lineStep > tbH && fy < fwh) {
-                fontAtlas().drawText("\xe2\x80\xa6", textX, fy, 0.5f, 0.5f, 0.3f, 1.f); // \u2026 ellipsis
-            }
-            fy += lineStep;
-        }
     }
 
     {
@@ -1693,22 +1755,18 @@ void Application::render() {
         auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
             fv.insert(fv.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
         };
+        auto tri = [&](float x0,float y0,float x1,float y1,float x2,float y2,float r,float g,float b,float a) {
+            fv.insert(fv.end(),{x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x2,y2,0,0,r,g,b,a});
+        };
         float gy = textOriginY - scrollY_;
         for (size_t ln = 0; ln < totalLines(); ++ln) {
+            if (isFolded(ln)) continue;
             if (gy + lineStep < tbH || gy > fwh) { gy += lineStep; continue; }
-            size_t le = lineEnd(lineStartForLine(ln));
-            bool bracketFold = (le < textBuffer.size() && (textBuffer[le] == '{' || textBuffer[le] == '[' || textBuffer[le] == '('));
-            bool indentFold = false;
-            if (!bracketFold && ln + 1 < totalLines()) {
-                int curInd = (ln < lineIndents_.size()) ? lineIndents_[ln] : 0;
-                int nxtInd = (ln + 1 < lineIndents_.size()) ? lineIndents_[ln+1] : 0;
-                indentFold = (nxtInd > curInd);
-            }
-            bool foldable = bracketFold || indentFold;
+            bool foldable = isFoldableLine(ln) || isFoldStart(ln);
             if (foldable) {
-                float tx = 4.f, ty = gy + lineStep / 2.f - 3.f;
-                if (isFolded(ln)) { ar(tx, ty, tx+6, ty+6, 0.6f,0.6f,0.3f,1.f); }
-                else { ar(tx, ty+6, tx+3, ty, 0.5f,0.5f,0.55f,1.f); ar(tx+3, ty, tx+6, ty+6, 0.5f,0.5f,0.55f,1.f); }
+                float tx = 6.f, ty = gy + lineStep / 2.f - 4.f;
+                if (isFoldStart(ln)) tri(tx, ty, tx, ty + 8.f, tx + 7.f, ty + 4.f, 0.72f, 0.72f, 0.76f, 1.f);
+                else tri(tx, ty + 2.f, tx + 8.f, ty + 2.f, tx + 4.f, ty + 8.f, 0.55f, 0.55f, 0.60f, 1.f);
             }
             gy += lineStep;
         }
