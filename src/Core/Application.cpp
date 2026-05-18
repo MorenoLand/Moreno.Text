@@ -82,6 +82,7 @@ bool Application::init(int argc, char** argv) {
         tabSize_ = settings.get<int>("tab_size", 4);
         useTabs_ = !settings.get<bool>("translate_tabs_to_spaces", true);
         autoPair_ = settings.get<bool>("auto_match_enabled", true);
+        scrollPastEnd_ = settings.get<bool>("scroll_past_end", true);
         minimapVisible_ = settings.get<bool>("minimap_visible", true);
     }
     // load color scheme
@@ -1799,7 +1800,8 @@ void Application::handleEvents() {
             float lineStep = fontAtlas().lineHeight();
             float viewH = (float)wh - tbH - sbH;
             float contentH = totalLines() * lineStep;
-            float maxScroll = contentH > viewH ? contentH - viewH : 0.f;
+            float scrollPad = scrollPastEnd_ ? lineStep * 5.f : 0.f;
+            float maxScroll = contentH + scrollPad > viewH ? contentH + scrollPad - viewH : 0.f;
             float mmX = (float)ww - (minimapVisible_ ? minimap_->width() : 0.f);
             float sbX = mmX - 10.f;
             scrollbarHovered_ = !minimapVisible_ && e.motion.x >= (int)sbX && e.motion.x < (int)mmX && e.motion.y >= (int)tbH && e.motion.y < wh - (int)sbH;
@@ -1913,7 +1915,8 @@ void Application::handleEvents() {
             float sbX = mmX - 10.f;
             float viewH = fwh - tbH - sbH;
             float contentH = totalLines() * lineStep;
-            float maxScroll = contentH > viewH ? contentH - viewH : 0.f;
+            float scrollPad = scrollPastEnd_ ? lineStep * 5.f : 0.f;
+            float maxScroll = contentH + scrollPad > viewH ? contentH + scrollPad - viewH : 0.f;
             auto clampScroll = [&] { if (scrollY_ < 0.f) scrollY_ = 0.f; if (scrollY_ > maxScroll) scrollY_ = maxScroll; };
             if (!minimapVisible_ && mx >= sbX && mx < mmX && my >= tbH && my < fwh - sbH) {
                 float thumbH = contentH > 0.f ? viewH * (viewH / contentH) : viewH;
@@ -2607,12 +2610,14 @@ void Application::render() {
     if (!minimapVisible_) {
         float sbX = fww - mmW - scrollbarW;
         float contentH = totalLines() * lineStep;
+        float scrollPad = scrollPastEnd_ ? lineStep * 5.f : 0.f;
         float viewH = fwh - tbH - sbH;
-        float thumbFrac = (contentH > 0) ? viewH / contentH : 1.f;
+        float thumbFrac = (contentH + scrollPad > 0) ? viewH / (contentH + scrollPad) : 1.f;
         if (thumbFrac > 1.f) thumbFrac = 1.f;
         float thumbH = viewH * thumbFrac;
         if (thumbH < 20.f) thumbH = 20.f;
-        float maxScroll = contentH - viewH;
+        float maxScroll = contentH + scrollPad - viewH;
+        if (maxScroll < 0.f) maxScroll = 0.f;
         float thumbY = (maxScroll > 0) ? tbH + (scrollY_ / maxScroll) * (viewH - thumbH) : tbH;
         std::vector<float> sv;
         auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {

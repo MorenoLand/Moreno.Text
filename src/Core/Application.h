@@ -272,6 +272,7 @@ private:
     int boxSelEndLine_ = 0, boxSelEndCol_ = 0;
     // auto pair
     bool autoPair_ = true;
+    bool scrollPastEnd_ = true;
     bool inOsDialog_ = false;
     std::vector<int> lineIndents_;
     void computeLineIndents();
