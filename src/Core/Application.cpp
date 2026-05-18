@@ -1152,6 +1152,8 @@ void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
         if (i == activeTab_) {
             ar(tx, barY, tx + tw, barY + tabBarH_, 0.20f, 0.20f, 0.23f, 1.f);
             ar(tx, barY + tabBarH_ - 2.f, tx + tw, barY + tabBarH_, accentColor_.r, accentColor_.g, accentColor_.b, 0.8f);
+        } else if (i == tabHoverIndex_) {
+            ar(tx, barY + tabBarH_ - 2.f, tx + tw, barY + tabBarH_, accentColor_.r, accentColor_.g, accentColor_.b, 0.4f);
         }
         labels.push_back({i, tx, label});
         tx += tw;
@@ -1283,6 +1285,23 @@ bool Application::handleTabBarEvent(const SDL_Event& e, float windowW, float tit
         return true;
     }
     if (e.type == SDL_MOUSEBUTTONUP && e.button.button == 1 && tabDragging_) { tabDragging_ = false; return true; }
+    if (e.type == SDL_MOUSEMOTION) {
+        float mx = (float)e.motion.x, my = (float)e.motion.y;
+        int ww, wh; SDL_GetWindowSize(window_, &ww, &wh);
+        float barY = titlebar_->height();
+        float controlsW = 80.f, visibleW = (float)ww - controlsW;
+        if (my >= barY && my < barY + tabBarH_ && mx < visibleW) {
+            float tx = -tabScrollX_;
+            tabHoverIndex_ = (size_t)-1;
+            for (size_t i = 0; i < tabs_.size(); ++i) {
+                std::string label = tabs_[i].fileName.empty() ? "untitled" : tabs_[i].fileName;
+                if (tabs_[i].dirty) label += "\xe2\x80\xa2";
+                float tw = std::max(fontAtlas().measureText(label) + 32.f, 48.f);
+                if (mx >= tx && mx < tx + tw) { tabHoverIndex_ = i; break; }
+                tx += tw;
+            }
+        } else { tabHoverIndex_ = (size_t)-1; }
+    }
     if (e.type == SDL_MOUSEMOTION && tabContextOpen_) {
         float mx = (float)e.motion.x, my = (float)e.motion.y, itemH = 24.f, popW = 260.f;
         int itemCount = tabContextIndex_ != activeTab_ ? 13 : 12;

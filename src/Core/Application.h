@@ -285,6 +285,7 @@ private:
     // tab drag
     bool tabDragging_ = false;
     size_t tabDragIndex_ = 0;
+    size_t tabHoverIndex_ = (size_t)-1;
     float tabDragStartX_ = 0.f;
     float tabDragOffsetX_ = 0.f;
     // word wrap
