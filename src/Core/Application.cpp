@@ -1231,8 +1231,8 @@ void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
         }
     }
     if (tabContextOpen_ && !deferPopupDraw_) {
-        const char* items[] = {"Close Tab","Close Other Tabs","Close Tabs to the Right","Close Unmodified Tabs","Close Unmodified Tabs to the Right","Close Tabs With Deleted Files","","Split View","","New File","Open File    Ctrl+O","","Diff With Current Tab..."};
-        int itemCount = tabContextIndex_ != activeTab_ ? 13 : 12;
+        const char* items[] = {"Close Tab","Close Other Tabs","Close Tabs to the Right","Close Tabs to the Left","Close Unmodified Tabs","Close Unmodified Tabs to the Right","Close Tabs With Deleted Files","","Split View","","New File","Open File    Ctrl+O","","Diff With Current Tab..."};
+        int itemCount = tabContextIndex_ != activeTab_ ? 14 : 13;
         float itemH = 24.f, popW = 260.f, popH = 4.f + itemCount * itemH;
         std::vector<float> cv;
         auto cr = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
@@ -1245,14 +1245,16 @@ void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
         glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(cv.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0);
         for (int i = 0; i < itemCount; ++i) {
             if (!items[i][0]) { std::vector<float> sv; cr(tabContextX_ + 8.f, tabContextY_ + 13.f + i * itemH, tabContextX_ + popW - 8.f, tabContextY_ + 14.f + i * itemH, 0.3f, 0.3f, 0.33f, 1.f); continue; }
-            font.drawText(items[i], tabContextX_ + 10.f, tabContextY_ + 6.f + i * itemH, 0.78f, 0.78f, 0.82f, 1.f);
+            bool greyed = (i == 2 && tabContextIndex_ >= tabs_.size() - 1) || (i == 3 && tabContextIndex_ == 0);
+            float alpha = greyed ? 0.4f : 1.f;
+            font.drawText(items[i], tabContextX_ + 10.f, tabContextY_ + 6.f + i * itemH, 0.78f * alpha, 0.78f * alpha, 0.82f * alpha, alpha);
         }
     }
 }
 
 bool Application::handleTabBarEvent(const SDL_Event& e, float windowW, float titlebarH) {
     float barY = titlebarH;
-    float controlsW = 60.f, visibleW = windowW - controlsW;
+    float controlsW = 80.f, visibleW = windowW - controlsW;
     float totalTabsW = 0.f;
     for (auto& tab : tabs_) {
         std::string label = tab.fileName.empty() ? "untitled" : tab.fileName;
@@ -1319,10 +1321,10 @@ bool Application::handleTabBarEvent(const SDL_Event& e, float windowW, float tit
     }
     if (e.type == SDL_MOUSEMOTION && tabContextOpen_) {
         float mx = (float)e.motion.x, my = (float)e.motion.y, itemH = 24.f, popW = 260.f;
-        int itemCount = tabContextIndex_ != activeTab_ ? 13 : 12;
+        int itemCount = tabContextIndex_ != activeTab_ ? 14 : 13;
         float popH = 4.f + itemCount * itemH;
         tabContextHover_ = (mx >= tabContextX_ && mx <= tabContextX_ + popW && my >= tabContextY_ && my <= tabContextY_ + popH) ? (int)((my - tabContextY_ - 2.f) / itemH) : -1;
-        if (tabContextHover_ == 6 || tabContextHover_ == 8 || tabContextHover_ == 11) tabContextHover_ = -1;
+        if (tabContextHover_ == 7 || tabContextHover_ == 9 || tabContextHover_ == 12) tabContextHover_ = -1;
         return true;
     }
     if (e.type == SDL_MOUSEMOTION && tabDropdownOpen_) {
@@ -1335,18 +1337,19 @@ bool Application::handleTabBarEvent(const SDL_Event& e, float windowW, float tit
         float mx = (float)e.button.x, my = (float)e.button.y;
         if (tabContextOpen_) {
             float itemH = 24.f, popW = 260.f;
-            int itemCount = tabContextIndex_ != activeTab_ ? 13 : 12;
+            int itemCount = tabContextIndex_ != activeTab_ ? 14 : 13;
             float popH = 4.f + itemCount * itemH;
             if (mx >= tabContextX_ && mx <= tabContextX_ + popW && my >= tabContextY_ && my <= tabContextY_ + popH) {
                 int idx = (int)((my - tabContextY_ - 2.f) / itemH);
                 if (idx == 0) closeTab(tabContextIndex_);
                 else if (idx == 1) { for (size_t i = tabs_.size(); i-- > 0;) if (i != tabContextIndex_) { if (tabs_[i].dirty) closeTab(i); else closeTabNow(i); if (closeConfirmOpen_) break; } }
-                else if (idx == 2) { for (size_t i = tabs_.size(); i-- > tabContextIndex_ + 1;) { if (tabs_[i].dirty) closeTab(i); else closeTabNow(i); if (closeConfirmOpen_) break; } }
-                else if (idx == 3) { for (size_t i = tabs_.size(); i-- > 0;) if (!tabs_[i].dirty) closeTabNow(i); }
-                else if (idx == 4) { for (size_t i = tabs_.size(); i-- > tabContextIndex_ + 1;) if (!tabs_[i].dirty) closeTabNow(i); }
-                else if (idx == 5) { for (size_t i = tabs_.size(); i-- > 0;) if (!tabs_[i].filePath.empty() && !fs::exists(tabs_[i].filePath)) closeTabNow(i); }
-                else if (idx == 9) newBuffer();
-                else if (idx == 10) openFileDialog();
+                else if (idx == 2 && tabContextIndex_ < tabs_.size() - 1) { for (size_t i = tabs_.size(); i-- > tabContextIndex_ + 1;) { if (tabs_[i].dirty) closeTab(i); else closeTabNow(i); if (closeConfirmOpen_) break; } }
+                else if (idx == 3 && tabContextIndex_ > 0) { for (size_t i = tabContextIndex_; i-- > 0;) { if (tabs_[i].dirty) closeTab(i); else closeTabNow(i); if (closeConfirmOpen_) break; } }
+                else if (idx == 4) { for (size_t i = tabs_.size(); i-- > 0;) if (!tabs_[i].dirty) closeTabNow(i); }
+                else if (idx == 5) { for (size_t i = tabs_.size(); i-- > tabContextIndex_ + 1;) if (!tabs_[i].dirty) closeTabNow(i); }
+                else if (idx == 6) { for (size_t i = tabs_.size(); i-- > 0;) if (!tabs_[i].filePath.empty() && !fs::exists(tabs_[i].filePath)) closeTabNow(i); }
+                else if (idx == 10) newBuffer();
+                else if (idx == 11) openFileDialog();
                 tabContextOpen_ = false; return true;
             }
             tabContextOpen_ = false;
@@ -3436,7 +3439,7 @@ void Application::render() {
         popupKind = PopupKind::TabDropdown; hasPopup = true;
     } else if (tabContextOpen_) {
         mainX = tabContextX_; mainY = tabContextY_;
-        int itemCount = tabContextIndex_ != activeTab_ ? 13 : 12;
+        int itemCount = tabContextIndex_ != activeTab_ ? 14 : 13;
         mainW = 260.f; mainH = 4.f + itemCount * 24.f;
         popupKind = PopupKind::TabContext; hasPopup = true;
     } else if (statusPopup_ != StatusPopup::None) {
@@ -3494,14 +3497,18 @@ void Application::render() {
                 fontAtlas().drawText(label, 10.f, 6.f + i * itemH, b, b, b + 0.03f, 1.f);
             }
         } else if (popupKind == PopupKind::TabContext) {
-            const char* items[] = {"Close Tab","Close Other Tabs","Close Tabs to the Right","Close Unmodified Tabs","Close Unmodified Tabs to the Right","Close Tabs With Deleted Files","","Split View","","New File","Open File    Ctrl+O","","Diff With Current Tab..."};
+            const char* items[] = {"Close Tab","Close Other Tabs","Close Tabs to the Right","Close Tabs to the Left","Close Unmodified Tabs","Close Unmodified Tabs to the Right","Close Tabs With Deleted Files","","Split View","","New File","Open File    Ctrl+O","","Diff With Current Tab..."};
             std::vector<float> cv; float itemH = 24.f;
-            int itemCount = tabContextIndex_ != activeTab_ ? 13 : 12;
+            int itemCount = tabContextIndex_ != activeTab_ ? 14 : 13;
             drawRect(cv, 0, 0, mainW, mainH, 0.17f, 0.17f, 0.20f, 0.98f);
             for (int i = 0; i < itemCount; ++i) if (!items[i][0]) drawRect(cv, 8.f, 13.f + i * itemH, mainW - 8.f, 14.f + i * itemH, 0.3f, 0.3f, 0.33f, 1.f);
             if (tabContextHover_ >= 0 && tabContextHover_ < itemCount && items[tabContextHover_][0]) drawRect(cv, 2, 2 + tabContextHover_ * itemH, mainW - 2, 2 + (tabContextHover_ + 1) * itemH, 0.25f, 0.30f, 0.45f, 1.f);
             flush(cv);
-            for (int i = 0; i < itemCount; ++i) if (items[i][0]) fontAtlas().drawText(items[i], 10.f, 6.f + i * itemH, 0.78f, 0.78f, 0.82f, 1.f);
+            for (int i = 0; i < itemCount; ++i) if (items[i][0]) {
+                bool greyed = (i == 2 && tabContextIndex_ >= tabs_.size() - 1) || (i == 3 && tabContextIndex_ == 0);
+                float a = greyed ? 0.4f : 1.f;
+                fontAtlas().drawText(items[i], 10.f, 6.f + i * itemH, 0.78f * a, 0.78f * a, 0.82f * a, a);
+            }
         } else if (popupKind == PopupKind::Status) {
             int itemCount = (statusPopup_ == StatusPopup::Indent) ? 8 : std::min(syntaxLangCount, 18);
             std::vector<float> pv;
