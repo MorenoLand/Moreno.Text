@@ -195,6 +195,9 @@ bool Application::init(int argc, char** argv) {
         if (rw) { SDL_Surface* icon = SDL_LoadBMP_RW(rw, 1); if (icon) { SDL_SetWindowIcon(window_, icon); SDL_FreeSurface(icon); } }
     }
     SDL_SetWindowHitTest(window_, hitTestCallback, this);
+#ifdef _WIN32
+    SDL_EventState(SDL_SYSWMEVENT, SDL_ENABLE);
+#endif
     SDL_SysWMinfo wmInfo; SDL_VERSION(&wmInfo.version);
     if (SDL_GetWindowWMInfo(window_, &wmInfo)) {
 #ifdef _WIN32
@@ -2234,8 +2237,14 @@ void Application::handleEvents() {
             }
         }
         if (e.type == SDL_WINDOWEVENT && (e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED || e.window.event == SDL_WINDOWEVENT_RESIZED)) {
-            SDL_GL_GetDrawableSize(window_, &ww, &wh); GLRenderer::resize(ww, wh); titlebar_->layout(ww);
+            SDL_GL_GetDrawableSize(window_, &ww, &wh); GLRenderer::resize(ww, wh); titlebar_->layout(ww); render();
         }
+#ifdef _WIN32
+        else if (e.type == SDL_SYSWMEVENT) {
+            auto& msg = e.syswm.msg->msg.win;
+            if (msg.msg == WM_SIZING) { SDL_GL_GetDrawableSize(window_, &ww, &wh); GLRenderer::resize(ww, wh); titlebar_->layout(ww); render(); }
+        }
+#endif
         else if (e.type == SDL_MOUSEMOTION) {
             mouseX_ = e.motion.x; mouseY_ = e.motion.y;
             float tbH = titlebar_->height() + tabBarH_;
