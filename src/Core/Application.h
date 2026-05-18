@@ -275,6 +275,8 @@ private:
     bool scrollPastEnd_ = true;
     bool inOsDialog_ = false;
     std::vector<int> lineIndents_;
+    bool indentsDirty_ = true;
+    std::vector<float> solidVerts_;
     void computeLineIndents();
     bool useTabs_ = false;
     int tabSize_ = 2;

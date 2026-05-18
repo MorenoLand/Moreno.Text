@@ -244,7 +244,7 @@ void Application::insertText(const std::string& text) {
     size_t newEndRow = lineOfPos(newPos), newEndCol = newPos - lineStart(newPos);
     syntax_->notifyEdit(pos, pos, newPos, startRow, startCol, startRow, startCol, newEndRow, newEndCol);
     selections_[0].anchor = selections_[0].cursor = newPos;
-    desiredCursorX_ = -1.f; dirty_ = true; syntaxDirty_ = true;
+    desiredCursorX_ = -1.f; dirty_ = true; syntaxDirty_ = true; indentsDirty_ = true;
     // trigger autocomplete
     size_t wStart = pos;
     while (wStart > 0 && (isalnum(textBuffer[wStart-1]) || textBuffer[wStart-1] == '_')) --wStart;
@@ -261,7 +261,7 @@ void Application::deleteSelection() {
     textBuffer.erase(a, b - a);
     syntax_->notifyEdit(a, b, a, startRow, startCol, oldEndRow, oldEndCol, startRow, startCol);
     selections_[0].anchor = selections_[0].cursor = a;
-    dirty_ = true; syntaxDirty_ = true;
+    dirty_ = true; syntaxDirty_ = true; indentsDirty_ = true;
 }
 
 std::string Application::selectedTextOrLine() const {
@@ -372,11 +372,11 @@ void Application::doReplaceAll() {
 }
 
 void Application::detectSyntax() {
-    if (openFilePath_.empty()) { syntax_->setLanguage(""); syntaxDirty_ = true; return; }
+    if (openFilePath_.empty()) { syntax_->setLanguage(""); syntaxDirty_ = true; indentsDirty_ = true; return; }
     std::string ext = fs::path(openFilePath_).extension().string();
     if (!ext.empty() && ext[0] == '.') ext = ext.substr(1);
     syntax_->setLanguage(ext);
-    syntaxDirty_ = true;
+    syntaxDirty_ = true; indentsDirty_ = true;
 }
 
 void Application::updateGitBranch() {
@@ -841,6 +841,8 @@ void Application::guessIndent() {
 }
 
 void Application::computeLineIndents() {
+    if (!indentsDirty_) return;
+    indentsDirty_ = false;
     lineIndents_.resize(totalLines(), 0);
     size_t li = 0, pos = 0;
     while (pos <= textBuffer.size() && li < lineIndents_.size()) {
@@ -1315,7 +1317,7 @@ void Application::acceptAutocomplete() {
     size_t pos = selections_[0].cursor;
     textBuffer.insert(pos, completion);
     selections_[0].anchor = selections_[0].cursor = pos + completion.size();
-    dirty_ = true; syntaxDirty_ = true;
+    dirty_ = true; syntaxDirty_ = true; indentsDirty_ = true;
     acActive_ = false;
 }
 
@@ -1332,7 +1334,7 @@ void Application::swapLineUp() {
     std::string prev = textBuffer.substr(prevLs, ls - prevLs);
     textBuffer.replace(prevLs, le - prevLs, cur + prev);
     selections_[0].anchor = selections_[0].cursor = prevLs + (selections_[0].cursor - ls);
-    dirty_ = true; syntaxDirty_ = true;
+    dirty_ = true; syntaxDirty_ = true; indentsDirty_ = true;
 }
 
 void Application::swapLineDown() {
@@ -1348,7 +1350,7 @@ void Application::swapLineDown() {
     textBuffer.replace(ls, nextLe - ls, next + cur);
     size_t offset = next.size();
     selections_[0].anchor = selections_[0].cursor = ls + offset + (selections_[0].cursor - ls);
-    dirty_ = true; syntaxDirty_ = true;
+    dirty_ = true; syntaxDirty_ = true; indentsDirty_ = true;
 }
 
 void Application::duplicateLine() {
@@ -1359,7 +1361,7 @@ void Application::duplicateLine() {
     std::string ins = "\n" + line;
     textBuffer.insert(le, ins);
     selections_[0].anchor = selections_[0].cursor = le + 1 + (selections_[0].cursor - ls);
-    dirty_ = true; syntaxDirty_ = true;
+    dirty_ = true; syntaxDirty_ = true; indentsDirty_ = true;
 }
 
 void Application::deleteLine() {
@@ -1369,7 +1371,7 @@ void Application::deleteLine() {
     if (le < textBuffer.size()) ++le;
     textBuffer.erase(ls, le - ls);
     selections_[0].anchor = selections_[0].cursor = std::min(ls, textBuffer.size());
-    dirty_ = true; syntaxDirty_ = true;
+    dirty_ = true; syntaxDirty_ = true; indentsDirty_ = true;
 }
 
 void Application::joinLines() {
@@ -1382,7 +1384,7 @@ void Application::joinLines() {
     while (le < textBuffer.size() && (textBuffer[le] == ' ' || textBuffer[le] == '\t'))
         textBuffer.erase(le, 1);
     textBuffer.insert(le, 1, ' ');
-    dirty_ = true; syntaxDirty_ = true;
+    dirty_ = true; syntaxDirty_ = true; indentsDirty_ = true;
 }
 
 // ── comment toggle ──
@@ -1420,7 +1422,7 @@ void Application::toggleLineComment() {
             else textBuffer.insert(first, token + " ");
         }
     }
-    dirty_ = true; syntaxDirty_ = true;
+    dirty_ = true; syntaxDirty_ = true; indentsDirty_ = true;
 }
 
 void Application::toggleBlockComment() {
@@ -1434,7 +1436,7 @@ void Application::toggleBlockComment() {
     textBuffer.insert(b, close);
     textBuffer.insert(a, open);
     sel.anchor = a; sel.cursor = b + open.size() + close.size();
-    dirty_ = true; syntaxDirty_ = true;
+    dirty_ = true; syntaxDirty_ = true; indentsDirty_ = true;
 }
 
 // ── bookmarks ──
@@ -1523,7 +1525,7 @@ void Application::handleAutoPair(const char* text) {
         std::string wrapped = std::string(1,c) + textBuffer.substr(a, b-a) + close;
         textBuffer.replace(a, b-a, wrapped);
         sel.anchor = a + 1; sel.cursor = a + 1 + (b - a);
-        dirty_ = true; syntaxDirty_ = true;
+        dirty_ = true; syntaxDirty_ = true; indentsDirty_ = true;
         return;
     }
     if (sel.cursor < textBuffer.size() && textBuffer[sel.cursor] == close) {
@@ -1955,7 +1957,7 @@ void Application::handleEvents() {
                             if (idx < syntaxLangCount) {
                                 syntax_->setLanguageByName(syntaxLanguages[idx]);
                                 syntaxLangIndex_ = idx;
-                                syntaxDirty_ = true;
+                                syntaxDirty_ = true; indentsDirty_ = true;
                                 syntax_->parse(textBuffer);
                             }
                         }
@@ -2287,7 +2289,7 @@ void Application::handleEvents() {
                 if (tl >= tot) tl = tot - 1;
                 size_t p = lineStartForLine(tl); if (shift) sel.cursor = p; else sel.anchor = sel.cursor = p; desiredCursorX_ = -1.f;
             }
-            if (dirty_) syntaxDirty_ = true;
+            if (dirty_) syntaxDirty_ = true; indentsDirty_ = true;
             ensureCursorVisible();
         }
         else if (e.type == SDL_TEXTINPUT) { handleAutoPair(e.text.text); }
@@ -2311,6 +2313,17 @@ void Application::updateTitle() {
 
 void Application::render() {
     GLRenderer::beginFrame();
+    solidVerts_.clear();
+    auto addSolid = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
+        solidVerts_.insert(solidVerts_.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
+    };
+    auto flushSolid = [&] {
+        if (solidVerts_.empty()) return;
+        GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
+        glBufferData(GL_ARRAY_BUFFER, solidVerts_.size()*sizeof(float), solidVerts_.data(), GL_DYNAMIC_DRAW);
+        glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(solidVerts_.size()/8));
+        glBindVertexArray(0); GLRenderer::setDrawMode(0); solidVerts_.clear();
+    };
     updateTitle();
     int ww, wh; SDL_GL_GetDrawableSize(window_, &ww, &wh);
     float fww = (float)ww, fwh = (float)wh;
@@ -2348,21 +2361,13 @@ void Application::render() {
     {
         float cy = textOriginY + currentLine * lineStep - scrollY_;
         if (cy + lineStep >= tbH && cy <= fwh - sbH) {
-            std::vector<float> hv = {gutterRight,cy,0,0,.17f,.19f,.23f,1.f, gutterRight,cy+lineStep,0,0,.17f,.19f,.23f,1.f, editorRight,cy+lineStep,0,0,.17f,.19f,.23f,1.f,
-                gutterRight,cy,0,0,.17f,.19f,.23f,1.f, editorRight,cy+lineStep,0,0,.17f,.19f,.23f,1.f, editorRight,cy,0,0,.17f,.19f,.23f,1.f};
-            GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
-            glBufferData(GL_ARRAY_BUFFER, hv.size()*sizeof(float), hv.data(), GL_DYNAMIC_DRAW);
-            glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, 6); glBindVertexArray(0); GLRenderer::setDrawMode(0);
+            addSolid(gutterRight, cy, editorRight, cy + lineStep, .17f, .19f, .23f, 1.f);
         }
     }
 
     for (auto& s : selections_) {
         if (!s.hasSelection()) continue;
         size_t a = s.min(), b = s.max(), la = lineOfPos(a), lb = lineOfPos(b);
-        std::vector<float> sv;
-        auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float bl,float a2) {
-            sv.insert(sv.end(),{x0,y0,0,0,r,g,bl,a2, x0,y1,0,0,r,g,bl,a2, x1,y1,0,0,r,g,bl,a2, x0,y0,0,0,r,g,bl,a2, x1,y1,0,0,r,g,bl,a2, x1,y0,0,0,r,g,bl,a2});
-        };
         for (size_t ln = la; ln <= lb; ++ln) {
             if (isFolded(ln)) continue;
             size_t ls = lineStartForLine(ln), le = lineEnd(ls);
@@ -2371,16 +2376,11 @@ void Application::render() {
             if (sy + lineStep < tbH || sy > fwh) continue;
             float sx = textX + fontAtlas().measureText(std::string_view(textBuffer.data() + ls, ss - ls));
             float ex = textX + fontAtlas().measureText(std::string_view(textBuffer.data() + ls, se - ls));
-            ar(sx, sy, ex, sy + lineStep, accentColor_.r, accentColor_.g, accentColor_.b, 0.35f);
+            addSolid(sx, sy, ex, sy + lineStep, accentColor_.r, accentColor_.g, accentColor_.b, 0.35f);
         }
-        if (!sv.empty()) { GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo()); glBufferData(GL_ARRAY_BUFFER, sv.size()*sizeof(float), sv.data(), GL_DYNAMIC_DRAW); glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(sv.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0); }
     }
 
     if (find_.active && !find_.matches.empty()) {
-        std::vector<float> fv;
-        auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a2) {
-            fv.insert(fv.end(),{x0,y0,0,0,r,g,b,a2, x0,y1,0,0,r,g,b,a2, x1,y1,0,0,r,g,b,a2, x0,y0,0,0,r,g,b,a2, x1,y1,0,0,r,g,b,a2, x1,y0,0,0,r,g,b,a2});
-        };
         size_t qLen = find_.query.empty() ? 1 : find_.query.size();
         for (size_t mi = 0; mi < find_.matches.size(); ++mi) {
             size_t m = find_.matches[mi]; size_t ln = lineOfPos(m); size_t ls = lineStartForLine(ln);
@@ -2389,16 +2389,11 @@ void Application::render() {
             float sx = textX + fontAtlas().measureText(std::string_view(textBuffer.data()+ls, m-ls));
             float ex = textX + fontAtlas().measureText(std::string_view(textBuffer.data()+ls, m+qLen-ls));
             bool cur = (mi == find_.currentMatch);
-            ar(sx, sy, ex, sy + lineStep, cur?0.8f:0.6f, cur?0.7f:0.6f, 0.2f, 0.5f);
+            addSolid(sx, sy, ex, sy + lineStep, cur?0.8f:0.6f, cur?0.7f:0.6f, 0.2f, 0.5f);
         }
-        if (!fv.empty()) { GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo()); glBufferData(GL_ARRAY_BUFFER, fv.size()*sizeof(float), fv.data(), GL_DYNAMIC_DRAW); glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(fv.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0); }
     }
     // text lines with syntax highlighting
     // indent guides + fold ... + whitespace dots
-    std::vector<float> guideVerts;
-    auto addGuideRect = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
-        guideVerts.insert(guideVerts.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
-    };
     float spaceWidth = fontAtlas().measureText(" ");
     float y = textOriginY - scrollY_;
     size_t lineIdx = 0, lStart = 0;
@@ -2417,27 +2412,22 @@ void Application::render() {
                 float gx = textX + lvl * spaceWidth;
                 bool draw = (ln + 1 < totalLines() && lineIndents_[ln+1] > lvl);
                 draw = draw || (ln > 0 && lineIndents_[ln-1] >= lvl);
-                if (draw) addGuideRect(gx, gy, gx + 1, gy + lineStep, 0.231f, 0.251f, 0.282f, 0.15f);
+                if (draw) addSolid(gx, gy, gx + 1, gy + lineStep, 0.231f, 0.251f, 0.282f, 0.15f);
             }
             // active indent guide at cursor's indent level
             if (indent > 0 && ln == currentLine) {
                 int activeLvl = ((cursorIndent - 1) / tabSize_) * tabSize_;
                 if (activeLvl > 0) {
                     float gx = textX + activeLvl * spaceWidth;
-                    addGuideRect(gx, gy, gx + 1, gy + lineStep, 0.294f, 0.314f, 0.345f, 0.35f);
+                    addSolid(gx, gy, gx + 1, gy + lineStep, 0.294f, 0.314f, 0.345f, 0.35f);
                 }
             }
             gy += lineStep;
         }
     }
 
-    if (!guideVerts.empty()) {
-        GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
-        glBufferData(GL_ARRAY_BUFFER, guideVerts.size()*sizeof(float), guideVerts.data(), GL_DYNAMIC_DRAW);
-        glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(guideVerts.size()/8));
-        glBindVertexArray(0); GLRenderer::setDrawMode(0);
-    }
-
+    flushSolid();
+    // text lines
     y = textOriginY - scrollY_;
     lineIdx = 0; lStart = 0;
     while (lStart <= textBuffer.size()) {
@@ -2485,10 +2475,6 @@ void Application::render() {
         for (auto& s : selections_) {
             if (!s.hasSelection()) continue;
             size_t sa = s.min(), sb = s.max();
-            std::vector<float> wv;
-            auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
-                wv.insert(wv.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
-            };
             for (size_t pos = sa; pos < sb; ++pos) {
                 char c = textBuffer[pos];
                 if (c != ' ' && c != '\t') continue;
@@ -2498,15 +2484,13 @@ void Application::render() {
                 float wx = textX + fontAtlas().measureText(std::string_view(textBuffer.data() + ls, pos - ls));
                 if (c == ' ') {
                     float cx = wx + spaceWidth / 2.f, cy = wy + lineStep / 2.f, r = 1.2f;
-                    ar(cx-r, cy-r, cx+r, cy+r, 0.45f, 0.45f, 0.5f, 0.6f);
+                    addSolid(cx-r, cy-r, cx+r, cy+r, 0.45f, 0.45f, 0.5f, 0.6f);
                 } else {
-                    // tab arrow: small right-pointing triangle
                     float cx = wx + 2.f, cy = wy + lineStep * 0.3f;
-                    ar(cx, cy, cx+5, cy+lineStep*0.2f, 0.45f, 0.45f, 0.5f, 0.6f);
-                    ar(cx, cy+lineStep*0.4f, cx+5, cy+lineStep*0.2f, 0.45f, 0.45f, 0.5f, 0.6f);
+                    addSolid(cx, cy, cx+5, cy+lineStep*0.2f, 0.45f, 0.45f, 0.5f, 0.6f);
+                    addSolid(cx, cy+lineStep*0.4f, cx+5, cy+lineStep*0.2f, 0.45f, 0.45f, 0.5f, 0.6f);
                 }
             }
-            if (!wv.empty()) { GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo()); glBufferData(GL_ARRAY_BUFFER, wv.size()*sizeof(float), wv.data(), GL_DYNAMIC_DRAW); glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(wv.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0); }
         }
     }
 
@@ -2561,21 +2545,11 @@ void Application::render() {
             if (by + lineStep < tbH || by > fwh) return;
             float bw = fontAtlas().getGlyph((uint8_t)textBuffer[pos]).advance;
             float ct = by, cb = by + fontAtlas().ascent() - fontAtlas().descent();
-            std::vector<float> bv;
-            // draw 4 line segments as thin quads forming a box outline
-            float t = 1.f; // thickness
-            // top
-            bv.insert(bv.end(),{bx-t,ct-t,0,0,r,g,b,0.7f, bx+bw+t,ct-t,0,0,r,g,b,0.7f, bx+bw+t,ct,0,0,r,g,b,0.7f, bx-t,ct-t,0,0,r,g,b,0.7f, bx+bw+t,ct,0,0,r,g,b,0.7f, bx-t,ct,0,0,r,g,b,0.7f});
-            // bottom
-            bv.insert(bv.end(),{bx-t,cb,0,0,r,g,b,0.7f, bx+bw+t,cb,0,0,r,g,b,0.7f, bx+bw+t,cb+t,0,0,r,g,b,0.7f, bx-t,cb,0,0,r,g,b,0.7f, bx+bw+t,cb+t,0,0,r,g,b,0.7f, bx-t,cb+t,0,0,r,g,b,0.7f});
-            // left
-            bv.insert(bv.end(),{bx-t,ct,0,0,r,g,b,0.7f, bx,ct,0,0,r,g,b,0.7f, bx,cb,0,0,r,g,b,0.7f, bx-t,ct,0,0,r,g,b,0.7f, bx,cb,0,0,r,g,b,0.7f, bx-t,cb,0,0,r,g,b,0.7f});
-            // right
-            bv.insert(bv.end(),{bx+bw,ct,0,0,r,g,b,0.7f, bx+bw+t,ct,0,0,r,g,b,0.7f, bx+bw+t,cb,0,0,r,g,b,0.7f, bx+bw,ct,0,0,r,g,b,0.7f, bx+bw+t,cb,0,0,r,g,b,0.7f, bx+bw,cb,0,0,r,g,b,0.7f});
-            GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
-            glBufferData(GL_ARRAY_BUFFER, bv.size()*sizeof(float), bv.data(), GL_DYNAMIC_DRAW);
-            glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(bv.size()/8));
-            glBindVertexArray(0); GLRenderer::setDrawMode(0);
+            float t = 1.f;
+            addSolid(bx-t, ct-t, bx+bw+t, ct, r, g, b, 0.7f);
+            addSolid(bx-t, cb, bx+bw+t, cb+t, r, g, b, 0.7f);
+            addSolid(bx-t, ct, bx, cb, r, g, b, 0.7f);
+            addSolid(bx+bw, ct, bx+bw+t, cb, r, g, b, 0.7f);
         };
         auto findMatch = [&](size_t pos) -> size_t {
             if (pos >= textBuffer.size()) return (size_t)-1;
