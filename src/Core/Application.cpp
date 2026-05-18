@@ -522,7 +522,7 @@ void Application::updateGitBranch() {
         HANDLE hRead, hWrite; SECURITY_ATTRIBUTES sa = {sizeof(sa), nullptr, TRUE};
         CreatePipe(&hRead, &hWrite, &sa, 0); SetHandleInformation(hRead, HANDLE_FLAG_INHERIT, 0);
         std::string cmd = "git -C \"" + dir + "\" rev-parse --abbrev-ref HEAD";
-        STARTUPINFOA si = {}; si.cb = sizeof(si); si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW; si.hStdOutput = hWrite; si.hStdError = hWrite; si.wShowWindow = SW_HIDE;
+        STARTUPINFOA si = {}; si.cb = sizeof(si); si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW; si.hStdOutput = hWrite; si.hStdError = nullptr; si.wShowWindow = SW_HIDE;
         PROCESS_INFORMATION pi = {};
         char cmdBuf[512]; strncpy(cmdBuf, cmd.c_str(), sizeof(cmdBuf)-1); cmdBuf[sizeof(cmdBuf)-1] = 0;
         if (CreateProcessA(nullptr, cmdBuf, nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
@@ -721,20 +721,22 @@ void Application::drawSidebar(FontAtlas& font, float windowH, float titlebarH, f
     std::function<void(SidebarNode&)> drawNode = [&](SidebarNode& node) {
         if (&node != &sidebarTree_) {
             float rowY = y; y += rowH;
-            if (rowY + rowH < titlebarH || rowY > windowH - statusbarH) return;
-            float x = 8.f + node.depth * 14.f;
-            bool active = !node.folder && !openFilePath_.empty() && fs::absolute(node.path).string() == fs::absolute(openFilePath_).string();
-            if (active) addSolidRect(v, 2.f, rowY - 3.f, sidebarWidth_ - 4.f, rowY + rowH - 3.f, 0.25f, 0.30f, 0.45f, 1.f);
-            float ir = node.folder ? 0.86f : 0.45f, ig = node.folder ? 0.66f : 0.55f, ib = node.folder ? 0.22f : 0.65f;
-            std::string ext = node.extension;
-            if (ext == ".h") { ir = 0.2f; ig = 0.75f; ib = 0.75f; } else if (ext == ".py") { ir = 0.9f; ig = 0.78f; ib = 0.25f; }
-            else if (ext == ".js") { ir = 0.9f; ig = 0.55f; ib = 0.2f; } else if (ext == ".json") { ir = 0.45f; ig = 0.75f; ib = 0.35f; }
-            else if (ext == ".md") { ir = ig = ib = 0.85f; } else if (ext == ".txt") { ir = ig = ib = 0.55f; }
-            addSolidRect(v, x + 12.f, rowY + 3.f, x + 20.f, rowY + 13.f, ir, ig, ib, 1.f);
-            if (node.folder) textDraws.push_back({node.expanded ? "v" : ">", x, rowY, 0.55f, 0.55f, 0.58f});
-            float b = active ? 0.95f : 0.68f;
-            float labelX = x + 26.f;
-            textDraws.push_back({fitSidebarText(node.name, labelX), labelX, rowY, b, b, b + 0.03f});
+            bool visible = rowY + rowH >= titlebarH && rowY <= windowH - statusbarH;
+            if (visible) {
+                float x = 8.f + node.depth * 14.f;
+                bool active = !node.folder && !openFilePath_.empty() && fs::absolute(node.path).string() == fs::absolute(openFilePath_).string();
+                if (active) addSolidRect(v, 2.f, rowY - 3.f, sidebarWidth_ - 4.f, rowY + rowH - 3.f, 0.25f, 0.30f, 0.45f, 1.f);
+                float ir = node.folder ? 0.86f : 0.45f, ig = node.folder ? 0.66f : 0.55f, ib = node.folder ? 0.22f : 0.65f;
+                std::string ext = node.extension;
+                if (ext == ".h") { ir = 0.2f; ig = 0.75f; ib = 0.75f; } else if (ext == ".py") { ir = 0.9f; ig = 0.78f; ib = 0.25f; }
+                else if (ext == ".js") { ir = 0.9f; ig = 0.55f; ib = 0.2f; } else if (ext == ".json") { ir = 0.45f; ig = 0.75f; ib = 0.35f; }
+                else if (ext == ".md") { ir = ig = ib = 0.85f; } else if (ext == ".txt") { ir = ig = ib = 0.55f; }
+                addSolidRect(v, x + 12.f, rowY + 3.f, x + 20.f, rowY + 13.f, ir, ig, ib, 1.f);
+                if (node.folder) textDraws.push_back({node.expanded ? "v" : ">", x, rowY, 0.55f, 0.55f, 0.58f});
+                float b = active ? 0.95f : 0.68f;
+                float labelX = x + 26.f;
+                textDraws.push_back({fitSidebarText(node.name, labelX), labelX, rowY, b, b, b + 0.03f});
+            }
         }
         if (node.folder && node.expanded) for (auto& child : node.children) drawNode(child);
     };
@@ -749,7 +751,9 @@ void Application::drawSidebar(FontAtlas& font, float windowH, float titlebarH, f
         glBufferData(GL_ARRAY_BUFFER, v.size()*sizeof(float), v.data(), GL_DYNAMIC_DRAW);
         glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(v.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0);
     }
+    glEnable(GL_SCISSOR_TEST); glScissor(0, (int)(windowH - statusbarH - titlebarH), (int)sidebarWidth_, (int)(windowH - statusbarH - titlebarH));
     for (const auto& td : textDraws) font.drawText(td.text, td.x, td.y, td.r, td.g, td.b, 1.f);
+    glDisable(GL_SCISSOR_TEST);
 }
 
 bool Application::handleSidebarEvent(const SDL_Event& e, float windowH, float titlebarH, float statusbarH) {
@@ -1123,14 +1127,14 @@ void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
         solidVerts_.insert(solidVerts_.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
     };
     float barY = titlebarH;
-    float controlsW = 60.f;
+    float controlsW = 80.f;
     float visibleW = windowW - controlsW;
     ar(0, barY, windowW, barY + tabBarH_, 0.25f, 0.25f, 0.28f, 1.f);
     float totalTabsW = 0.f;
     for (auto& tab : tabs_) {
         std::string label = tab.fileName.empty() ? "untitled" : tab.fileName;
         if (tab.dirty) label += "\xe2\x80\xa2";
-        totalTabsW += std::clamp(font.measureText(label) + 32.f, 48.f, 180.f);
+        totalTabsW += std::max(font.measureText(label) + 32.f, 48.f);
     }
     float maxTabScroll = totalTabsW > visibleW ? totalTabsW - visibleW : 0.f;
     if (tabScrollX_ > maxTabScroll) tabScrollX_ = maxTabScroll;
@@ -1142,7 +1146,7 @@ void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
     for (size_t i = 0; i < tabs_.size(); ++i) {
         std::string label = tabs_[i].fileName.empty() ? "untitled" : tabs_[i].fileName;
         if (tabs_[i].dirty) label += "\xe2\x80\xa2";
-        float tw = std::clamp(font.measureText(label) + 32.f, 48.f, 180.f);
+        float tw = std::max(font.measureText(label) + 32.f, 48.f);
         if (tx + tw < 0.f) { tx += tw; continue; }
         if (tx > visibleW) break;
         if (i == activeTab_) {
@@ -1170,7 +1174,7 @@ void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
         float textBright = (label.index == activeTab_) ? 0.85f : 0.55f;
         float textY = barY + 8.f;
         font.drawText(label.text, lx + 12.f, textY, textBright, textBright, textBright+0.05f, 1.f);
-        float tw = std::clamp(font.measureText(label.text) + 32.f, 48.f, 180.f);
+        float tw = std::max(font.measureText(label.text) + 32.f, 48.f);
         font.drawText("\xc3\x97", lx + tw - 17.f, textY, 0.55f, 0.55f, 0.60f, 1.f);
     }
     float activeBright = maxTabScroll > 0.f ? 0.8f : 0.35f;
@@ -1183,7 +1187,7 @@ void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
     if (tabDragging_ && tabDragIndex_ < tabs_.size()) {
         std::string dragLabel = tabs_[tabDragIndex_].fileName.empty() ? "untitled" : tabs_[tabDragIndex_].fileName;
         if (tabs_[tabDragIndex_].dirty) dragLabel += "\xe2\x80\xa2";
-        float dragW = std::clamp(font.measureText(dragLabel) + 32.f, 48.f, 180.f);
+        float dragW = std::max(font.measureText(dragLabel) + 32.f, 48.f);
         float dragX = std::clamp(mouseX_ - dragW / 2.f, 0.f, visibleW - dragW);
         ar(dragX, barY, dragX + dragW, barY + tabBarH_, 0.20f, 0.20f, 0.23f, 0.6f);
         ar(dragX, barY + tabBarH_ - 2.f, dragX + dragW, barY + tabBarH_, accentColor_.r, accentColor_.g, accentColor_.b, 0.5f);
