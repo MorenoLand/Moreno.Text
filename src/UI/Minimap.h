@@ -9,7 +9,7 @@ public:
     Minimap() = default;
     void draw(FontAtlas& font, SyntaxHighlighter& syntax, const std::string& buffer,
               float originX, float originY, float windowH, float titlebarH,
-              float gutterW, float lineStep, float scrollY, bool hovered);
+              float gutterW, float lineStep, float scrollY, float maxScrollParam, bool hovered);
     float width() const { return width_; }
     float contentWidth() const { return width_; }
     bool handleClick(float mx, float my, float& scrollRatio);

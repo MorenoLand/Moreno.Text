@@ -746,12 +746,12 @@ void Application::drawSidebar(FontAtlas& font, float windowH, float titlebarH, f
         float thumbY = titlebarH + (sidebarScrollY_ / maxScroll) * (viewH - thumbH);
         addSolidRect(v, sidebarWidth_ - 5.f, thumbY, sidebarWidth_ - 1.f, thumbY + thumbH, 0.29f, 0.29f, 0.29f, 1.f);
     }
+    glEnable(GL_SCISSOR_TEST); glScissor(0, (int)statusbarH, (int)sidebarWidth_, (int)(windowH - titlebarH - statusbarH));
     if (!v.empty()) {
         GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
         glBufferData(GL_ARRAY_BUFFER, v.size()*sizeof(float), v.data(), GL_DYNAMIC_DRAW);
         glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(v.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0);
     }
-    glEnable(GL_SCISSOR_TEST); glScissor(0, (int)statusbarH, (int)sidebarWidth_, (int)(windowH - titlebarH - statusbarH));
     for (const auto& td : textDraws) font.drawText(td.text, td.x, td.y, td.r, td.g, td.b, 1.f);
     glDisable(GL_SCISSOR_TEST);
 }
@@ -3157,7 +3157,11 @@ void Application::render() {
         bool mmOver = mouseX_ >= (int)(fww - mmW) && mouseY_ >= (int)tbH && mouseY_ < (int)(fwh - sbH - findPanelH);
         minimap_->setMouseOver(mmOver);
         minimap_->updateHoverFade(1.f/60.f);
-        minimap_->draw(fontAtlas(), *syntax_, textBuffer, fww - mmW, textOriginY, fwh - findPanelH, tbH, gutterW, lineStep, scrollY_, mmOver);
+        float mmContentH = lineCount * lineStep;
+        float mmScrollPad = scrollPastEnd_ ? lineStep * 5.f : 0.f;
+        float mmViewH = fwh - tbH - sbH - findPanelH;
+        float mmMaxScroll = (mmContentH + mmScrollPad > mmViewH) ? mmContentH + mmScrollPad - mmViewH : 0.f;
+        minimap_->draw(fontAtlas(), *syntax_, textBuffer, fww - mmW, textOriginY, fwh - findPanelH, tbH, gutterW, lineStep, scrollY_, mmMaxScroll, mmOver);
     }
     // status bar
     std::string branch;

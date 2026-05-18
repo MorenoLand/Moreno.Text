@@ -13,7 +13,7 @@ extern GLuint gl_vbo();
 
 void Minimap::draw(FontAtlas& font, SyntaxHighlighter& syntax, const std::string& buffer,
                    float originX, float originY, float windowH, float titlebarH,
-                   float gutterW, float lineStep, float scrollY, bool hovered) {
+                   float gutterW, float lineStep, float scrollY, float maxScrollParam, bool hovered) {
     float top = titlebarH;
     float statusH = 22.f;
     float bottom = windowH - statusH;
@@ -86,7 +86,7 @@ void Minimap::draw(FontAtlas& font, SyntaxHighlighter& syntax, const std::string
     {
         float vpH = minimapH * 0.15f;
         float contentH = lineCount * lineStep;
-        float maxScroll = contentH > viewH ? contentH - viewH : 0.f;
+        float maxScroll = maxScrollParam;
         float vpTop = top + (maxScroll > 0.f ? (scrollY / maxScroll) * (minimapH - vpH) : 0.f);
         if (vpTop < top) vpTop = top;
         if (vpTop + vpH > bottom) vpTop = bottom - vpH;
