@@ -2136,9 +2136,11 @@ void Application::handleEvents() {
                             syntaxDirty_ = true; indentsDirty_ = true;
                             syntax_->parse(textBuffer);
                         }
+                        if (statusPopup_ == StatusPopup::Indent) statusPopup_ = StatusPopup::None;
                     }
+                } else {
+                    statusPopup_ = StatusPopup::None;
                 }
-                statusPopup_ = StatusPopup::None;
                 continue;
             }
             if (e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_MOUSEBUTTONUP) continue;

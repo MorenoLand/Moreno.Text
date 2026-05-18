@@ -164,7 +164,7 @@ void Titlebar::drawMenuPopup(FontAtlas& font, float ox, float oy) {
             flushSolid(v);
             continue;
         }
-        float ib = (menuHovered_ == i) ? 1.f : 0.78f;
+        float ib = (menuHovered_ == i) ? 1.f : 0.88f;
         if (!item.action && !item.separator) ib = 0.4f;
         font.drawText(item.label, ddX + 12.f, iy, ib, ib, ib, 1.f);
         if (!item.shortcut.empty())
