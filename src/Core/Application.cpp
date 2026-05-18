@@ -2136,7 +2136,6 @@ void Application::handleEvents() {
                             syntaxDirty_ = true; indentsDirty_ = true;
                             syntax_->parse(textBuffer);
                         }
-                        if (statusPopup_ == StatusPopup::Indent) statusPopup_ = StatusPopup::None;
                     }
                 } else {
                     statusPopup_ = StatusPopup::None;
