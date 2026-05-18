@@ -75,7 +75,7 @@ struct TabBuffer {
     std::vector<UndoStep> undoStack, redoStack;
     std::set<std::pair<int,int>> foldedRegions;
     bool dirty = false;
-    bool largeFilePreview = false;
+    bool largeFileGuarded = false;
     uintmax_t largeFileSize = 0;
     float desiredCursorX = -1.f;
 };
@@ -206,7 +206,7 @@ private:
     float scrollX_ = 0.f;
     float maxLineWidth_ = 0.f;
     bool maxLineWidthDirty_ = true;
-    bool largeFilePreview_ = false;
+    bool largeFileGuarded_ = false;
     uintmax_t largeFileSize_ = 0;
     bool selecting_ = false;
     bool minimapDragging_ = false;
@@ -307,6 +307,11 @@ private:
     uint64_t fpsLastCounter_ = 0;
     float fpsSmoothedMs_ = 0.f;
     uint32_t cursorLastInputTicks_ = 0;
+    bool consoleOpen_ = false;
+    std::string consoleBuffer_;
+    float consoleScrollY_ = 0.f;
+    float consoleH_ = 150.f;
+    bool consoleResizing_ = false;
     void computeLineIndents();
     void computeMaxLineWidth();
     bool useTabs_ = false;
