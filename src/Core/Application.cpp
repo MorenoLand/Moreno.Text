@@ -751,7 +751,7 @@ void Application::drawSidebar(FontAtlas& font, float windowH, float titlebarH, f
         glBufferData(GL_ARRAY_BUFFER, v.size()*sizeof(float), v.data(), GL_DYNAMIC_DRAW);
         glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(v.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0);
     }
-    glEnable(GL_SCISSOR_TEST); glScissor(0, (int)(windowH - statusbarH), (int)sidebarWidth_, (int)(windowH - titlebarH - statusbarH));
+    glEnable(GL_SCISSOR_TEST); glScissor(0, (int)statusbarH, (int)sidebarWidth_, (int)(windowH - titlebarH - statusbarH));
     for (const auto& td : textDraws) font.drawText(td.text, td.x, td.y, td.r, td.g, td.b, 1.f);
     glDisable(GL_SCISSOR_TEST);
 }
