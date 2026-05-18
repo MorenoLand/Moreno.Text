@@ -517,22 +517,25 @@ void Application::updateGitBranch() {
     if (dir.empty()) { std::lock_guard<std::mutex> lock(gitBranchMutex_); gitBranch_.clear(); return; }
     if (gitBranchBusy_.exchange(true)) return;
     std::thread([this, dir] {
-
+        std::string branch;
 #ifdef _WIN32
-        std::string command = "git -C \"" + dir + "\" rev-parse --abbrev-ref HEAD 2>NUL";
-        FILE* pipe = _popen(command.c_str(), "r");
+        HANDLE hRead, hWrite; SECURITY_ATTRIBUTES sa = {sizeof(sa), nullptr, TRUE};
+        CreatePipe(&hRead, &hWrite, &sa, 0); SetHandleInformation(hRead, HANDLE_FLAG_INHERIT, 0);
+        std::string cmd = "git -C \"" + dir + "\" rev-parse --abbrev-ref HEAD";
+        STARTUPINFOA si = {}; si.cb = sizeof(si); si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW; si.hStdOutput = hWrite; si.hStdError = hWrite; si.wShowWindow = SW_HIDE;
+        PROCESS_INFORMATION pi = {};
+        char cmdBuf[512]; strncpy(cmdBuf, cmd.c_str(), sizeof(cmdBuf)-1); cmdBuf[sizeof(cmdBuf)-1] = 0;
+        if (CreateProcessA(nullptr, cmdBuf, nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
+            CloseHandle(hWrite);
+            char buf[256]; DWORD rd;
+            while (ReadFile(hRead, buf, sizeof(buf)-1, &rd, nullptr) && rd) { buf[rd] = 0; branch += buf; }
+            CloseHandle(hRead); CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
+        } else { CloseHandle(hRead); CloseHandle(hWrite); }
 #else
         std::string command = "git -C \"" + dir + "\" rev-parse --abbrev-ref HEAD 2>/dev/null";
         FILE* pipe = popen(command.c_str(), "r");
-#endif
-        if (!pipe) { std::lock_guard<std::mutex> lock(gitBranchMutex_); gitBranch_.clear(); gitBranchBusy_ = false; return; }
-
-        char buf[256] = {};
-        std::string branch;
-        while (fgets(buf, sizeof(buf), pipe)) branch += buf;
-#ifdef _WIN32
-        _pclose(pipe);
-#else
+        if (!pipe) { gitBranchBusy_ = false; return; }
+        char buf[256] = {}; while (fgets(buf, sizeof(buf), pipe)) branch += buf;
         pclose(pipe);
 #endif
         while (!branch.empty() && (branch.back() == '\n' || branch.back() == '\r' || branch.back() == ' ' || branch.back() == '\t')) branch.pop_back();
