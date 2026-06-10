@@ -64,6 +64,11 @@ extern GLuint gl_vbo();
 
 namespace fs = std::filesystem;
 
+#ifdef _WIN32
+static constexpr ULONG_PTR MorenoTabDropCopyDataId = 0x4D545441; // MTTA
+static constexpr const char* MorenoWindowPropName = "MorenoText.MainWindow";
+#endif
+
 static std::string readLargeFileWindow(FileBackedBuffer& buffer, size_t startLine, uint64_t maxBytes,
                                        uint64_t& startByte, uint64_t& endByte) {
     constexpr size_t maxLines = 20000;
@@ -144,6 +149,34 @@ static bool useExternalPopupWindow() {
 #else
     return false;
 #endif
+}
+
+static TabBuffer tabFromDetachedJson(const nlohmann::json& data) {
+    TabBuffer tab;
+    tab.fileName = data.value("file_name", "untitled");
+    tab.filePath = data.value("file_path", "");
+    tab.text = data.value("text", "");
+    tab.dirty = data.value("dirty", true);
+    tab.scrollY = data.value("scroll_y", 0.f);
+    tab.pluginSyntax = data.value("syntax", "");
+    tab.pluginColorScheme = data.value("color_scheme", "");
+    size_t cursor = data.value("cursor", 0ull);
+    if (cursor > tab.text.size()) cursor = tab.text.size();
+    tab.selections.emplace_back(cursor);
+    return tab;
+}
+
+static nlohmann::json detachedJsonFromTab(const TabBuffer& tab) {
+    nlohmann::json data;
+    data["file_name"] = tab.fileName;
+    data["file_path"] = tab.filePath;
+    data["text"] = tab.text;
+    data["dirty"] = tab.dirty;
+    data["scroll_y"] = tab.scrollY;
+    data["cursor"] = tab.selections.empty() ? 0 : tab.selections[0].cursor;
+    data["syntax"] = tab.pluginSyntax;
+    data["color_scheme"] = tab.pluginColorScheme;
+    return data;
 }
 
 Application& Application::instance() { static Application app; return app; }
@@ -316,7 +349,9 @@ bool Application::init(int argc, char** argv) {
     SDL_SysWMinfo wmInfo; SDL_VERSION(&wmInfo.version);
     if (SDL_GetWindowWMInfo(window_, &wmInfo)) {
 #ifdef _WIN32
-        Platform::setRoundedCorners(reinterpret_cast<void*>(wmInfo.info.win.window), 8);
+        nativeWindowHandle_ = reinterpret_cast<void*>(wmInfo.info.win.window);
+        SetPropA(wmInfo.info.win.window, MorenoWindowPropName, reinterpret_cast<HANDLE>(1));
+        Platform::setRoundedCorners(nativeWindowHandle_, 8);
 #endif
     }
     SDL_StartTextInput();
@@ -328,18 +363,7 @@ bool Application::init(int argc, char** argv) {
             nlohmann::json data;
             in >> data;
             in.close();
-            TabBuffer tab;
-            tab.fileName = data.value("file_name", "untitled");
-            tab.filePath = data.value("file_path", "");
-            tab.text = data.value("text", "");
-            tab.dirty = data.value("dirty", true);
-            tab.scrollY = data.value("scroll_y", 0.f);
-            tab.pluginSyntax = data.value("syntax", "");
-            tab.pluginColorScheme = data.value("color_scheme", "");
-            size_t cursor = data.value("cursor", 0ull);
-            if (cursor > tab.text.size()) cursor = tab.text.size();
-            tab.selections.emplace_back(cursor);
-            tabs_.push_back(std::move(tab));
+            tabs_.push_back(tabFromDetachedJson(data));
             activeTab_ = 0;
             loadTab(0);
             std::error_code ec;
@@ -1574,6 +1598,28 @@ void Application::closeTabNow(size_t index) {
     saveSession();
 }
 
+bool Application::importDetachedTabFromFile(const std::string& path) {
+    if (path.empty() || !fs::exists(path)) return false;
+    try {
+        std::ifstream in(path, std::ios::binary);
+        if (!in) return false;
+        nlohmann::json data;
+        in >> data;
+        in.close();
+        saveCurrentTab();
+        tabs_.push_back(tabFromDetachedJson(data));
+        activeTab_ = tabs_.size() - 1;
+        loadTab(activeTab_);
+        normalizeEditorGroups();
+        updateTitle();
+        std::error_code ec;
+        fs::remove(path, ec);
+        return !fs::exists(path);
+    } catch (...) {
+        return false;
+    }
+}
+
 void Application::closeTab(size_t index) {
     saveCurrentTab();
     if (index >= tabs_.size()) return;
@@ -1590,6 +1636,48 @@ void Application::reopenClosedTab() {
     }
 }
 
+bool Application::detachTabToExistingWindow(size_t index) {
+#ifdef _WIN32
+    if (index >= tabs_.size()) return false;
+    int globalX = 0, globalY = 0;
+    SDL_GetGlobalMouseState(&globalX, &globalY);
+    POINT pt{globalX, globalY};
+    HWND target = WindowFromPoint(pt);
+    HWND own = reinterpret_cast<HWND>(nativeWindowHandle_);
+    while (target && target != own && !GetPropA(target, MorenoWindowPropName)) target = GetParent(target);
+    if (!target || target == own || !GetPropA(target, MorenoWindowPropName)) return false;
+
+    RECT rect{};
+    if (!GetWindowRect(target, &rect)) return false;
+    int localY = globalY - rect.top;
+    if (localY < 28 || localY > 82) return false;
+
+    fs::path detachDir = fs::path(paths_.localDir) / "DetachedTabs";
+    fs::create_directories(detachDir);
+    fs::path handoff = detachDir / (std::to_string(SDL_GetTicks()) + "-" + std::to_string(index) + "-merge.json");
+    {
+        std::ofstream out(handoff, std::ios::binary | std::ios::trunc);
+        if (!out) return false;
+        out << detachedJsonFromTab(tabs_[index]).dump();
+    }
+
+    std::string handoffText = handoff.string();
+    COPYDATASTRUCT cds{};
+    cds.dwData = MorenoTabDropCopyDataId;
+    cds.cbData = static_cast<DWORD>(handoffText.size() + 1);
+    cds.lpData = handoffText.data();
+    DWORD_PTR result = 0;
+    SendMessageTimeoutA(target, WM_COPYDATA, reinterpret_cast<WPARAM>(own), reinterpret_cast<LPARAM>(&cds),
+                        SMTO_ABORTIFHUNG, 1000, &result);
+
+    for (int i = 0; i < 20 && fs::exists(handoff); ++i) SDL_Delay(10);
+    if (!fs::exists(handoff)) return true;
+    std::error_code ec;
+    fs::remove(handoff, ec);
+#endif
+    return false;
+}
+
 bool Application::detachTabToNewWindow(size_t index) {
     saveCurrentTab();
     if (index >= tabs_.size()) return false;
@@ -1598,24 +1686,25 @@ bool Application::detachTabToNewWindow(size_t index) {
         consoleBuffer_ += "[tabs] Cannot tear out plugin-owned tabs yet\n";
         return false;
     }
+    if (detachTabToExistingWindow(index)) {
+        if (tabs_.size() == 1) {
+            tabs_.erase(tabs_.begin() + index);
+            activeTab_ = 0;
+            running_ = false;
+            return true;
+        }
+        closeTabNow(index);
+        return true;
+    }
     fs::path exe = fs::path(paths_.exeDir) / "moreno_text.exe";
     if (!fs::exists(exe)) return false;
     fs::path detachDir = fs::path(paths_.localDir) / "DetachedTabs";
     fs::create_directories(detachDir);
     fs::path handoff = detachDir / (std::to_string(SDL_GetTicks()) + "-" + std::to_string(index) + ".json");
-    nlohmann::json data;
-    data["file_name"] = tab.fileName;
-    data["file_path"] = tab.filePath;
-    data["text"] = tab.text;
-    data["dirty"] = tab.dirty;
-    data["scroll_y"] = tab.scrollY;
-    data["cursor"] = tab.selections.empty() ? 0 : tab.selections[0].cursor;
-    data["syntax"] = tab.pluginSyntax;
-    data["color_scheme"] = tab.pluginColorScheme;
     {
         std::ofstream out(handoff, std::ios::binary | std::ios::trunc);
         if (!out) return false;
-        out << data.dump();
+        out << detachedJsonFromTab(tab).dump();
     }
 #ifdef _WIN32
     std::string command = "\"" + exe.string() + "\" --detached-tab \"" + handoff.string() + "\"";
@@ -2971,6 +3060,14 @@ void Application::handleEvents() {
 #ifdef _WIN32
         else if (e.type == SDL_SYSWMEVENT) {
             auto& msg = e.syswm.msg->msg.win;
+            if (msg.msg == WM_COPYDATA) {
+                auto* cds = reinterpret_cast<COPYDATASTRUCT*>(msg.lParam);
+                if (cds && cds->dwData == MorenoTabDropCopyDataId && cds->lpData && cds->cbData > 0) {
+                    std::string handoff(static_cast<const char*>(cds->lpData));
+                    importDetachedTabFromFile(handoff);
+                }
+                continue;
+            }
             if (msg.msg == WM_SIZING) { SDL_GL_GetDrawableSize(window_, &ww, &wh); GLRenderer::resize(ww, wh); titlebar_->layout(ww); render(); }
         }
 #endif
@@ -4869,6 +4966,9 @@ void Application::shutdown() {
     saveRecentFiles();
     sidebarWatchRunning_ = false;
     if (popupWin_) { SDL_DestroyWindow(popupWin_); popupWin_ = nullptr; }
+#ifdef _WIN32
+    if (nativeWindowHandle_) RemovePropA(reinterpret_cast<HWND>(nativeWindowHandle_), MorenoWindowPropName);
+#endif
     delete syntax_; delete statusbar_; delete minimap_; delete gutter_; delete titlebar_;
     fontAtlas().destroy(); GLRenderer::destroy();
     SDL_StopTextInput(); SDL_GL_DeleteContext(glContext_); SDL_DestroyWindow(window_); SDL_Quit();

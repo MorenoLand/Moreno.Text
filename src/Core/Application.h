@@ -242,12 +242,15 @@ private:
     void collapseEditorGroupsTo(size_t tabIndex);
     void addEditorGroupForTab(size_t tabIndex);
     void closeTabNow(size_t index);
+    bool importDetachedTabFromFile(const std::string& path);
+    bool detachTabToExistingWindow(size_t index);
     void drawTabBar(class FontAtlas& font, float windowW, float titlebarH);
     bool handleTabBarEvent(const SDL_Event& e, float windowW, float titlebarH);
     float tabBarH_ = 35.f;
     float tabChevronX_ = 0.f;
     SDL_Window* window_ = nullptr;
     SDL_GLContext glContext_ = nullptr;
+    void* nativeWindowHandle_ = nullptr;
     AppPaths paths_;
     bool running_ = true, dirty_ = false;
     bool syntaxDirty_ = true;
