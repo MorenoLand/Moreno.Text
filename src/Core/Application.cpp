@@ -37,8 +37,14 @@
 #if defined(__APPLE__)
 #include <mach-o/dyld.h>
 #include <limits.h>
+#include <strings.h>
 #elif !defined(_WIN32)
 #include <unistd.h>
+#include <strings.h>
+#endif
+
+#ifdef None
+#undef None
 #endif
 
 extern GLuint gl_shaderProgram();
@@ -95,9 +101,17 @@ static CloseConfirmLayout makeCloseConfirmLayout(FontAtlas& font, float windowW,
     return {mw, mh, mx, my, by, 26.f, buttonsX, saveW, buttonsX + saveW + gap, dontSaveW, buttonsX + saveW + gap + dontSaveW + gap, cancelW};
 }
 
-static SDL_HitTestResult hitTestCallback(SDL_Window*, const SDL_Point* area, void* userdata) {
+SDL_HitTestResult hitTestCallback(SDL_Window*, const SDL_Point* area, void* userdata) {
     auto* app = static_cast<Application*>(userdata);
     return app->titlebar_ ? app->titlebar_->hitTest(area->x, area->y, app->window_) : SDL_HITTEST_NORMAL;
+}
+
+static int compareCaseInsensitive(const char* a, const char* b) {
+#ifdef _WIN32
+    return _stricmp(a, b);
+#else
+    return strcasecmp(a, b);
+#endif
 }
 
 Application& Application::instance() { static Application app; return app; }
@@ -816,7 +830,7 @@ void Application::buildSidebarNode(SidebarNode& node) {
             (child.folder ? folders : files).push_back(std::move(child));
         }
     } catch (...) { return; }
-    auto byName = [](const SidebarNode& a, const SidebarNode& b) { return _stricmp(a.name.c_str(), b.name.c_str()) < 0; };
+    auto byName = [](const SidebarNode& a, const SidebarNode& b) { return compareCaseInsensitive(a.name.c_str(), b.name.c_str()) < 0; };
     std::sort(folders.begin(), folders.end(), byName);
     std::sort(files.begin(), files.end(), byName);
     node.children.reserve(folders.size() + files.size());
@@ -2752,7 +2766,7 @@ void Application::handleEvents() {
             float contentH = totalLines() * lineStep;
             float scrollPad = scrollPastEnd_ ? lineStep * 5.f : 0.f;
             float maxScroll = contentH + scrollPad > viewH ? contentH + scrollPad - viewH : 0.f;
-            bool drawMinimap = minimapVisible_ && !largeFileGuarded_;
+            bool drawMinimap = minimapVisible_;
             float mmX = (float)ww - (drawMinimap ? minimap_->width() : 0.f);
             float sbX = mmX - 10.f;
             scrollbarHovered_ = !drawMinimap && e.motion.x >= (int)sbX && e.motion.x < (int)mmX && e.motion.y >= (int)tbH && e.motion.y < wh - (int)(sbH + findPanelH);
@@ -2908,7 +2922,7 @@ void Application::handleEvents() {
             }
             float activePaneLeft = groupAreaLeft + groupW * (float)activeGroup_;
             float activePaneRight = activeGroup_ + 1 == groupCount ? fww : activePaneLeft + groupW;
-            bool drawMinimap = minimapVisible_ && !largeFileGuarded_ && groupW > 260.f;
+            bool drawMinimap = minimapVisible_ && groupW > 260.f;
             float mmW = drawMinimap ? std::min(minimap_->width(), std::max(0.f, groupW * 0.18f)) : 0.f;
             float mmX = activePaneRight - mmW;
             float sbX = mmX - 10.f;
@@ -3632,10 +3646,8 @@ void Application::update() {
         sidebarTree_.children.clear();
         buildSidebarNode(sidebarTree_);
     }
-    if (syntaxDirty_ && !largeFileGuarded_) {
-        syntax_->parse(textBuffer);
-        syntaxDirty_ = false;
-    } else if (largeFileGuarded_) {
+    if (syntaxDirty_) {
+        if (!largeFileGuarded_) syntax_->parse(textBuffer);
         syntaxDirty_ = false;
     }
 }
@@ -3676,7 +3688,7 @@ void Application::render() {
     float groupW = groupCount > 1 ? groupAreaW / (float)groupCount : groupAreaW;
     float activePaneLeft = groupAreaLeft + groupW * (float)activeGroup_;
     float activePaneRight = activeGroup_ + 1 == groupCount ? fww : activePaneLeft + groupW;
-    bool drawMinimap = minimapVisible_ && !largeFileGuarded_ && groupW > 260.f;
+    bool drawMinimap = minimapVisible_ && groupW > 260.f;
     float mmW = drawMinimap ? std::min(minimap_->width(), std::max(0.f, groupW * 0.18f)) : 0.f;
     float scrollbarW = drawMinimap ? 0.f : 10.f;
     float tbH = titlebar_->height() + tabBarH_;
@@ -3891,7 +3903,7 @@ void Application::render() {
         if (lEnd == std::string::npos) lEnd = textBuffer.size();
         if (!isFolded(lineIdx) && y + lineStep > tbH && y < editorBottom) {
             std::string_view line(textBuffer.data() + lStart, lEnd - lStart);
-            auto tokens = largeFileGuarded_ ? std::vector<SyntaxToken>{} : syntax_->highlightLine(line, lStart);
+            auto tokens = syntax_->highlightLine(line, lStart);
             if (tokens.empty()) {
                 auto& c = syntax_->scopeColor(0);
                 fontAtlas().drawTextClipped(line, drawTextX, y, textX, editorRight, c.r, c.g, c.b, 1.0f);
@@ -3998,10 +4010,9 @@ void Application::render() {
         float cy = textOriginY + cl * lineStep - scrollY_;
         if (cy + lineStep < tbH || cy > editorBottom) continue;
         float ct = cy, cb = cy + fontAtlas().ascent() - fontAtlas().descent();
-        std::vector<float> cv = {cx,ct,0,0,accentColor_.r,accentColor_.g,accentColor_.b,1.f, cx,cb,0,0,accentColor_.r,accentColor_.g,accentColor_.b,1.f, cx+2,cb,0,0,accentColor_.r,accentColor_.g,accentColor_.b,1.f, cx,ct,0,0,accentColor_.r,accentColor_.g,accentColor_.b,1.f, cx+2,cb,0,0,accentColor_.r,accentColor_.g,accentColor_.b,1.f, cx+2,ct,0,0,accentColor_.r,accentColor_.g,accentColor_.b,1.f};
-        glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo()); glBufferData(GL_ARRAY_BUFFER, cv.size()*sizeof(float), cv.data(), GL_DYNAMIC_DRAW);
-        glBindTexture(GL_TEXTURE_2D, fontAtlas().atlasTexture()); glDrawArrays(GL_TRIANGLES, 0, 6); glBindVertexArray(0);
+        addSolid(cx, ct, cx + 2.5f, cb, 0.82f, 0.98f, 1.0f, 1.f);
     }
+    flushSolid();
     // bracket matching
     {
         auto drawBracketBox = [&](size_t pos, float r, float g, float b) {
