@@ -33,6 +33,7 @@
 #include <cmath>
 #include <memory>
 #include <unordered_map>
+#include <array>
 
 #if defined(__APPLE__)
 #include <mach-o/dyld.h>
@@ -61,6 +62,22 @@ extern GLuint gl_vbo();
 #endif
 
 namespace fs = std::filesystem;
+
+static size_t countFileLines(const std::string& path) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file) return 0;
+    std::array<char, 1024 * 1024> buffer{};
+    size_t newlineCount = 0;
+    bool sawAny = false;
+    while (file) {
+        file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+        std::streamsize got = file.gcount();
+        if (got <= 0) break;
+        sawAny = true;
+        newlineCount += static_cast<size_t>(std::count(buffer.data(), buffer.data() + got, '\n'));
+    }
+    return sawAny ? newlineCount + 1 : 1;
+}
 
 struct ConsoleBuf : std::streambuf {
     std::string& buf;
@@ -114,6 +131,14 @@ static int compareCaseInsensitive(const char* a, const char* b) {
     return _stricmp(a, b);
 #else
     return strcasecmp(a, b);
+#endif
+}
+
+static bool useExternalPopupWindow() {
+#ifdef _WIN32
+    return true;
+#else
+    return false;
 #endif
 }
 
@@ -414,6 +439,7 @@ bool Application::loadSession() {
             tab.fileName = fs::path(path).filename().string();
             tab.largeFileGuarded = fileSize > guardedLoadLimit;
             tab.largeFileSize = fileSize;
+            tab.largeFileTotalLines = tab.largeFileGuarded ? countFileLines(path) : 0;
             tab.scrollY = item.value("scrollY", 0.f);
             size_t cursor = item.value("cursor", 0ull);
             if (cursor > tab.text.size()) cursor = tab.text.size();
@@ -481,7 +507,11 @@ size_t Application::lineOfPos(size_t pos) const {
     auto it = std::upper_bound(lineStarts_.begin(), lineStarts_.end(), pos);
     return it == lineStarts_.begin() ? 0 : static_cast<size_t>((it - lineStarts_.begin()) - 1);
 }
-size_t Application::totalLines() const { rebuildLineIndex(); return std::max<size_t>(1, lineStarts_.size()); }
+size_t Application::totalLines() const {
+    rebuildLineIndex();
+    if (largeFileGuarded_ && largeFileTotalLines_ > lineStarts_.size()) return largeFileTotalLines_;
+    return std::max<size_t>(1, lineStarts_.size());
+}
 size_t Application::colOfPos(size_t pos) const { size_t ls = lineStart(pos); return pos - ls; }
 
 void Application::insertText(const std::string& text) {
@@ -699,11 +729,12 @@ void Application::openFile(const std::string& path) {
     TabBuffer tab; tab.text = std::move(text); tab.filePath = absPath; tab.fileName = fs::path(absPath).filename().string();
     tab.largeFileGuarded = fileSize > guardedLoadLimit;
     tab.largeFileSize = fileSize;
+    tab.largeFileTotalLines = tab.largeFileGuarded ? countFileLines(absPath) : 0;
     tab.selections.emplace_back(0);
     tabs_.push_back(std::move(tab)); activeTab_ = tabs_.size()-1;
     textBuffer = tabs_[activeTab_].text; openFilePath_ = absPath; openFile_ = tabs_[activeTab_].fileName;
     invalidateLineIndex();
-    largeFileGuarded_ = tabs_[activeTab_].largeFileGuarded; largeFileSize_ = tabs_[activeTab_].largeFileSize;
+    largeFileGuarded_ = tabs_[activeTab_].largeFileGuarded; largeFileSize_ = tabs_[activeTab_].largeFileSize; largeFileTotalLines_ = tabs_[activeTab_].largeFileTotalLines;
     dirty_ = false; selections_.clear(); selections_.emplace_back(0);
     scrollY_ = 0; scrollX_ = 0; maxLineWidthDirty_ = true; undoStack_.clear(); redoStack_.clear(); foldedRegions_.clear(); detectSyntax(); updateGitBranch();
     rememberRecentFile(absPath);
@@ -754,7 +785,7 @@ void Application::revertFile() {
     std::ifstream f(openFilePath_, std::ios::binary);
     if (!f) return;
     std::ostringstream ss; ss << f.rdbuf();
-    textBuffer = ss.str(); invalidateLineIndex(); dirty_ = false; largeFileGuarded_ = false; largeFileSize_ = 0; maxLineWidthDirty_ = true; selections_.clear(); selections_.emplace_back(std::min(selections_.empty() ? 0 : selections_[0].cursor, textBuffer.size()));
+    textBuffer = ss.str(); invalidateLineIndex(); dirty_ = false; largeFileGuarded_ = false; largeFileSize_ = 0; largeFileTotalLines_ = 0; maxLineWidthDirty_ = true; selections_.clear(); selections_.emplace_back(std::min(selections_.empty() ? 0 : selections_[0].cursor, textBuffer.size()));
 }
 void Application::openFileDialog() {
 #ifdef _WIN32
@@ -771,7 +802,7 @@ void Application::newBuffer() {
     TabBuffer tab; tab.fileName = "untitled"; tab.selections.emplace_back(0);
     tabs_.push_back(std::move(tab)); activeTab_ = tabs_.size()-1;
     textBuffer.clear(); invalidateLineIndex(); openFilePath_.clear(); openFile_ = "untitled"; dirty_ = false;
-    selections_.clear(); selections_.emplace_back(0); scrollY_ = 0; scrollX_ = 0; largeFileGuarded_ = false; largeFileSize_ = 0; maxLineWidthDirty_ = true; undoStack_.clear(); redoStack_.clear(); foldedRegions_.clear(); detectSyntax(); saveSession();
+    selections_.clear(); selections_.emplace_back(0); scrollY_ = 0; scrollX_ = 0; largeFileGuarded_ = false; largeFileSize_ = 0; largeFileTotalLines_ = 0; maxLineWidthDirty_ = true; undoStack_.clear(); redoStack_.clear(); foldedRegions_.clear(); detectSyntax(); saveSession();
 }
 
 void Application::toggleFullscreen() {
@@ -1309,7 +1340,7 @@ void Application::saveCurrentTab() {
     tab.text = textBuffer; tab.filePath = openFilePath_; tab.fileName = openFile_;
     tab.selections = selections_; tab.scrollY = scrollY_;
     tab.undoStack = std::move(undoStack_); tab.redoStack = std::move(redoStack_);
-    tab.foldedRegions = foldedRegions_; tab.dirty = dirty_; tab.largeFileGuarded = largeFileGuarded_; tab.largeFileSize = largeFileSize_; tab.desiredCursorX = desiredCursorX_;
+    tab.foldedRegions = foldedRegions_; tab.dirty = dirty_; tab.largeFileGuarded = largeFileGuarded_; tab.largeFileSize = largeFileSize_; tab.largeFileTotalLines = largeFileTotalLines_; tab.desiredCursorX = desiredCursorX_;
     if (activeGroup_ < editorGroups_.size()) editorGroups_[activeGroup_].tab = activeTab_;
 }
 
@@ -1320,7 +1351,7 @@ void Application::loadTab(size_t index) {
     selections_ = tab.selections; scrollY_ = tab.scrollY;
     undoStack_ = std::move(tab.undoStack); redoStack_ = std::move(tab.redoStack);
     foldedRegions_ = tab.foldedRegions; dirty_ = tab.dirty; desiredCursorX_ = tab.desiredCursorX;
-    largeFileGuarded_ = tab.largeFileGuarded; largeFileSize_ = tab.largeFileSize;
+    largeFileGuarded_ = tab.largeFileGuarded; largeFileSize_ = tab.largeFileSize; largeFileTotalLines_ = tab.largeFileTotalLines;
     activeTab_ = index; scrollX_ = 0; maxLineWidthDirty_ = true; detectSyntax(); updateGitBranch();
     if (activeGroup_ < editorGroups_.size()) editorGroups_[activeGroup_].tab = activeTab_;
 }
@@ -3706,9 +3737,10 @@ void Application::render() {
     size_t firstRenderLine = firstVisibleLine > 2 ? firstVisibleLine - 2 : 0;
     size_t lastRenderLine = lineCount > 0 ? std::min(lineCount - 1, (size_t)((scrollY_ + (fwh - sbH - findPanelH - tbH)) / lineStep) + 3) : 0;
     float firstVisibleY = textOriginY + firstVisibleLine * lineStep - scrollY_;
-    deferPopupDraw_ = titlebar_->isMenuOpen() || tabDropdownOpen_ || tabContextOpen_ || sidebarContextOpen_ ||
+    bool externalPopupWindow = useExternalPopupWindow();
+    deferPopupDraw_ = externalPopupWindow && (titlebar_->isMenuOpen() || tabDropdownOpen_ || tabContextOpen_ || sidebarContextOpen_ ||
         statusPopup_ != StatusPopup::None ||
-        (acActive_ && !acItems_.empty());
+        (acActive_ && !acItems_.empty()));
     if (activeTab_ < tabs_.size()) {
         tabs_[activeTab_].fileName = openFile_.empty() ? "untitled" : openFile_;
         tabs_[activeTab_].filePath = openFilePath_;
@@ -4452,7 +4484,7 @@ void Application::render() {
     }
     GLRenderer::endFrame();
     SDL_GL_SwapWindow(window_);
-    // render overflow popups to separate window
+    // render overflow popups to a separate native-shaped window where the platform supports it.
     bool hasPopup = false;
     float mainX = 0.f, mainY = 0.f, mainW = 0.f, mainH = 0.f;
     enum class PopupKind { None, Menu, TabDropdown, TabContext, SidebarContext, Status, Autocomplete } popupKind = PopupKind::None;
@@ -4491,7 +4523,7 @@ void Application::render() {
         mainW = 220.f; mainH = static_cast<float>(acItems_.size()) * 22.f + 4.f;
         popupKind = PopupKind::Autocomplete; hasPopup = true;
     }
-    if (hasPopup && mainW > 1.f && mainH > 1.f) {
+    if (externalPopupWindow && hasPopup && mainW > 1.f && mainH > 1.f) {
         int winX = 0, winY = 0; SDL_GetWindowPosition(window_, &winX, &winY);
         popupMainX_ = mainX; popupMainY_ = mainY; popupMainW_ = mainW; popupMainH_ = mainH;
         renderPopupToWindow(winX + static_cast<int>(mainX), winY + static_cast<int>(mainY), static_cast<int>(mainW), static_cast<int>(mainH));
@@ -4587,7 +4619,7 @@ void Application::render() {
         SDL_GL_MakeCurrent(window_, glContext_);
         GLRenderer::resize(ww, wh);
     }
-    if (popupWin_ && !hasPopup) hidePopupWindow();
+    if (popupWin_ && (!externalPopupWindow || !hasPopup)) hidePopupWindow();
 }
 
 void Application::shutdown() {

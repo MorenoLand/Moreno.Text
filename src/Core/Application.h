@@ -107,6 +107,7 @@ struct TabBuffer {
     bool dirty = false;
     bool largeFileGuarded = false;
     uintmax_t largeFileSize = 0;
+    size_t largeFileTotalLines = 0;
     float desiredCursorX = -1.f;
     std::string pluginSyntax;
     std::string pluginColorScheme;
@@ -253,6 +254,7 @@ private:
     bool maxLineWidthDirty_ = true;
     bool largeFileGuarded_ = false;
     uintmax_t largeFileSize_ = 0;
+    size_t largeFileTotalLines_ = 0;
     bool selecting_ = false;
     bool minimapDragging_ = false;
     bool minimapPendingJump_ = false;
