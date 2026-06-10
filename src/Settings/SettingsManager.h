@@ -23,7 +23,7 @@ public:
         if (f.is_open()) f << data_.dump(2);
     }
     void ensureDefaults() {
-        setDefault("font_face", "Consolas");
+        setDefault("font_face", "Cascadia Mono");
         setDefault("font_size", 13);
         setDefault("tab_size", 4);
         setDefault("translate_tabs_to_spaces", true);

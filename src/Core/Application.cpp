@@ -105,7 +105,7 @@ int Application::run(int argc, char** argv) {
 static std::string findMonospaceFont() {
     static const char* candidates[] = {
 #ifdef _WIN32
-        "C:/Windows/Fonts/consola.ttf","C:/Windows/Fonts/cour.ttf","C:/Windows/Fonts/lucon.ttf",
+        "C:/Windows/Fonts/CascadiaMono.ttf","C:/Windows/Fonts/CascadiaCode.ttf","C:/Windows/Fonts/consola.ttf","C:/Windows/Fonts/cour.ttf","C:/Windows/Fonts/lucon.ttf",
 #elif __APPLE__
         "/System/Library/Fonts/SFNSMono.ttf","/System/Library/Fonts/Menlo.ttc",
 #else
@@ -1388,10 +1388,11 @@ void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
         solidVerts_.insert(solidVerts_.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
     };
     float barY = titlebarH;
+    constexpr float tabStripInset = 8.f;
     constexpr float scrollBtnW = 22.f;
     constexpr float allFilesW = 38.f;
-    float menuX = std::max(0.f, windowW - allFilesW);
-    float initialVisibleW = std::max(0.f, menuX);
+    float menuX = std::max(tabStripInset, windowW - allFilesW);
+    float initialVisibleW = std::max(0.f, menuX - tabStripInset);
     ar(0, barY, windowW, barY + tabBarH_, 0.25f, 0.25f, 0.28f, 1.f);
     constexpr float tabTextPadL = 12.f;
     constexpr float tabActionPadR = 14.f;
@@ -1403,13 +1404,13 @@ void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
     auto roundedTab = [&](float x0, float x1, float r, float g, float b, float a, bool active) {
         float y0 = barY + 3.f;
         float y1 = barY + tabBarH_;
-        float inset1 = 5.f;
-        float inset2 = 2.f;
-        ar(x0 + inset1, y0, x1 - inset1, y0 + 2.f, r, g, b, a);
-        ar(x0 + inset2, y0 + 2.f, x1 - inset2, y0 + 5.f, r, g, b, a);
-        ar(x0, y0 + 5.f, x1, y1, r, g, b, a);
+        ar(x0 + 7.f, y0, x1 - 7.f, y0 + 1.f, r, g, b, a);
+        ar(x0 + 5.f, y0 + 1.f, x1 - 5.f, y0 + 2.f, r, g, b, a);
+        ar(x0 + 3.f, y0 + 2.f, x1 - 3.f, y0 + 4.f, r, g, b, a);
+        ar(x0 + 1.f, y0 + 4.f, x1 - 1.f, y0 + 6.f, r, g, b, a);
+        ar(x0, y0 + 6.f, x1, y1, r, g, b, a);
         if (active) {
-            ar(x0 + inset2, y0, x1 - inset2, y0 + 1.f, std::min(r + 0.08f, 1.f), std::min(g + 0.08f, 1.f), std::min(b + 0.08f, 1.f), 0.65f);
+            ar(x0 + 5.f, y0, x1 - 5.f, y0 + 1.f, std::min(r + 0.08f, 1.f), std::min(g + 0.08f, 1.f), std::min(b + 0.08f, 1.f), 0.65f);
             ar(x0, y1 - 1.f, x1, y1, r, g, b, a);
         }
     };
@@ -1420,7 +1421,8 @@ void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
     }
     bool hasOverflow = totalTabsW > initialVisibleW;
     float scrollAreaW = hasOverflow ? scrollBtnW * 2.f : 0.f;
-    float tabAreaX = scrollAreaW;
+    float scrollAreaX = tabStripInset;
+    float tabAreaX = tabStripInset + scrollAreaW;
     float visibleW = std::max(0.f, menuX - tabAreaX);
     float maxTabScroll = totalTabsW > visibleW ? totalTabsW - visibleW : 0.f;
     if (tabScrollX_ > maxTabScroll) tabScrollX_ = maxTabScroll;
@@ -1451,11 +1453,10 @@ void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
     }
     if (hasOverflow) {
         for (int i = 0; i < 2; ++i) {
-            float x = i * scrollBtnW;
+            float x = scrollAreaX + i * scrollBtnW;
             ar(x, barY, x + scrollBtnW, barY + tabBarH_, 0.21f, 0.21f, 0.24f, 1.f);
         }
     }
-    ar(menuX, barY, windowW, barY + tabBarH_, 0.21f, 0.21f, 0.24f, 1.f);
     auto flushTabSolids = [&] {
         if (solidVerts_.empty()) return;
         GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
@@ -1490,10 +1491,10 @@ void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
     if (hasOverflow) {
         float leftBright = tabScrollX_ > 0.f ? 0.78f : 0.38f;
         float rightBright = tabScrollX_ < maxTabScroll ? 0.78f : 0.38f;
-        font.drawText("<", 7.f, controlY, leftBright, leftBright, leftBright + 0.03f, 1.f);
-        font.drawText(">", scrollBtnW + 7.f, controlY, rightBright, rightBright, rightBright + 0.03f, 1.f);
+        font.drawText("<", scrollAreaX + 7.f, controlY, leftBright, leftBright, leftBright + 0.03f, 1.f);
+        font.drawText(">", scrollAreaX + scrollBtnW + 7.f, controlY, rightBright, rightBright, rightBright + 0.03f, 1.f);
     }
-    font.drawText("\xe2\x88\xa8", menuX + 12.f, controlY, 0.75f, 0.75f, 0.78f, 1.f);
+    font.drawText("v", menuX + 15.f, controlY, 0.75f, 0.75f, 0.78f, 1.f);
     if (!tabDropdownOpen_ && mouseX_ >= (int)menuX && mouseX_ < (int)windowW && mouseY_ >= (int)barY && mouseY_ < (int)(barY + tabBarH_)) {
         std::string tip = "All Files";
         float tipW = font.measureText(tip) + 18.f;
@@ -1557,10 +1558,11 @@ void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
 
 bool Application::handleTabBarEvent(const SDL_Event& e, float windowW, float titlebarH) {
     float barY = titlebarH;
+    constexpr float tabStripInset = 8.f;
     constexpr float scrollBtnW = 22.f;
     constexpr float allFilesW = 38.f;
-    float menuX = std::max(0.f, windowW - allFilesW);
-    float initialVisibleW = std::max(0.f, menuX);
+    float menuX = std::max(tabStripInset, windowW - allFilesW);
+    float initialVisibleW = std::max(0.f, menuX - tabStripInset);
     constexpr float tabTextPadL = 12.f;
     constexpr float tabActionPadR = 14.f;
     constexpr float tabActionW = 22.f;
@@ -1575,7 +1577,8 @@ bool Application::handleTabBarEvent(const SDL_Event& e, float windowW, float tit
     }
     bool hasOverflow = totalTabsW > initialVisibleW;
     float scrollAreaW = hasOverflow ? scrollBtnW * 2.f : 0.f;
-    float tabAreaX = scrollAreaW;
+    float scrollAreaX = tabStripInset;
+    float tabAreaX = tabStripInset + scrollAreaW;
     float visibleW = std::max(0.f, menuX - tabAreaX);
     float maxTabScroll = totalTabsW > visibleW ? totalTabsW - visibleW : 0.f;
     if (consoleOpen_ && e.type == SDL_MOUSEBUTTONDOWN && e.button.button == 1) {
@@ -1621,15 +1624,15 @@ bool Application::handleTabBarEvent(const SDL_Event& e, float windowW, float tit
         float mx = (float)e.motion.x, my = (float)e.motion.y;
         int ww, wh; SDL_GetWindowSize(window_, &ww, &wh);
         float barY = titlebar_->height();
-        float localMenuX = std::max(0.f, (float)ww - allFilesW);
-        float localInitialVisibleW = std::max(0.f, localMenuX);
+        float localMenuX = std::max(tabStripInset, (float)ww - allFilesW);
+        float localInitialVisibleW = std::max(0.f, localMenuX - tabStripInset);
         float localTotalTabsW = 0.f;
         for (auto& tab : tabs_) {
             std::string label = tab.fileName.empty() ? "untitled" : tab.fileName;
             localTotalTabsW += tabWidthForLabel(label);
         }
         bool localOverflow = localTotalTabsW > localInitialVisibleW;
-        float localTabAreaX = localOverflow ? scrollBtnW * 2.f : 0.f;
+        float localTabAreaX = tabStripInset + (localOverflow ? scrollBtnW * 2.f : 0.f);
         if (my >= barY && my < barY + tabBarH_ && mx >= localTabAreaX && mx < localMenuX) {
             float tx = localTabAreaX - tabScrollX_;
             tabHoverIndex_ = (size_t)-1;
@@ -1691,8 +1694,8 @@ bool Application::handleTabBarEvent(const SDL_Event& e, float windowW, float tit
             return true;
         }
         if (my < barY || my >= barY + tabBarH_) return false;
-        if (hasOverflow && mx >= 0.f && mx < scrollAreaW) {
-            int btn = (int)(mx / scrollBtnW);
+        if (hasOverflow && mx >= scrollAreaX && mx < scrollAreaX + scrollAreaW) {
+            int btn = (int)((mx - scrollAreaX) / scrollBtnW);
             if (btn == 0) tabScrollX_ -= 80.f;
             else if (btn == 1) tabScrollX_ += 80.f;
             if (tabScrollX_ < 0.f) tabScrollX_ = 0.f;

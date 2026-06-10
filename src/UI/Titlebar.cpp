@@ -285,8 +285,9 @@ void Titlebar::appendSolidRects(std::vector<float>& v) {
 void Titlebar::drawForeground(FontAtlas& font) {
     if (iconTex_) {
         GLRenderer::setDrawMode(1);
-        float pad = (height_ - iconW_) / 2.f;
-        std::vector<float> iv = {pad,pad,0,0,1,1,1,1, pad,pad+iconH_,0,1,1,1,1,1, pad+iconW_,pad+iconH_,1,1,1,1,1,1, pad,pad,0,0,1,1,1,1, pad+iconW_,pad+iconH_,1,1,1,1,1,1, pad+iconW_,pad,1,0,1,1,1,1};
+        float padX = 8.f;
+        float padY = (height_ - iconH_) / 2.f;
+        std::vector<float> iv = {padX,padY,0,0,1,1,1,1, padX,padY+iconH_,0,1,1,1,1,1, padX+iconW_,padY+iconH_,1,1,1,1,1,1, padX,padY,0,0,1,1,1,1, padX+iconW_,padY+iconH_,1,1,1,1,1,1, padX+iconW_,padY,1,0,1,1,1,1};
         glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
         glBufferData(GL_ARRAY_BUFFER, iv.size()*sizeof(float), iv.data(), GL_DYNAMIC_DRAW);
         glBindTexture(GL_TEXTURE_2D, iconTex_); glDrawArrays(GL_TRIANGLES, 0, 6); glBindVertexArray(0);
@@ -299,7 +300,12 @@ void Titlebar::drawForeground(FontAtlas& font) {
     float titleY = 8.f;
     font.drawText(title_, titleX, titleY, 0.7f, 0.7f, 0.7f, 1.f);
     float mid = height_ / 2.f;
-    font.drawText("_", buttons_[1].x + 16.f, mid - 4.f, 0.7f, 0.7f, 0.7f, 1.f);
+    std::vector<float> iconRects;
+    auto ar = [&](float x0,float y0,float x1,float y1,float cr,float cg,float cb,float ca) {
+        iconRects.insert(iconRects.end(),{x0,y0,0,0,cr,cg,cb,ca, x0,y1,0,0,cr,cg,cb,ca, x1,y1,0,0,cr,cg,cb,ca, x0,y0,0,0,cr,cg,cb,ca, x1,y1,0,0,cr,cg,cb,ca, x1,y0,0,0,cr,cg,cb,ca});
+    };
+    ar(buttons_[1].x + 16.f, mid + 5.f, buttons_[1].x + 30.f, mid + 6.5f, 0.70f, 0.70f, 0.72f, 1.f);
+    flushSolid(iconRects);
     font.drawText("\xe2\x96\xa1", buttons_[2].x + 16.f, mid - 8.f, 0.7f, 0.7f, 0.7f, 1.f);
     font.drawText("\xc3\x97", buttons_[3].x + 16.f, mid - 8.f, 1.f, 1.f, 1.f, 1.f);
     drawMenu(font);
