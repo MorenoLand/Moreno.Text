@@ -1633,6 +1633,12 @@ bool Application::detachTabToNewWindow(size_t index) {
 #else
     return false;
 #endif
+    if (tabs_.size() == 1) {
+        tabs_.erase(tabs_.begin() + index);
+        activeTab_ = 0;
+        running_ = false;
+        return true;
+    }
     closeTabNow(index);
     return true;
 }
@@ -1757,15 +1763,6 @@ void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
         flushTabSolids();
         font.drawText(tip, tipX + 9.f, tipY + 5.f, 0.84f, 0.84f, 0.87f, 1.f);
     }
-    // tab drag ghost
-    if (tabDragging_ && tabDragIndex_ < tabs_.size()) {
-        std::string dragLabel = tabs_[tabDragIndex_].fileName.empty() ? "untitled" : tabs_[tabDragIndex_].fileName;
-        float dragW = tabWidthForLabel(dragLabel);
-        float dragX = std::clamp(mouseX_ - dragW / 2.f, tabAreaX, std::max(tabAreaX, menuX - dragW));
-        ar(dragX, barY, dragX + dragW, barY + tabBarH_, 0.20f, 0.20f, 0.23f, 0.6f);
-        flushTabSolids();
-        font.drawText(dragLabel, dragX + 12.f, barY + 8.f, 0.85f, 0.85f, 0.85f, 0.6f);
-    }
     if (tabDropdownOpen_ && !deferPopupDraw_) {
         float popW = 260.f, itemH = 24.f, popH = tabs_.size() * itemH + 4.f, popX = tabChevronX_, popY = barY + tabBarH_;;
         std::vector<float> pv;
@@ -1875,6 +1872,7 @@ bool Application::handleTabBarEvent(const SDL_Event& e, float windowW, float tit
         size_t dragged = tabDragIndex_;
         tabDragging_ = false;
         SDL_CaptureMouse(SDL_FALSE);
+        hidePopupWindow();
         if (tearOut) detachTabToNewWindow(dragged);
         return true;
     }
@@ -4694,6 +4692,41 @@ void Application::render() {
     GLRenderer::endFrame();
     SDL_GL_SwapWindow(window_);
     // render overflow popups to a separate native-shaped window where the platform supports it.
+    if (externalPopupWindow && tabDragging_ && tabDragIndex_ < tabs_.size()) {
+        std::string label = tabs_[tabDragIndex_].fileName.empty() ? "untitled" : tabs_[tabDragIndex_].fileName;
+        float textW = fontAtlas().measureText(label);
+        int ghostW = static_cast<int>(std::ceil(std::clamp(textW + 52.f, 124.f, 320.f)));
+        int ghostH = static_cast<int>(tabBarH_);
+        int globalX = 0, globalY = 0;
+        SDL_GetGlobalMouseState(&globalX, &globalY);
+        renderPopupToWindow(globalX - ghostW / 2, globalY - ghostH / 2, ghostW, ghostH);
+        clearPopupWindowShape();
+
+        auto drawRect = [](std::vector<float>& verts, float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
+            verts.insert(verts.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
+        };
+        auto flush = [](std::vector<float>& verts) {
+            if (verts.empty()) return;
+            GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
+            glBufferData(GL_ARRAY_BUFFER, verts.size()*sizeof(float), verts.data(), GL_DYNAMIC_DRAW);
+            glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(verts.size()/8));
+            glBindVertexArray(0); GLRenderer::setDrawMode(0); verts.clear();
+        };
+
+        std::vector<float> gv;
+        drawRect(gv, 0.f, 0.f, static_cast<float>(ghostW), static_cast<float>(ghostH), 0.18f, 0.18f, 0.21f, 0.98f);
+        drawRect(gv, 0.f, static_cast<float>(ghostH) - 2.f, static_cast<float>(ghostW), static_cast<float>(ghostH), 0.28f, 0.78f, 0.74f, 1.f);
+        if (tabs_[tabDragIndex_].dirty)
+            drawRect(gv, static_cast<float>(ghostW) - 20.f, 13.f, static_cast<float>(ghostW) - 14.f, 19.f, 0.85f, 0.66f, 0.22f, 1.f);
+        flush(gv);
+        fontAtlas().drawTextClipped(label, 12.f, 8.f, 10.f, static_cast<float>(ghostW) - 36.f, 0.88f, 0.88f, 0.90f, 1.f);
+
+        GLRenderer::endFrame();
+        SDL_GL_SwapWindow(popupWin_);
+        SDL_GL_MakeCurrent(window_, glContext_);
+        GLRenderer::resize(ww, wh);
+        return;
+    }
     bool hasPopup = false;
     float mainX = 0.f, mainY = 0.f, mainW = 0.f, mainH = 0.f;
     enum class PopupKind { None, Menu, TabDropdown, TabContext, SidebarContext, Status, Autocomplete } popupKind = PopupKind::None;
