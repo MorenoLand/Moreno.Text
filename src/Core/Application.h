@@ -4,9 +4,11 @@
 #include <vector>
 #include <chrono>
 #include <filesystem>
+#include <cstdint>
 #include <atomic>
 #include <mutex>
 #include <set>
+#include <memory>
 #include "Plugin/PluginHost.h"
 #include "UI/SidebarMenu.h"
 
@@ -15,6 +17,7 @@ class Gutter;
 class Minimap;
 class StatusBar;
 class SyntaxHighlighter;
+class FileBackedBuffer;
 
 struct AppPaths {
     std::string exeDir, dataDir, packagesDir, installedPackagesDir;
@@ -108,6 +111,11 @@ struct TabBuffer {
     bool largeFileGuarded = false;
     uintmax_t largeFileSize = 0;
     size_t largeFileTotalLines = 0;
+    size_t largeFileWindowFirstLine = 0;
+    std::vector<uintmax_t> largeFileLineOffsets;
+    uint64_t largeFileWindowStartByte = 0;
+    uint64_t largeFileWindowEndByte = 0;
+    std::shared_ptr<FileBackedBuffer> largeFileBuffer;
     float desiredCursorX = -1.f;
     std::string pluginSyntax;
     std::string pluginColorScheme;
@@ -199,6 +207,7 @@ private:
     size_t lineOfPos(size_t pos) const;
     size_t totalLines() const;
     size_t colOfPos(size_t pos) const;
+    void ensureLargeFileWindowForLine(size_t line);
     void insertAtCursor(const std::string& text);
     void deleteSelection();
     void insertText(const std::string& text);
@@ -255,6 +264,11 @@ private:
     bool largeFileGuarded_ = false;
     uintmax_t largeFileSize_ = 0;
     size_t largeFileTotalLines_ = 0;
+    size_t largeFileWindowFirstLine_ = 0;
+    std::vector<uintmax_t> largeFileLineOffsets_;
+    uint64_t largeFileWindowStartByte_ = 0;
+    uint64_t largeFileWindowEndByte_ = 0;
+    std::shared_ptr<FileBackedBuffer> largeFileBuffer_;
     bool selecting_ = false;
     bool minimapDragging_ = false;
     bool minimapPendingJump_ = false;

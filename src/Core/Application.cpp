@@ -13,6 +13,7 @@
 #include "UI/StatusBar.h"
 #include "Syntax/SyntaxHighlighter.h"
 #include "Platform/Platform.h"
+#include "Core/FileBackedBuffer.h"
 #include "Core/Version.h"
 #include <nlohmann/json.hpp>
 #include <SDL2/SDL.h>
@@ -63,20 +64,23 @@ extern GLuint gl_vbo();
 
 namespace fs = std::filesystem;
 
-static size_t countFileLines(const std::string& path) {
-    std::ifstream file(path, std::ios::binary);
-    if (!file) return 0;
-    std::array<char, 1024 * 1024> buffer{};
-    size_t newlineCount = 0;
-    bool sawAny = false;
-    while (file) {
-        file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
-        std::streamsize got = file.gcount();
-        if (got <= 0) break;
-        sawAny = true;
-        newlineCount += static_cast<size_t>(std::count(buffer.data(), buffer.data() + got, '\n'));
+static std::string readLargeFileWindow(FileBackedBuffer& buffer, size_t startLine, uint64_t maxBytes,
+                                       uint64_t& startByte, uint64_t& endByte) {
+    constexpr size_t maxLines = 20000;
+    startLine = std::min(startLine, buffer.lineCount() > 0 ? buffer.lineCount() - 1 : 0);
+    startByte = buffer.lineStart(startLine);
+    endByte = startByte;
+    size_t line = startLine;
+    while (line < buffer.lineCount() && line < startLine + maxLines) {
+        uint64_t lineEnd = buffer.lineEnd(line);
+        if (lineEnd > startByte + maxBytes && line > startLine) break;
+        endByte = std::max(endByte, lineEnd);
+        ++line;
+        if (endByte >= startByte + maxBytes) break;
     }
-    return sawAny ? newlineCount + 1 : 1;
+    if (endByte <= startByte) endByte = std::min<uint64_t>(buffer.fileSize(), startByte + maxBytes);
+    if (endByte > startByte + maxBytes && startByte + maxBytes < buffer.fileSize()) endByte = startByte + maxBytes;
+    return buffer.readOriginal(startByte, endByte - startByte);
 }
 
 struct ConsoleBuf : std::streambuf {
@@ -426,10 +430,15 @@ bool Application::loadSession() {
             try { fileSize = fs::file_size(path); } catch (...) {}
             constexpr uintmax_t guardedLoadLimit = 16ull * 1024ull * 1024ull;
             std::string text;
+            size_t guardedTotalLines = 0;
+            uint64_t windowStartByte = 0;
+            uint64_t windowEndByte = 0;
+            std::shared_ptr<FileBackedBuffer> largeBuffer;
             if (fileSize > guardedLoadLimit) {
-                text.resize((size_t)guardedLoadLimit);
-                tf.read(text.data(), (std::streamsize)text.size());
-                text.resize((size_t)tf.gcount());
+                largeBuffer = std::make_shared<FileBackedBuffer>();
+                if (!largeBuffer->open(path)) continue;
+                guardedTotalLines = largeBuffer->lineCount();
+                text = readLargeFileWindow(*largeBuffer, 0, 64ull * 1024ull * 1024ull, windowStartByte, windowEndByte);
             } else {
                 std::ostringstream ss; ss << tf.rdbuf(); text = ss.str();
             }
@@ -439,7 +448,10 @@ bool Application::loadSession() {
             tab.fileName = fs::path(path).filename().string();
             tab.largeFileGuarded = fileSize > guardedLoadLimit;
             tab.largeFileSize = fileSize;
-            tab.largeFileTotalLines = tab.largeFileGuarded ? countFileLines(path) : 0;
+            tab.largeFileTotalLines = guardedTotalLines;
+            tab.largeFileWindowStartByte = windowStartByte;
+            tab.largeFileWindowEndByte = windowEndByte;
+            tab.largeFileBuffer = std::move(largeBuffer);
             tab.scrollY = item.value("scrollY", 0.f);
             size_t cursor = item.value("cursor", 0ull);
             if (cursor > tab.text.size()) cursor = tab.text.size();
@@ -498,6 +510,10 @@ size_t Application::lineStart(size_t pos) const { if (pos == 0) return 0; size_t
 size_t Application::lineEnd(size_t pos) const { size_t p = textBuffer.find('\n', pos); return p == std::string::npos ? textBuffer.size() : p; }
 size_t Application::lineStartForLine(size_t line) const {
     rebuildLineIndex();
+    if (largeFileGuarded_) {
+        if (line < largeFileWindowFirstLine_) return 0;
+        line -= largeFileWindowFirstLine_;
+    }
     if (line >= lineStarts_.size()) return textBuffer.size();
     return lineStarts_[line];
 }
@@ -505,7 +521,8 @@ size_t Application::lineOfPos(size_t pos) const {
     rebuildLineIndex();
     pos = std::min(pos, textBuffer.size());
     auto it = std::upper_bound(lineStarts_.begin(), lineStarts_.end(), pos);
-    return it == lineStarts_.begin() ? 0 : static_cast<size_t>((it - lineStarts_.begin()) - 1);
+    size_t localLine = it == lineStarts_.begin() ? 0 : static_cast<size_t>((it - lineStarts_.begin()) - 1);
+    return largeFileGuarded_ ? largeFileWindowFirstLine_ + localLine : localLine;
 }
 size_t Application::totalLines() const {
     rebuildLineIndex();
@@ -513,6 +530,38 @@ size_t Application::totalLines() const {
     return std::max<size_t>(1, lineStarts_.size());
 }
 size_t Application::colOfPos(size_t pos) const { size_t ls = lineStart(pos); return pos - ls; }
+
+void Application::ensureLargeFileWindowForLine(size_t line) {
+    if (!largeFileGuarded_ || !largeFileBuffer_ || dirty_) return;
+    rebuildLineIndex();
+    size_t loadedLines = std::max<size_t>(1, lineStarts_.size());
+    size_t windowEndLine = largeFileWindowFirstLine_ + loadedLines;
+    if (line >= largeFileWindowFirstLine_ && line + 128 < windowEndLine) return;
+
+    size_t startLine = line > 256 ? line - 256 : 0;
+    uint64_t startByte = 0;
+    uint64_t endByte = 0;
+    std::string windowText = readLargeFileWindow(*largeFileBuffer_, startLine, 64ull * 1024ull * 1024ull, startByte, endByte);
+    if (windowText.empty() && largeFileBuffer_->fileSize() > 0) return;
+
+    textBuffer = std::move(windowText);
+    largeFileWindowFirstLine_ = startLine;
+    largeFileWindowStartByte_ = startByte;
+    largeFileWindowEndByte_ = endByte;
+    invalidateLineIndex();
+    selections_.clear();
+    selections_.emplace_back(0);
+    scrollX_ = 0.f;
+    maxLineWidthDirty_ = true;
+    syntaxDirty_ = true;
+    indentsDirty_ = true;
+    if (activeTab_ < tabs_.size()) {
+        tabs_[activeTab_].text = textBuffer;
+        tabs_[activeTab_].largeFileWindowFirstLine = largeFileWindowFirstLine_;
+        tabs_[activeTab_].largeFileWindowStartByte = largeFileWindowStartByte_;
+        tabs_[activeTab_].largeFileWindowEndByte = largeFileWindowEndByte_;
+    }
+}
 
 void Application::insertText(const std::string& text) {
     pushUndo();
@@ -719,22 +768,30 @@ void Application::openFile(const std::string& path) {
     try { fileSize = fs::file_size(absPath); } catch (...) {}
     constexpr uintmax_t guardedLoadLimit = 16ull * 1024ull * 1024ull;
     std::string text;
+    size_t guardedTotalLines = 0;
+    uint64_t windowStartByte = 0;
+    uint64_t windowEndByte = 0;
+    std::shared_ptr<FileBackedBuffer> largeBuffer;
     if (fileSize > guardedLoadLimit) {
-        text.resize((size_t)guardedLoadLimit);
-        f.read(text.data(), (std::streamsize)text.size());
-        text.resize((size_t)f.gcount());
+        largeBuffer = std::make_shared<FileBackedBuffer>();
+        if (!largeBuffer->open(absPath)) return;
+        guardedTotalLines = largeBuffer->lineCount();
+        text = readLargeFileWindow(*largeBuffer, 0, 64ull * 1024ull * 1024ull, windowStartByte, windowEndByte);
     } else {
         std::ostringstream ss; ss << f.rdbuf(); text = ss.str();
     }
     TabBuffer tab; tab.text = std::move(text); tab.filePath = absPath; tab.fileName = fs::path(absPath).filename().string();
     tab.largeFileGuarded = fileSize > guardedLoadLimit;
     tab.largeFileSize = fileSize;
-    tab.largeFileTotalLines = tab.largeFileGuarded ? countFileLines(absPath) : 0;
+    tab.largeFileTotalLines = guardedTotalLines;
+    tab.largeFileWindowStartByte = windowStartByte;
+    tab.largeFileWindowEndByte = windowEndByte;
+    tab.largeFileBuffer = std::move(largeBuffer);
     tab.selections.emplace_back(0);
     tabs_.push_back(std::move(tab)); activeTab_ = tabs_.size()-1;
     textBuffer = tabs_[activeTab_].text; openFilePath_ = absPath; openFile_ = tabs_[activeTab_].fileName;
     invalidateLineIndex();
-    largeFileGuarded_ = tabs_[activeTab_].largeFileGuarded; largeFileSize_ = tabs_[activeTab_].largeFileSize; largeFileTotalLines_ = tabs_[activeTab_].largeFileTotalLines;
+    largeFileGuarded_ = tabs_[activeTab_].largeFileGuarded; largeFileSize_ = tabs_[activeTab_].largeFileSize; largeFileTotalLines_ = tabs_[activeTab_].largeFileTotalLines; largeFileWindowFirstLine_ = tabs_[activeTab_].largeFileWindowFirstLine; largeFileWindowStartByte_ = tabs_[activeTab_].largeFileWindowStartByte; largeFileWindowEndByte_ = tabs_[activeTab_].largeFileWindowEndByte; largeFileBuffer_ = tabs_[activeTab_].largeFileBuffer;
     dirty_ = false; selections_.clear(); selections_.emplace_back(0);
     scrollY_ = 0; scrollX_ = 0; maxLineWidthDirty_ = true; undoStack_.clear(); redoStack_.clear(); foldedRegions_.clear(); detectSyntax(); updateGitBranch();
     rememberRecentFile(absPath);
@@ -750,7 +807,46 @@ void Application::saveFile() {
         saveSession();
         return;
     }
-    if (largeFileGuarded_) return;
+    if (largeFileGuarded_) {
+        if (!largeFileBuffer_ || openFilePath_.empty()) return;
+        largeFileBuffer_->replaceOriginalRange(largeFileWindowStartByte_, largeFileWindowEndByte_, textBuffer);
+        fs::path target(openFilePath_);
+        fs::path tmp = target;
+        tmp += ".morenotext-save";
+        if (!largeFileBuffer_->saveTo(tmp)) {
+            std::error_code cleanupEc;
+            fs::remove(tmp, cleanupEc);
+            return;
+        }
+        std::error_code ec;
+        fs::rename(tmp, target, ec);
+        if (ec) {
+            fs::copy_file(tmp, target, fs::copy_options::overwrite_existing, ec);
+            std::error_code cleanupEc;
+            fs::remove(tmp, cleanupEc);
+            if (ec) return;
+        }
+        largeFileBuffer_ = std::make_shared<FileBackedBuffer>();
+        if (largeFileBuffer_->open(target)) {
+            largeFileSize_ = largeFileBuffer_->fileSize();
+            largeFileTotalLines_ = largeFileBuffer_->lineCount();
+            largeFileWindowEndByte_ = largeFileWindowStartByte_ + static_cast<uint64_t>(textBuffer.size());
+        }
+        dirty_ = false;
+        if (activeTab_ < tabs_.size()) {
+            tabs_[activeTab_].text = textBuffer;
+            tabs_[activeTab_].dirty = false;
+            tabs_[activeTab_].largeFileBuffer = largeFileBuffer_;
+            tabs_[activeTab_].largeFileSize = largeFileSize_;
+            tabs_[activeTab_].largeFileTotalLines = largeFileTotalLines_;
+            tabs_[activeTab_].largeFileWindowStartByte = largeFileWindowStartByte_;
+            tabs_[activeTab_].largeFileWindowEndByte = largeFileWindowEndByte_;
+        }
+        rememberRecentFile(openFilePath_);
+        saveSession();
+        updateGitBranch();
+        return;
+    }
     if (openFilePath_.empty()) { saveFileAs(); return; }
     std::ofstream f(openFilePath_, std::ios::binary);
     if (!f) return;
@@ -784,8 +880,23 @@ void Application::revertFile() {
     if (openFilePath_.empty()) return;
     std::ifstream f(openFilePath_, std::ios::binary);
     if (!f) return;
-    std::ostringstream ss; ss << f.rdbuf();
-    textBuffer = ss.str(); invalidateLineIndex(); dirty_ = false; largeFileGuarded_ = false; largeFileSize_ = 0; largeFileTotalLines_ = 0; maxLineWidthDirty_ = true; selections_.clear(); selections_.emplace_back(std::min(selections_.empty() ? 0 : selections_[0].cursor, textBuffer.size()));
+    uintmax_t fileSize = 0;
+    try { fileSize = fs::file_size(openFilePath_); } catch (...) {}
+    constexpr uintmax_t guardedLoadLimit = 16ull * 1024ull * 1024ull;
+    if (fileSize > guardedLoadLimit) {
+        largeFileBuffer_ = std::make_shared<FileBackedBuffer>();
+        if (!largeFileBuffer_->open(openFilePath_)) return;
+        largeFileSize_ = largeFileBuffer_->fileSize();
+        largeFileTotalLines_ = largeFileBuffer_->lineCount();
+        largeFileWindowFirstLine_ = 0;
+        textBuffer = readLargeFileWindow(*largeFileBuffer_, 0, 64ull * 1024ull * 1024ull, largeFileWindowStartByte_, largeFileWindowEndByte_);
+        largeFileGuarded_ = true;
+    } else {
+        std::ostringstream ss; ss << f.rdbuf();
+        textBuffer = ss.str();
+        largeFileGuarded_ = false; largeFileSize_ = 0; largeFileTotalLines_ = 0; largeFileWindowFirstLine_ = 0; largeFileWindowStartByte_ = 0; largeFileWindowEndByte_ = 0; largeFileBuffer_.reset();
+    }
+    invalidateLineIndex(); dirty_ = false; maxLineWidthDirty_ = true; syntaxDirty_ = true; indentsDirty_ = true; selections_.clear(); selections_.emplace_back(std::min(selections_.empty() ? 0 : selections_[0].cursor, textBuffer.size()));
 }
 void Application::openFileDialog() {
 #ifdef _WIN32
@@ -802,7 +913,7 @@ void Application::newBuffer() {
     TabBuffer tab; tab.fileName = "untitled"; tab.selections.emplace_back(0);
     tabs_.push_back(std::move(tab)); activeTab_ = tabs_.size()-1;
     textBuffer.clear(); invalidateLineIndex(); openFilePath_.clear(); openFile_ = "untitled"; dirty_ = false;
-    selections_.clear(); selections_.emplace_back(0); scrollY_ = 0; scrollX_ = 0; largeFileGuarded_ = false; largeFileSize_ = 0; largeFileTotalLines_ = 0; maxLineWidthDirty_ = true; undoStack_.clear(); redoStack_.clear(); foldedRegions_.clear(); detectSyntax(); saveSession();
+    selections_.clear(); selections_.emplace_back(0); scrollY_ = 0; scrollX_ = 0; largeFileGuarded_ = false; largeFileSize_ = 0; largeFileTotalLines_ = 0; largeFileWindowFirstLine_ = 0; largeFileWindowStartByte_ = 0; largeFileWindowEndByte_ = 0; largeFileBuffer_.reset(); maxLineWidthDirty_ = true; undoStack_.clear(); redoStack_.clear(); foldedRegions_.clear(); detectSyntax(); saveSession();
 }
 
 void Application::toggleFullscreen() {
@@ -1304,7 +1415,9 @@ void Application::computeLineIndents() {
         while (pos + indent < textBuffer.size() && textBuffer[pos + indent] == ' ') ++indent;
         int extra = indent;
         while (pos + extra < textBuffer.size() && textBuffer[pos + extra] == '\t') ++extra;
-        lineIndents_[li] = (extra > indent) ? (indent + (extra - indent) * tabSize_) : indent;
+        size_t targetLine = largeFileGuarded_ ? largeFileWindowFirstLine_ + li : li;
+        if (targetLine >= lineIndents_.size()) break;
+        lineIndents_[targetLine] = (extra > indent) ? (indent + (extra - indent) * tabSize_) : indent;
         ++li;
         size_t nl = textBuffer.find('\n', pos);
         if (nl == std::string::npos) break;
@@ -1340,7 +1453,7 @@ void Application::saveCurrentTab() {
     tab.text = textBuffer; tab.filePath = openFilePath_; tab.fileName = openFile_;
     tab.selections = selections_; tab.scrollY = scrollY_;
     tab.undoStack = std::move(undoStack_); tab.redoStack = std::move(redoStack_);
-    tab.foldedRegions = foldedRegions_; tab.dirty = dirty_; tab.largeFileGuarded = largeFileGuarded_; tab.largeFileSize = largeFileSize_; tab.largeFileTotalLines = largeFileTotalLines_; tab.desiredCursorX = desiredCursorX_;
+    tab.foldedRegions = foldedRegions_; tab.dirty = dirty_; tab.largeFileGuarded = largeFileGuarded_; tab.largeFileSize = largeFileSize_; tab.largeFileTotalLines = largeFileTotalLines_; tab.largeFileWindowFirstLine = largeFileWindowFirstLine_; tab.largeFileWindowStartByte = largeFileWindowStartByte_; tab.largeFileWindowEndByte = largeFileWindowEndByte_; tab.largeFileBuffer = largeFileBuffer_; tab.desiredCursorX = desiredCursorX_;
     if (activeGroup_ < editorGroups_.size()) editorGroups_[activeGroup_].tab = activeTab_;
 }
 
@@ -1351,7 +1464,7 @@ void Application::loadTab(size_t index) {
     selections_ = tab.selections; scrollY_ = tab.scrollY;
     undoStack_ = std::move(tab.undoStack); redoStack_ = std::move(tab.redoStack);
     foldedRegions_ = tab.foldedRegions; dirty_ = tab.dirty; desiredCursorX_ = tab.desiredCursorX;
-    largeFileGuarded_ = tab.largeFileGuarded; largeFileSize_ = tab.largeFileSize; largeFileTotalLines_ = tab.largeFileTotalLines;
+    largeFileGuarded_ = tab.largeFileGuarded; largeFileSize_ = tab.largeFileSize; largeFileTotalLines_ = tab.largeFileTotalLines; largeFileWindowFirstLine_ = tab.largeFileWindowFirstLine; largeFileWindowStartByte_ = tab.largeFileWindowStartByte; largeFileWindowEndByte_ = tab.largeFileWindowEndByte; largeFileBuffer_ = tab.largeFileBuffer;
     activeTab_ = index; scrollX_ = 0; maxLineWidthDirty_ = true; detectSyntax(); updateGitBranch();
     if (activeGroup_ < editorGroups_.size()) editorGroups_[activeGroup_].tab = activeTab_;
 }
@@ -3681,7 +3794,7 @@ void Application::update() {
         buildSidebarNode(sidebarTree_);
     }
     if (syntaxDirty_) {
-        if (!largeFileGuarded_) syntax_->parse(textBuffer);
+        syntax_->parse(textBuffer);
         syntaxDirty_ = false;
     }
 }
@@ -3731,9 +3844,11 @@ void Application::render() {
     float lineStep = fontAtlas().lineHeight();
     float textOriginY = tbH + fontAtlas().ascent() + 4.0f;
     size_t lineCount = totalLines();
+    size_t firstVisibleLine = (size_t)(scrollY_ / lineStep);
+    ensureLargeFileWindowForLine(firstVisibleLine);
+    lineCount = totalLines();
     size_t currentLine = lineOfPos(selections_[0].cursor);
     size_t currentCol = colOfPos(selections_[0].cursor);
-    size_t firstVisibleLine = (size_t)(scrollY_ / lineStep);
     size_t firstRenderLine = firstVisibleLine > 2 ? firstVisibleLine - 2 : 0;
     size_t lastRenderLine = lineCount > 0 ? std::min(lineCount - 1, (size_t)((scrollY_ + (fwh - sbH - findPanelH - tbH)) / lineStep) + 3) : 0;
     float firstVisibleY = textOriginY + firstVisibleLine * lineStep - scrollY_;
