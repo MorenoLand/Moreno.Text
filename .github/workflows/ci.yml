@@ -5,6 +5,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
@@ -20,8 +24,8 @@ jobs:
             triplet: x64-windows
           - os: ubuntu-latest
             triplet: x64-linux
-          - os: macos-13
-            triplet: x64-osx
+          - os: macos-latest
+            triplet: arm64-osx
 
     env:
       VCPKG_ROOT: ${{ github.workspace }}/.vcpkg
@@ -37,7 +41,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build pkg-config \
-            autoconf autoconf-archive automake libtool \
+            autoconf autoconf-archive automake libtool libltdl-dev \
             libgl1-mesa-dev libglu1-mesa-dev libegl1-mesa-dev \
             libx11-dev libxrandr-dev libxi-dev libxinerama-dev libxcursor-dev \
             libxext-dev libxfixes-dev libxrender-dev libxss-dev libxkbcommon-dev \
