@@ -17,7 +17,7 @@ jobs:
             triplet: x64-windows
           - os: ubuntu-latest
             triplet: x64-linux
-          - os: macos-latest
+          - os: macos-13
             triplet: x64-osx
 
     env:
@@ -33,7 +33,12 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build pkg-config libgl1-mesa-dev libglu1-mesa-dev libx11-dev libxrandr-dev libxi-dev libxinerama-dev libxcursor-dev libxext-dev libxfixes-dev libxrender-dev libxss-dev libasound2-dev libpulse-dev
+          sudo apt-get install -y ninja-build pkg-config \
+            libgl1-mesa-dev libglu1-mesa-dev libegl1-mesa-dev \
+            libx11-dev libxrandr-dev libxi-dev libxinerama-dev libxcursor-dev \
+            libxext-dev libxfixes-dev libxrender-dev libxss-dev libxkbcommon-dev \
+            libwayland-dev libibus-1.0-dev libdbus-1-dev libudev-dev \
+            libasound2-dev libpulse-dev libaudio-dev libjack-jackd2-dev libsndio-dev
 
       - name: Install macOS build dependencies
         if: runner.os == 'macOS'
@@ -60,7 +65,17 @@ jobs:
             "$VCPKG_ROOT/bootstrap-vcpkg.sh"
           fi
 
-      - name: Configure
+      - name: Configure Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cmake -B build -S . `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET="$env:VCPKG_DEFAULT_TRIPLET" `
+            -DMORENO_BUILD_VERSION="$env:MORENO_BUILD_VERSION"
+
+      - name: Configure Unix
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           cmake -B build -S . -G Ninja \
@@ -69,10 +84,20 @@ jobs:
             -DMORENO_BUILD_VERSION="$MORENO_BUILD_VERSION" \
             -DCMAKE_BUILD_TYPE=Release
 
-      - name: Build
+      - name: Build Windows
+        if: runner.os == 'Windows'
+        run: cmake --build build --config Release --parallel
+
+      - name: Build Unix
+        if: runner.os != 'Windows'
         run: cmake --build build --parallel
 
-      - name: Test
+      - name: Test Windows
+        if: runner.os == 'Windows'
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Test Unix
+        if: runner.os != 'Windows'
         run: ctest --test-dir build --output-on-failure
 
       - name: Upload binary artifacts

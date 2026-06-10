@@ -34,6 +34,13 @@
 #include <memory>
 #include <unordered_map>
 
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#include <limits.h>
+#elif !defined(_WIN32)
+#include <unistd.h>
+#endif
+
 extern GLuint gl_shaderProgram();
 extern GLuint gl_vao();
 extern GLuint gl_vbo();
@@ -276,8 +283,16 @@ void Application::initPaths() {
 #ifdef _WIN32
     wchar_t ep[MAX_PATH]; GetModuleFileNameW(nullptr, ep, MAX_PATH);
     paths_.exeDir = fs::path(ep).parent_path().string();
+#elif __APPLE__
+    char ep[PATH_MAX] = {};
+    uint32_t size = sizeof(ep);
+    if (_NSGetExecutablePath(ep, &size) == 0) paths_.exeDir = fs::weakly_canonical(ep).parent_path().string();
+    else paths_.exeDir = fs::current_path().string();
 #else
-    paths_.exeDir = fs::canonical("/proc/self/exe").parent_path().string();
+    char ep[4096] = {};
+    ssize_t len = readlink("/proc/self/exe", ep, sizeof(ep) - 1);
+    if (len > 0) { ep[len] = '\0'; paths_.exeDir = fs::path(ep).parent_path().string(); }
+    else paths_.exeDir = fs::current_path().string();
 #endif
     fs::path base(paths_.exeDir), dp = base / "Data";
     if (fs::exists(dp)) {
