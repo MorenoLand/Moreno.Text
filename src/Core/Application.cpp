@@ -320,7 +320,34 @@ bool Application::init(int argc, char** argv) {
 #endif
     }
     SDL_StartTextInput();
-    if (argc > 1 && fs::exists(argv[1])) {
+    if (argc > 2 && std::string(argv[1]) == "--detached-tab" && fs::exists(argv[2])) {
+        tabs_.clear();
+        selections_.clear();
+        try {
+            std::ifstream in(argv[2], std::ios::binary);
+            nlohmann::json data;
+            in >> data;
+            in.close();
+            TabBuffer tab;
+            tab.fileName = data.value("file_name", "untitled");
+            tab.filePath = data.value("file_path", "");
+            tab.text = data.value("text", "");
+            tab.dirty = data.value("dirty", true);
+            tab.scrollY = data.value("scroll_y", 0.f);
+            tab.pluginSyntax = data.value("syntax", "");
+            tab.pluginColorScheme = data.value("color_scheme", "");
+            size_t cursor = data.value("cursor", 0ull);
+            if (cursor > tab.text.size()) cursor = tab.text.size();
+            tab.selections.emplace_back(cursor);
+            tabs_.push_back(std::move(tab));
+            activeTab_ = 0;
+            loadTab(0);
+            std::error_code ec;
+            fs::remove(argv[2], ec);
+        } catch (...) {
+            newBuffer();
+        }
+    } else if (argc > 1 && fs::exists(argv[1])) {
         tabs_.clear();
         selections_.clear();
         openFile(argv[1]);
@@ -1567,18 +1594,31 @@ bool Application::detachTabToNewWindow(size_t index) {
     saveCurrentTab();
     if (index >= tabs_.size()) return false;
     auto& tab = tabs_[index];
-    if (tab.pluginOwned || tab.filePath.rfind("plugin://view/", 0) == 0 || tab.filePath.empty()) {
-        consoleBuffer_ += "[tabs] Cannot tear out unsaved or plugin-owned tab yet\n";
-        return false;
-    }
-    if (tab.dirty) {
-        consoleBuffer_ += "[tabs] Save the tab before tearing it into a new window\n";
+    if (tab.pluginOwned || tab.filePath.rfind("plugin://view/", 0) == 0) {
+        consoleBuffer_ += "[tabs] Cannot tear out plugin-owned tabs yet\n";
         return false;
     }
     fs::path exe = fs::path(paths_.exeDir) / "moreno_text.exe";
     if (!fs::exists(exe)) return false;
+    fs::path detachDir = fs::path(paths_.localDir) / "DetachedTabs";
+    fs::create_directories(detachDir);
+    fs::path handoff = detachDir / (std::to_string(SDL_GetTicks()) + "-" + std::to_string(index) + ".json");
+    nlohmann::json data;
+    data["file_name"] = tab.fileName;
+    data["file_path"] = tab.filePath;
+    data["text"] = tab.text;
+    data["dirty"] = tab.dirty;
+    data["scroll_y"] = tab.scrollY;
+    data["cursor"] = tab.selections.empty() ? 0 : tab.selections[0].cursor;
+    data["syntax"] = tab.pluginSyntax;
+    data["color_scheme"] = tab.pluginColorScheme;
+    {
+        std::ofstream out(handoff, std::ios::binary | std::ios::trunc);
+        if (!out) return false;
+        out << data.dump();
+    }
 #ifdef _WIN32
-    std::string command = "\"" + exe.string() + "\" \"" + tab.filePath + "\"";
+    std::string command = "\"" + exe.string() + "\" --detached-tab \"" + handoff.string() + "\"";
     STARTUPINFOA si = {}; si.cb = sizeof(si); si.dwFlags = STARTF_USESHOWWINDOW; si.wShowWindow = SW_SHOWNORMAL;
     PROCESS_INFORMATION pi = {};
     std::vector<char> cmd(command.begin(), command.end());
@@ -1588,7 +1628,7 @@ bool Application::detachTabToNewWindow(size_t index) {
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
 #elif defined(__APPLE__) || defined(__linux__)
-    std::string command = "\"" + exe.string() + "\" \"" + tab.filePath + "\" &";
+    std::string command = "\"" + exe.string() + "\" --detached-tab \"" + handoff.string() + "\" &";
     if (std::system(command.c_str()) != 0) return false;
 #else
     return false;
@@ -2860,7 +2900,16 @@ void Application::handleEvents() {
                 float fieldX = findLabelX + 48.f;
                 float closeButtonW = 24.f;
                 float closeX = panelW - closeButtonW - 8.f;
-                float actionW = find_.replaceActive ? 172.f : 304.f;
+                auto bw = [&](const char* text) { return std::max(54.f, fontAtlas().measureText(text) + 28.f); };
+                float findW = bw("Find");
+                float findPrevW = bw("Find Prev");
+                float findAllW = bw("Find All");
+                float replaceW = bw("Replace");
+                float replaceAllW = bw("Replace All");
+                float gap = 6.f;
+                float replaceLeftW = std::max(findW, findAllW);
+                float replaceColumnW = std::max(replaceW, replaceAllW);
+                float actionW = find_.replaceActive ? replaceLeftW + gap + replaceColumnW : findW + gap + findPrevW + gap + findAllW;
                 float fieldW = std::max(150.f, closeX - fieldX - actionW - 10.f);
                 float fy = barY + 2.f;
                 float findButtonX = fieldX + fieldW + 8.f;
@@ -2869,7 +2918,7 @@ void Application::handleEvents() {
                 if (inRect(toggleX + 34.f, fy, 28.f, fieldH)) { find_.caseSensitive = !find_.caseSensitive; findAllMatches(); continue; }
                 if (inRect(toggleX + 68.f, fy, 28.f, fieldH)) { find_.wholeWord = !find_.wholeWord; findAllMatches(); continue; }
                 if (inRect(fieldX, fy, fieldW, fieldH)) { findFocus_ = 0; continue; }
-                if (inRect(findButtonX, fy, 70.f, fieldH)) {
+                if (inRect(findButtonX, fy, find_.replaceActive ? replaceLeftW : findW, fieldH)) {
                     if (!find_.matches.empty()) {
                         find_.currentMatch = (find_.currentMatch + 1) % find_.matches.size();
                         selections_[0].anchor = selections_[0].cursor = find_.matches[find_.currentMatch];
@@ -2877,7 +2926,7 @@ void Application::handleEvents() {
                     }
                     continue;
                 }
-                if (!find_.replaceActive && inRect(findButtonX + 76.f, fy, 88.f, fieldH)) {
+                if (!find_.replaceActive && inRect(findButtonX + findW + gap, fy, findPrevW, fieldH)) {
                     if (!find_.matches.empty()) {
                         find_.currentMatch = (find_.currentMatch + find_.matches.size() - 1) % find_.matches.size();
                         selections_[0].anchor = selections_[0].cursor = find_.matches[find_.currentMatch];
@@ -2885,8 +2934,8 @@ void Application::handleEvents() {
                     }
                     continue;
                 }
-                if (find_.replaceActive && inRect(findButtonX + 76.f, fy, 88.f, fieldH)) { doReplace(); continue; }
-                if (!find_.replaceActive && inRect(findButtonX + 170.f, fy, 90.f, fieldH)) {
+                if (find_.replaceActive && inRect(findButtonX + replaceLeftW + gap, fy, replaceColumnW, fieldH)) { doReplace(); continue; }
+                if (!find_.replaceActive && inRect(findButtonX + findW + gap + findPrevW + gap, fy, findAllW, fieldH)) {
                     if (!find_.matches.empty()) {
                         selections_.clear();
                         size_t qLen = std::max<size_t>(1, find_.query.size());
@@ -2902,7 +2951,7 @@ void Application::handleEvents() {
                     if (inRect(toggleX, rfy, 28.f, fieldH)) continue;
                     if (inRect(toggleX + 34.f, rfy, 28.f, fieldH)) continue;
                     if (inRect(fieldX, rfy, fieldW, fieldH)) { findFocus_ = 1; continue; }
-                    if (inRect(findButtonX, rfy, 70.f, fieldH)) {
+                    if (inRect(findButtonX, rfy, replaceLeftW, fieldH)) {
                         if (!find_.matches.empty()) {
                             selections_.clear();
                             size_t qLen = std::max<size_t>(1, find_.query.size());
@@ -2912,7 +2961,7 @@ void Application::handleEvents() {
                         }
                         continue;
                     }
-                    if (inRect(findButtonX + 76.f, rfy, 106.f, fieldH)) { doReplaceAll(); continue; }
+                    if (inRect(findButtonX + replaceLeftW + gap, rfy, replaceColumnW, fieldH)) { doReplaceAll(); continue; }
                 }
                 continue;
             }
@@ -4339,11 +4388,24 @@ void Application::render() {
         float fieldX = findLabelX + 48.f;
         float closeButtonW = 24.f;
         float closeButtonX = barW - closeButtonW - 8.f;
-        float actionW = find_.replaceActive ? 172.f : 304.f;
+        auto buttonW = [&](const char* text) { return std::max(54.f, fontAtlas().measureText(text) + 28.f); };
+        float findW = buttonW("Find");
+        float findPrevW = buttonW("Find Prev");
+        float findAllW = buttonW("Find All");
+        float replaceW = buttonW("Replace");
+        float replaceAllW = buttonW("Replace All");
+        float replaceLeftW = std::max(findW, findAllW);
+        float replaceColumnW = std::max(replaceW, replaceAllW);
+        float gap = 6.f;
+        float actionW = find_.replaceActive ? replaceLeftW + gap + replaceColumnW : findW + gap + findPrevW + gap + findAllW;
         float fieldW = std::max(150.f, closeButtonX - fieldX - actionW - 10.f);
         float fy = barY + 2.f;
         auto button = [&](float x, float y, float w, bool active = false) {
             ar(x, y, x + w, y + fieldH, active ? 0.28f : 0.24f, active ? 0.31f : 0.26f, active ? 0.38f : 0.30f, 1.f);
+        };
+        auto centeredText = [&](const char* text, float x, float y, float w) {
+            float textW = fontAtlas().measureText(text);
+            fontAtlas().drawText(text, x + (w - textW) * 0.5f, y + 5.f, 0.82f, 0.84f, 0.88f, 1.f);
         };
         auto toggleBtn = [&](bool active, float x, float y) {
             button(x, y, 28.f, active);
@@ -4353,9 +4415,9 @@ void Application::render() {
         toggleBtn(find_.wholeWord, toggleX + 68.f, fy);
         button(fieldX, fy, fieldW, false);
         float findButtonX = fieldX + fieldW + 8.f;
-        button(findButtonX, fy, 70.f);
-        button(findButtonX + 76.f, fy, find_.replaceActive ? 88.f : 88.f);
-        if (!find_.replaceActive) button(findButtonX + 170.f, fy, 90.f);
+        button(findButtonX, fy, find_.replaceActive ? replaceLeftW : findW);
+        button(findButtonX + (find_.replaceActive ? replaceLeftW : findW) + gap, fy, find_.replaceActive ? replaceColumnW : findPrevW);
+        if (!find_.replaceActive) button(findButtonX + findW + gap + findPrevW + gap, fy, findAllW);
         button(closeButtonX, fy, closeButtonW);
         float replaceFieldY = 0.f;
         float replaceButtonX = 0.f;
@@ -4367,9 +4429,9 @@ void Application::render() {
             button(toggleX + 34.f, rfy, 28.f);
             button(fieldX, rfy, fieldW);
             replaceButtonX = findButtonX;
-            replaceAllButtonX = replaceButtonX + 76.f;
-            button(replaceButtonX, rfy, 70.f);
-            button(replaceAllButtonX, rfy, 106.f);
+            replaceAllButtonX = replaceButtonX + replaceLeftW + gap;
+            button(replaceButtonX, rfy, replaceLeftW);
+            button(replaceAllButtonX, rfy, replaceColumnW);
         }
         flushSolid();
         std::string findText = find_.query + (findFocus_ == 0 ? "|" : "");
@@ -4386,9 +4448,9 @@ void Application::render() {
             float mw = fontAtlas().measureText("No matches");
             fontAtlas().drawText("No matches", fieldX + fieldW - mw - 8.f, fy + 4.f, 0.6f, 0.3f, 0.3f, 1.f);
         }
-        fontAtlas().drawText("Find", findButtonX + 19.f, fy + 5.f, 0.82f, 0.84f, 0.88f, 1.f);
-        fontAtlas().drawText(find_.replaceActive ? "Replace" : "Find Prev", findButtonX + 76.f + 12.f, fy + 5.f, 0.82f, 0.84f, 0.88f, 1.f);
-        if (!find_.replaceActive) fontAtlas().drawText("Find All", findButtonX + 170.f + 13.f, fy + 5.f, 0.82f, 0.84f, 0.88f, 1.f);
+        centeredText("Find", findButtonX, fy, find_.replaceActive ? replaceLeftW : findW);
+        centeredText(find_.replaceActive ? "Replace" : "Find Prev", findButtonX + (find_.replaceActive ? replaceLeftW : findW) + gap, fy, find_.replaceActive ? replaceColumnW : findPrevW);
+        if (!find_.replaceActive) centeredText("Find All", findButtonX + findW + gap + findPrevW + gap, fy, findAllW);
         fontAtlas().drawText("\xc3\x97", closeButtonX + 7.f, fy + 4.f, 0.65f, 0.65f, 0.68f, 1.f);
         if (find_.replaceActive) {
             std::string repText = find_.replace + (findFocus_ == 1 ? "|" : "");
@@ -4396,8 +4458,8 @@ void Application::render() {
             fontAtlas().drawText("<>", toggleX + 38.f, replaceFieldY + 5.f, 0.58f, 0.58f, 0.62f, 1.f);
             fontAtlas().drawText("Replace:", findLabelX - 28.f, replaceFieldY + 5.f, 0.78f, 0.78f, 0.82f, 1.f);
             fontAtlas().drawText(repText, fieldX + 6.f, replaceFieldY + 4.f, 0.85f, 0.85f, 0.88f, 1.f);
-            fontAtlas().drawText("Find All", replaceButtonX + 12.f, replaceFieldY + 5.f, 0.82f, 0.84f, 0.88f, 1.f);
-            fontAtlas().drawText("Replace All", replaceAllButtonX + 10.f, replaceFieldY + 5.f, 0.82f, 0.84f, 0.88f, 1.f);
+            centeredText("Find All", replaceButtonX, replaceFieldY, replaceLeftW);
+            centeredText("Replace All", replaceAllButtonX, replaceFieldY, replaceColumnW);
         }
     }
     // goto overlay
