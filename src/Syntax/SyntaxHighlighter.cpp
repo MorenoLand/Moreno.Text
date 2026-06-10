@@ -4,6 +4,9 @@
 #include <cctype>
 #include <algorithm>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <nlohmann/json.hpp>
 #include <utility>
 
 SyntaxHighlighter::SyntaxHighlighter() { setupPlainText(); }
@@ -30,6 +33,8 @@ void SyntaxHighlighter::setLanguage(const std::string& ext) {
     keywords_.clear(); builtins_.clear(); types_.clear();
     { std::lock_guard<std::mutex> lock(tokenMutex_); treeTokens_ = std::make_shared<const std::vector<SyntaxToken>>(); }
     language_ = nullptr;
+    pluginSyntaxMode_ = PluginSyntaxMode::None;
+    useLocalColors_ = false;
     if (ext == "js" || ext == "jsx" || ext == "ts" || ext == "tsx" || ext == "mjs") { setupJS(); setTreeSitterLanguage("JavaScript", tree_sitter_javascript()); }
     else if (ext == "py" || ext == "pyw") { setupPython(); setTreeSitterLanguage("Python", tree_sitter_python()); }
     else if (ext == "c") { setupCPP(); setTreeSitterLanguage("C", tree_sitter_c()); }
@@ -55,7 +60,191 @@ void SyntaxHighlighter::setLanguageByName(const std::string& name) {
     keywords_.clear(); builtins_.clear(); types_.clear();
     { std::lock_guard<std::mutex> lock(tokenMutex_); treeTokens_ = std::make_shared<const std::vector<SyntaxToken>>(); }
     language_ = nullptr;
+    pluginSyntaxMode_ = PluginSyntaxMode::None;
+    useLocalColors_ = false;
     setupGenericCode(name);
+}
+
+static std::string lowerSyntaxString(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+    return s;
+}
+
+static SyntaxColor hexColor(const char* hex) {
+    auto nybble = [](char c) -> int {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return 10 + c - 'a';
+        if (c >= 'A' && c <= 'F') return 10 + c - 'A';
+        return 0;
+    };
+    int r = nybble(hex[1]) * 16 + nybble(hex[2]);
+    int g = nybble(hex[3]) * 16 + nybble(hex[4]);
+    int b = nybble(hex[5]) * 16 + nybble(hex[6]);
+    return {r / 255.f, g / 255.f, b / 255.f};
+}
+
+static SyntaxColor hexColorString(const std::string& hex) {
+    if (hex.size() < 7 || hex[0] != '#') return {0.83f, 0.83f, 0.85f};
+    return hexColor(hex.c_str());
+}
+
+static std::filesystem::path resolvePackageResource(const std::string& resourcePath) {
+    namespace fs = std::filesystem;
+    std::string normalized = resourcePath;
+    std::replace(normalized.begin(), normalized.end(), '\\', '/');
+    if (normalized.empty()) return {};
+    fs::path direct(resourcePath);
+    if (direct.is_absolute() && fs::exists(direct)) return direct;
+    fs::path rel(normalized);
+    fs::path cwd = fs::current_path();
+    std::vector<fs::path> candidates;
+    if (normalized.rfind("Packages/", 0) == 0) {
+        candidates.push_back(cwd / "Data" / rel);
+        candidates.push_back(cwd / "bin" / "Release" / "Data" / rel);
+        candidates.push_back(cwd.parent_path() / "Data" / rel);
+    }
+    candidates.push_back(cwd / rel);
+    for (auto& candidate : candidates) {
+        std::error_code ec;
+        if (fs::exists(candidate, ec)) return candidate;
+    }
+    return {};
+}
+
+static bool scopeListContains(const std::string& list, const std::string& scope) {
+    size_t start = 0;
+    while (start < list.size()) {
+        size_t comma = list.find(',', start);
+        std::string item = list.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+        size_t first = item.find_first_not_of(" \t\r\n");
+        size_t last = item.find_last_not_of(" \t\r\n");
+        if (first != std::string::npos && item.substr(first, last - first + 1) == scope) return true;
+        if (comma == std::string::npos) break;
+        start = comma + 1;
+    }
+    return false;
+}
+
+void loadPluginColorSchemeFile(const std::string& colorSchemePath, SyntaxColor colors[9],
+                               SyntaxColor& background, SyntaxColor& lineHighlight,
+                               SyntaxColor& gutter, SyntaxColor& minimapBackground) {
+    auto path = resolvePackageResource(colorSchemePath);
+    if (path.empty()) return;
+    try {
+        std::string schemeName = lowerSyntaxString(colorSchemePath);
+        bool terminalScheme = schemeName.find("terminal.sublime-color-scheme") != std::string::npos;
+        bool goptionScheme = schemeName.find("goption") != std::string::npos;
+        bool gscriptScheme = schemeName.find("gscript") != std::string::npos;
+        std::ifstream f(path, std::ios::binary);
+        if (!f) return;
+        auto data = nlohmann::json::parse(f);
+        if (data.contains("globals") && data["globals"].is_object()) {
+            auto& g = data["globals"];
+            if (g.contains("background")) background = hexColorString(g["background"].get<std::string>());
+            if (g.contains("line_highlight")) lineHighlight = hexColorString(g["line_highlight"].get<std::string>());
+            if (g.contains("gutter")) gutter = hexColorString(g["gutter"].get<std::string>());
+            minimapBackground = background;
+            if (g.contains("foreground")) colors[0] = hexColorString(g["foreground"].get<std::string>());
+        }
+        if (!data.contains("rules") || !data["rules"].is_array()) return;
+        for (auto& rule : data["rules"]) {
+            if (!rule.contains("scope") || !rule.contains("foreground")) continue;
+            std::string scopes = rule["scope"].get<std::string>();
+            SyntaxColor color = hexColorString(rule["foreground"].get<std::string>());
+            if (terminalScheme) {
+                if (scopeListContains(scopes, "keyword")) colors[1] = color;
+                if (scopeListContains(scopes, "entity.name.function")) colors[6] = color;
+                if (scopeListContains(scopes, "constant.language")) colors[4] = color;
+                if (scopeListContains(scopes, "constant.numeric")) colors[5] = color;
+                continue;
+            }
+            if (goptionScheme) {
+                if (scopeListContains(scopes, "constant.language.goption") ||
+                    scopeListContains(scopes, "keyword.control.goption") ||
+                    scopeListContains(scopes, "keyword.operator.goption") ||
+                    scopeListContains(scopes, "punctuation.separator.goption")) colors[1] = color;
+                if (scopeListContains(scopes, "entity.name.section.goption") ||
+                    scopeListContains(scopes, "constant.language.boolean.goption")) colors[5] = color;
+                if (scopeListContains(scopes, "keyword.operator.assignment.goption")) colors[7] = color;
+                if (scopeListContains(scopes, "variable.parameter.goption")) colors[6] = color;
+                if (scopeListContains(scopes, "entity.name.class.goption") ||
+                    scopeListContains(scopes, "constant.other.weapon.goption") ||
+                    scopeListContains(scopes, "entity.name.filename.goption")) colors[8] = color;
+                if (scopeListContains(scopes, "string.unquoted.goption") ||
+                    scopeListContains(scopes, "string.other.filepath.goption") ||
+                    scopeListContains(scopes, "string.other.list-item.goption") ||
+                    scopeListContains(scopes, "string.other.filepath.goption.folder")) colors[2] = color;
+                if (scopeListContains(scopes, "string.unquoted.goption.option-value") ||
+                    scopeListContains(scopes, "constant.numeric.goption")) colors[4] = color;
+                if (scopeListContains(scopes, "comment.line.hash.goption")) colors[3] = color;
+                continue;
+            }
+            if (gscriptScheme) {
+                if (scopeListContains(scopes, "keyword.control.gscript") ||
+                    scopeListContains(scopes, "storage.type.gscript") ||
+                    scopeListContains(scopes, "storage.modifier.gscript") ||
+                    scopeListContains(scopes, "keyword.other.gscript")) colors[1] = color;
+                if (scopeListContains(scopes, "entity.name.function.gscript") ||
+                    scopeListContains(scopes, "variable.language.gscript") ||
+                    scopeListContains(scopes, "variable.parameter.gscript")) colors[6] = color;
+                if (scopeListContains(scopes, "string.quoted.single.gscript") ||
+                    scopeListContains(scopes, "string.quoted.double.gscript")) colors[2] = color;
+                if (scopeListContains(scopes, "constant.numeric.gscript") ||
+                    scopeListContains(scopes, "constant.language.gscript")) colors[4] = color;
+                if (scopeListContains(scopes, "comment.line.double-slash.gscript") ||
+                    scopeListContains(scopes, "comment.block.gscript")) colors[3] = color;
+                if (scopeListContains(scopes, "keyword.operator.gscript") ||
+                    scopeListContains(scopes, "keyword.operator.array.gscript") ||
+                    scopeListContains(scopes, "punctuation.gscript")) colors[7] = color;
+            }
+        }
+    } catch (...) {}
+}
+
+void SyntaxHighlighter::setPluginSyntax(const std::string& syntaxPath, const std::string& colorSchemePath) {
+    keywords_.clear(); builtins_.clear(); types_.clear();
+    { std::lock_guard<std::mutex> lock(tokenMutex_); treeTokens_ = std::make_shared<const std::vector<SyntaxToken>>(); }
+    language_ = nullptr;
+    pluginSyntaxMode_ = PluginSyntaxMode::None;
+    useLocalColors_ = false;
+    std::string syntax = lowerSyntaxString(syntaxPath);
+    if (syntax.find("terminal.sublime-syntax") != std::string::npos) { pluginSyntaxMode_ = PluginSyntaxMode::Terminal; langName_ = "Terminal"; }
+    else if (syntax.find("irc.sublime-syntax") != std::string::npos) { pluginSyntaxMode_ = PluginSyntaxMode::Irc; langName_ = "RC IRC"; }
+    else if (syntax.find("pm.sublime-syntax") != std::string::npos) { pluginSyntaxMode_ = PluginSyntaxMode::Pm; langName_ = "RC PM"; }
+    else if (syntax.find("list.sublime-syntax") != std::string::npos) { pluginSyntaxMode_ = PluginSyntaxMode::List; langName_ = "RC List"; }
+    else if (syntax.find("gscript.sublime-syntax") != std::string::npos) {
+        pluginSyntaxMode_ = PluginSyntaxMode::GScript;
+        setupGenericCode("GScript");
+        static const char* gscriptBuiltins[] = {"triggerclient","triggeraction","sendtonc","echo","temp","player","server","client","this","thiso","level","npc","name","params","obj","isobject","preloadimage",nullptr};
+        for (int i = 0; gscriptBuiltins[i]; ++i) builtins_.insert(gscriptBuiltins[i]);
+    }
+    else if (syntax.find("goption.sublime-syntax") != std::string::npos) {
+        pluginSyntaxMode_ = PluginSyntaxMode::GOption;
+        setupGenericCode("GOption");
+        static const char* goptionBuiltins[] = {"true","false","null","default","option","value",nullptr};
+        for (int i = 0; goptionBuiltins[i]; ++i) builtins_.insert(goptionBuiltins[i]);
+    }
+    else { setupGenericCode("Plugin Syntax"); }
+    std::string scheme = lowerSyntaxString(colorSchemePath);
+    if (scheme.find("terminal.sublime-color-scheme") != std::string::npos ||
+        scheme.find("sublimerc-gscript-editor.sublime-color-scheme") != std::string::npos ||
+        scheme.find("sublimerc-goption-editor.sublime-color-scheme") != std::string::npos) {
+        useLocalColors_ = true;
+        colors_[0] = hexColor("#faf6f3");
+        colors_[1] = hexColor("#ff00ff");
+        colors_[2] = hexColor("#ffd700");
+        colors_[3] = hexColor("#8f98aa");
+        colors_[4] = hexColor("#ffb7c5");
+        colors_[5] = hexColor("#ffd700");
+        colors_[6] = hexColor("#ffb7c5");
+        colors_[7] = hexColor("#5fafff");
+        colors_[8] = hexColor("#ffb7c5");
+        localBackground_ = hexColor("#13141A");
+        localLineHighlight_ = hexColor("#171922");
+        localGutter_ = hexColor("#13141A");
+        localMinimapBackground_ = hexColor("#13141A");
+        loadPluginColorSchemeFile(colorSchemePath, colors_, localBackground_, localLineHighlight_, localGutter_, localMinimapBackground_);
+    }
 }
 
 void SyntaxHighlighter::setTreeSitterLanguage(const std::string& name, const void* language) {
@@ -202,6 +391,13 @@ void SyntaxHighlighter::setupPlainText() { langName_ = "Plain Text"; }
 static bool isWordChar(char c) { return isalnum(static_cast<unsigned char>(c)) || c == '_'; }
 
 std::vector<SyntaxToken> SyntaxHighlighter::highlightLine(std::string_view line, size_t lineOffset) const {
+    if (pluginSyntaxMode_ == PluginSyntaxMode::Terminal ||
+        pluginSyntaxMode_ == PluginSyntaxMode::Irc ||
+        pluginSyntaxMode_ == PluginSyntaxMode::Pm ||
+        pluginSyntaxMode_ == PluginSyntaxMode::List ||
+        pluginSyntaxMode_ == PluginSyntaxMode::GOption) {
+        return highlightPluginLine(line, lineOffset);
+    }
     std::shared_ptr<const std::vector<SyntaxToken>> treeSnapshot;
     {
         std::lock_guard<std::mutex> lock(tokenMutex_);
@@ -290,6 +486,10 @@ std::vector<SyntaxToken> SyntaxHighlighter::highlightLine(std::string_view line,
 }
 
 const SyntaxColor& SyntaxHighlighter::scopeColor(int scope) const {
+    if (useLocalColors_) {
+        if (scope < 0 || scope >= 9) scope = 0;
+        return colors_[scope];
+    }
     static const char* scopeNames[] = {"","keyword","string","comment","number","type","function","operator","punctuation"};
     static thread_local SyntaxColor cached[9];
     if (scope >= 1 && scope < 9) {
@@ -298,6 +498,192 @@ const SyntaxColor& SyntaxHighlighter::scopeColor(int scope) const {
     }
     ThemeColor tc = ThemeEngine::instance().fgColor();
     cached[0] = {tc.r, tc.g, tc.b}; return cached[0];
+}
+
+SyntaxColor SyntaxHighlighter::backgroundColor() const {
+    if (useLocalColors_) return localBackground_;
+    ThemeColor c = ThemeEngine::instance().bgColor();
+    return {c.r, c.g, c.b};
+}
+
+SyntaxColor SyntaxHighlighter::lineHighlightColor() const {
+    if (useLocalColors_) return localLineHighlight_;
+    ThemeColor c = ThemeEngine::instance().lineHighlightColor();
+    return {c.r, c.g, c.b};
+}
+
+SyntaxColor SyntaxHighlighter::gutterColor() const {
+    if (useLocalColors_) return localGutter_;
+    ThemeColor c = ThemeEngine::instance().gutterColor();
+    return {c.r, c.g, c.b};
+}
+
+SyntaxColor SyntaxHighlighter::minimapBackgroundColor() const {
+    if (useLocalColors_) return localMinimapBackground_;
+    ThemeColor c = ThemeEngine::instance().minimapBg();
+    return {c.r, c.g, c.b};
+}
+
+std::vector<SyntaxToken> SyntaxHighlighter::highlightPluginLine(std::string_view line, size_t lineOffset) const {
+    std::vector<SyntaxToken> tokens;
+    auto add = [&](size_t start, size_t len, int scope) {
+        if (start < line.size() && len > 0) tokens.push_back({lineOffset + start, std::min(len, line.size() - start), scope});
+    };
+    auto finish = [&]() {
+        std::sort(tokens.begin(), tokens.end(), [](const SyntaxToken& a, const SyntaxToken& b) {
+            if (a.start != b.start) return a.start < b.start;
+            return a.length > b.length;
+        });
+        std::vector<SyntaxToken> out;
+        size_t coveredEnd = lineOffset;
+        for (auto tok : tokens) {
+            size_t tokEnd = tok.start + tok.length;
+            if (tokEnd <= coveredEnd) continue;
+            if (tok.start < coveredEnd) {
+                tok.length = tokEnd - coveredEnd;
+                tok.start = coveredEnd;
+            }
+            coveredEnd = tok.start + tok.length;
+            out.push_back(tok);
+        }
+        return out;
+    };
+    if (pluginSyntaxMode_ == PluginSyntaxMode::GOption) {
+        size_t len = line.size();
+        size_t p = 0;
+        while (p < len && std::isspace((unsigned char)line[p])) ++p;
+        if (p < len && line[p] == '#') {
+            add(p, len - p, 3);
+            return finish();
+        }
+        if (p < len && line[p] == '[') {
+            size_t close = line.find(']', p + 1);
+            if (close != std::string_view::npos) {
+                add(p, 1, 1);
+                size_t nameStart = p + 1;
+                while (nameStart < close && std::isspace((unsigned char)line[nameStart])) ++nameStart;
+                size_t nameEnd = close;
+                while (nameEnd > nameStart && std::isspace((unsigned char)line[nameEnd - 1])) --nameEnd;
+                add(nameStart, nameEnd - nameStart, 5);
+                add(close, 1, 1);
+                return finish();
+            }
+        }
+        auto addInlineBracketsAndCommas = [&]() {
+            size_t pos = 0;
+            while ((pos = line.find('[', pos)) != std::string_view::npos) {
+                size_t close = line.find(']', pos + 1);
+                if (close == std::string_view::npos) break;
+                add(pos, 1, 1);
+                add(pos + 1, close - pos - 1, 1);
+                add(close, 1, 1);
+                pos = close + 1;
+            }
+            pos = 0;
+            while ((pos = line.find(',', pos)) != std::string_view::npos) add(pos++, 1, 1);
+        };
+        size_t eq = line.find('=');
+        if (eq != std::string_view::npos && eq > p) {
+            size_t keyEnd = eq;
+            while (keyEnd > p && std::isspace((unsigned char)line[keyEnd - 1])) --keyEnd;
+            add(p, keyEnd - p, 6);
+            add(eq, 1, 7);
+            size_t valueStart = eq + 1;
+            if (valueStart < len) add(valueStart, len - valueStart, 4);
+            addInlineBracketsAndCommas();
+            return finish();
+        }
+        size_t colon = line.find(':');
+        if (colon != std::string_view::npos && colon > p && line.find('[') == std::string_view::npos) {
+            add(p, colon - p, 6);
+            add(colon, 1, 1);
+            size_t valueStart = colon + 1;
+            while (valueStart < len && std::isspace((unsigned char)line[valueStart])) ++valueStart;
+            if (valueStart < len) {
+                std::string value(line.substr(valueStart));
+                std::string lowerValue = lowerSyntaxString(value);
+                add(valueStart, len - valueStart, lowerValue == "true" || lowerValue == "false" ? 5 : 2);
+            }
+            return finish();
+        }
+        static const char* fileWords[] = {"file", "level", "body", "shield", "sword", "head", "gmap", nullptr};
+        for (int i = 0; fileWords[i]; ++i) {
+            size_t wordLen = std::strlen(fileWords[i]);
+            if (len >= p + wordLen && line.substr(p, wordLen) == fileWords[i] && p + wordLen < len && std::isspace((unsigned char)line[p + wordLen])) {
+                add(p, wordLen, 6);
+                size_t valueStart = p + wordLen + 1;
+                while (valueStart < len && std::isspace((unsigned char)line[valueStart])) ++valueStart;
+                add(valueStart, len - valueStart, 2);
+                return finish();
+            }
+        }
+        if (len >= p + 2 && (line.substr(p, 2) == "r " || line.substr(p, 3) == "rw ")) {
+            size_t rightsLen = line.substr(p, 3) == "rw " ? 2 : 1;
+            add(p, rightsLen, 8);
+            size_t folderStart = p + rightsLen + 1;
+            add(folderStart, len - folderStart, 2);
+            return finish();
+        }
+        if (p < len && (line[p] == '-' || line[p] == '*')) {
+            add(p, 1, 1);
+            if (p + 1 < len) add(p + 1, len - p - 1, 8);
+            return finish();
+        }
+        size_t pos = p;
+        while (pos < len) {
+            if (std::isdigit((unsigned char)line[pos])) {
+                size_t start = pos;
+                while (pos < len && std::isdigit((unsigned char)line[pos])) ++pos;
+                add(start, pos - start, 4);
+                continue;
+            }
+            ++pos;
+        }
+        addInlineBracketsAndCommas();
+        return finish();
+    }
+    if (line.rfind("> ", 0) == 0) {
+        add(0, 2, 4);
+        return finish();
+    }
+    if (!line.empty() && line[0] == '[') {
+        size_t close = line.find(']');
+        if (close != std::string_view::npos) {
+            add(0, close + 1, 4);
+            size_t textStart = close + 1;
+            while (textStart < line.size() && line[textStart] == ' ') ++textStart;
+            size_t colon = line.find(':', textStart);
+            if (colon != std::string_view::npos && colon > textStart && colon - textStart < 64) {
+                add(textStart, colon - textStart + 1, 6);
+            } else {
+                size_t paren = line.find('(', textStart);
+                if (paren != std::string_view::npos && paren > textStart && paren - textStart < 64) add(textStart, paren - textStart, 6);
+            }
+        }
+    }
+    std::string lower(line);
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+    auto isBoundary = [&](size_t pos) {
+        return pos >= lower.size() || !std::isalnum((unsigned char)lower[pos]);
+    };
+    for (const char* word : {"alert", "priority", "notice", "info", "connected", "disconnected"}) {
+        size_t start = 0;
+        size_t len = std::strlen(word);
+        while (true) {
+            size_t p = lower.find(word, start);
+            if (p == std::string::npos) break;
+            if ((p == 0 || isBoundary(p - 1)) && isBoundary(p + len)) add(p, len, 1);
+            start = p + len;
+        }
+    }
+    size_t p = 0;
+    while ((p = lower.find("pc:", p)) != std::string::npos) {
+        size_t e = p + 3;
+        while (e < lower.size() && std::isdigit((unsigned char)lower[e])) ++e;
+        add(p, e - p, 5);
+        p = e;
+    }
+    return finish();
 }
 
 void SyntaxHighlighter::notifyEdit(size_t startByte, size_t oldEndByte, size_t newEndByte, size_t startRow, size_t startCol, size_t oldEndRow, size_t oldEndCol, size_t newEndRow, size_t newEndCol) {

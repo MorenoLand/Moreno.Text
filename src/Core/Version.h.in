@@ -1,0 +1,3 @@
+#pragma once
+
+#define MORENO_TEXT_VERSION "@MORENO_BUILD_VERSION@"

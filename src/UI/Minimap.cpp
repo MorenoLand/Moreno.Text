@@ -6,10 +6,21 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <algorithm>
 
 extern GLuint gl_shaderProgram();
 extern GLuint gl_vao();
 extern GLuint gl_vbo();
+
+void Minimap::rebuildLineOffsets(const std::string& buffer) {
+    lineOffsets_.clear();
+    lineOffsets_.push_back(0);
+    for (size_t i = 0; i < buffer.size(); ++i)
+        if (buffer[i] == '\n' && i + 1 < buffer.size()) lineOffsets_.push_back(i + 1);
+    cachedBufferSize_ = buffer.size();
+    lastLineCount_ = static_cast<int>(lineOffsets_.size());
+    dirty_ = false;
+}
 
 void Minimap::draw(FontAtlas& font, SyntaxHighlighter& syntax, const std::string& buffer,
                    float originX, float originY, float windowH, float titlebarH,
@@ -18,13 +29,10 @@ void Minimap::draw(FontAtlas& font, SyntaxHighlighter& syntax, const std::string
     float statusH = 22.f;
     float bottom = windowH - statusH;
     float minimapH = bottom - top;
-    size_t lineCount = 1;
-    for (char c : buffer) if (c == '\n') ++lineCount;
+    if (dirty_ || cachedBufferSize_ != buffer.size()) rebuildLineOffsets(buffer);
+    size_t lineCount = lineOffsets_.empty() ? 1 : lineOffsets_.size();
     float scale = 0.22f;
     float miniLineStep = lineStep * scale;
-    float contentH = lineCount * lineStep;
-    float viewH = minimapH;
-    float maxScroll = contentH > viewH ? contentH - viewH : 0.f;
     std::vector<float> verts;
     auto addRect = [&](float x0, float y0, float x1, float y1, float cr, float cg, float cb, float ca) {
         verts.insert(verts.end(), {x0,y0,0,0,cr,cg,cb,ca, x0,y1,0,0,cr,cg,cb,ca, x1,y1,0,0,cr,cg,cb,ca, x0,y0,0,0,cr,cg,cb,ca, x1,y1,0,0,cr,cg,cb,ca, x1,y0,0,0,cr,cg,cb,ca});
@@ -39,22 +47,24 @@ void Minimap::draw(FontAtlas& font, SyntaxHighlighter& syntax, const std::string
         glBindVertexArray(0); GLRenderer::setDrawMode(0);
         verts.clear();
     };
-    addRect(originX - 1, top, originX, bottom, 0.09f, 0.09f, 0.11f, 1.f);
-    addRect(originX, top, originX + width_, bottom, 0.13f, 0.13f, 0.15f, 1.f);
+    auto miniBg = syntax.minimapBackgroundColor();
+    addRect(originX - 1, top, originX, bottom, miniBg.r * 0.70f, miniBg.g * 0.70f, miniBg.b * 0.70f, 1.f);
+    addRect(originX, top, originX + width_, bottom, miniBg.r, miniBg.g, miniBg.b, 1.f);
     flushSolid();
     float y = top + 2.f;
     float miniTextX = originX + 4.f;
-    size_t lineStart = 0;
-    while (lineStart <= buffer.size()) {
-        size_t lineEnd = buffer.find('\n', lineStart);
-        if (lineEnd == std::string::npos) lineEnd = buffer.size();
-        if (y > bottom) break;
+    LineWindow lineWindow = visibleLineWindow(lineCount, minimapH - 4.f, miniLineStep);
+    for (size_t row = 0; row < lineWindow.count; ++row) {
+        size_t lineIndex = lineWindow.first + row;
+        size_t lineStart = lineOffsets_[lineIndex];
+        size_t lineEnd = lineIndex + 1 < lineOffsets_.size() ? lineOffsets_[lineIndex + 1] - 1 : buffer.size();
+        if (lineEnd > lineStart && buffer[lineEnd - 1] == '\r') --lineEnd;
         if (y + miniLineStep > top) {
             std::string_view line(buffer.data() + lineStart, lineEnd - lineStart);
             auto tokens = syntax.highlightLine(line, lineStart);
             if (tokens.empty()) {
                 auto& c = syntax.scopeColor(0);
-                font.drawTextScaled(line, miniTextX, y, scale, c.r, c.g, c.b, 0.78f);
+                font.drawTextScaledClipped(line, miniTextX, y, scale, miniTextX, originX + width_ - 4.f, c.r, c.g, c.b, 0.78f);
             } else {
                 float cx = miniTextX;
                 size_t prevEnd = 0;
@@ -62,12 +72,12 @@ void Minimap::draw(FontAtlas& font, SyntaxHighlighter& syntax, const std::string
                     if (tok.start > lineStart + prevEnd) {
                         auto& c = syntax.scopeColor(0);
                         std::string_view gap(buffer.data() + lineStart + prevEnd, tok.start - lineStart - prevEnd);
-                        font.drawTextScaled(gap, cx, y, scale, c.r, c.g, c.b, 0.78f);
+                        font.drawTextScaledClipped(gap, cx, y, scale, miniTextX, originX + width_ - 4.f, c.r, c.g, c.b, 0.78f);
                         cx += font.measureText(gap) * scale;
                     }
                     auto& c = syntax.scopeColor(tok.scope);
                     std::string_view tokText(buffer.data() + tok.start, tok.length);
-                    font.drawTextScaled(tokText, cx, y, scale, c.r, c.g, c.b, 0.78f);
+                    font.drawTextScaledClipped(tokText, cx, y, scale, miniTextX, originX + width_ - 4.f, c.r, c.g, c.b, 0.78f);
                     cx += font.measureText(tokText) * scale;
                     prevEnd = (tok.start - lineStart) + tok.length;
                     if (cx > originX + width_ - 4.f) break;
@@ -75,17 +85,15 @@ void Minimap::draw(FontAtlas& font, SyntaxHighlighter& syntax, const std::string
                 if (prevEnd < lineEnd - lineStart && cx <= originX + width_ - 4.f) {
                     auto& c = syntax.scopeColor(0);
                     std::string_view rest(buffer.data() + lineStart + prevEnd, lineEnd - lineStart - prevEnd);
-                    font.drawTextScaled(rest, cx, y, scale, c.r, c.g, c.b, 0.78f);
+                    font.drawTextScaledClipped(rest, cx, y, scale, miniTextX, originX + width_ - 4.f, c.r, c.g, c.b, 0.78f);
                 }
             }
         }
         y += miniLineStep;
-        lineStart = lineEnd + 1;
     }
     // fixed-size viewport ~15% of minimap height
     {
         float vpH = minimapH * 0.15f;
-        float contentH = lineCount * lineStep;
         float maxScroll = maxScrollParam;
         float vpTop = top + (maxScroll > 0.f ? (scrollY / maxScroll) * (minimapH - vpH) : 0.f);
         if (vpTop < top) vpTop = top;

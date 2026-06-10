@@ -26,12 +26,17 @@ in vec2 vUV;
 in vec4 vColor;
 out vec4 FragColor;
 uniform sampler2D uAtlas;
-uniform int uMode; // 0=font atlas (.r), 1=rgba texture, 2=solid color
+uniform int uMode; // 0=font atlas, 1=rgba texture, 2=solid color
 void main() {
+    vec4 tex = texture(uAtlas, vUV);
     if (uMode == 1) {
-        FragColor = texture(uAtlas, vUV) * vColor;
+        FragColor = tex * vColor;
     } else if (uMode == 0) {
-        FragColor = vec4(vColor.rgb, texture(uAtlas, vUV).r * vColor.a);
+        if (vColor.r < 0.0) {
+            FragColor = vec4(tex.rgb, tex.a * vColor.a);
+        } else {
+            FragColor = vec4(vColor.rgb, tex.a * vColor.a);
+        }
     } else {
         FragColor = vColor;
     }

@@ -7,6 +7,8 @@
 #include <atomic>
 #include <mutex>
 #include <set>
+#include "Plugin/PluginHost.h"
+#include "UI/SidebarMenu.h"
 
 class Titlebar;
 class Gutter;
@@ -66,6 +68,34 @@ struct CommandPaletteState {
     int hover = -1;
 };
 
+struct PluginPaletteCommand {
+    std::string caption;
+    std::string name;
+};
+
+struct PluginQuickPanelState {
+    bool active = false;
+    bool submitted = false;
+    std::string requestPath;
+    std::string responsePath;
+    std::vector<std::string> items;
+    int selected = 0;
+    int scroll = 0;
+};
+
+struct PluginInputPanelState {
+    bool active = false;
+    bool submitted = false;
+    std::string requestPath;
+    std::string responsePath;
+    std::string caption;
+    std::string text;
+};
+
+struct EditorGroup {
+    size_t tab = 0;
+};
+
 struct TabBuffer {
     std::string text;
     std::string filePath;
@@ -78,6 +108,9 @@ struct TabBuffer {
     bool largeFileGuarded = false;
     uintmax_t largeFileSize = 0;
     float desiredCursorX = -1.f;
+    std::string pluginSyntax;
+    std::string pluginColorScheme;
+    bool pluginOwned = false;
 };
 
 enum class StatusPopup { None, Indent, Syntax };
@@ -123,6 +156,7 @@ public:
     void commandReplace() { find_.active = true; find_.replaceActive = true; find_.query.clear(); find_.matches.clear(); }
     void commandGotoAnything() { goto_.active = true; goto_.query.clear(); goto_.selected = 0; goto_.items.clear(); }
     void commandPalette() { commandPalette_.active = true; commandPalette_.query.clear(); commandPalette_.selected = 0; commandPalette_.scroll = 0; commandPalette_.hover = -1; updateCommandPalette(); }
+    void toggleConsole();
     void toggleFullscreen();
     void toggleMinimap() { minimapVisible_ = !minimapVisible_; }
     void toggleWordWrap() { wordWrap_ = !wordWrap_; visualLines_.clear(); }
@@ -156,6 +190,8 @@ private:
     void update();
     void render();
     void updateTitle();
+    void invalidateLineIndex() const { lineIndexDirty_ = true; }
+    void rebuildLineIndex() const;
     size_t lineStart(size_t pos) const;
     size_t lineEnd(size_t pos) const;
     size_t lineStartForLine(size_t line) const;
@@ -182,11 +218,18 @@ private:
     void buildSidebarNode(SidebarNode& node);
     void drawSidebar(class FontAtlas& font, float windowH, float titlebarH, float statusbarH);
     bool handleSidebarEvent(const SDL_Event& e, float windowH, float titlebarH, float statusbarH);
+    void refreshPluginCommands();
+    void executePluginCommand(int index);
     // tabs
     std::vector<TabBuffer> tabs_;
     size_t activeTab_ = 0;
+    std::vector<EditorGroup> editorGroups_;
+    size_t activeGroup_ = 0;
     void saveCurrentTab();
     void loadTab(size_t index);
+    void normalizeEditorGroups();
+    void collapseEditorGroupsTo(size_t tabIndex);
+    void addEditorGroupForTab(size_t tabIndex);
     void closeTabNow(size_t index);
     void drawTabBar(class FontAtlas& font, float windowW, float titlebarH);
     bool handleTabBarEvent(const SDL_Event& e, float windowW, float titlebarH);
@@ -198,6 +241,8 @@ private:
     bool running_ = true, dirty_ = false;
     bool syntaxDirty_ = true;
     std::string textBuffer;
+    mutable bool lineIndexDirty_ = true;
+    mutable std::vector<size_t> lineStarts_{0};
     std::string openFilePath_;
     std::string openFile_ = "untitled";
     std::vector<SelRange> selections_;
@@ -240,6 +285,11 @@ private:
     float sidebarContentH_ = 0.f;
     std::string sidebarRoot_;
     SidebarNode sidebarTree_;
+    bool sidebarContextOpen_ = false;
+    int sidebarContextHover_ = -1;
+    float sidebarContextX_ = 0.f, sidebarContextY_ = 0.f;
+    SidebarNode sidebarContextNode_;
+    std::vector<SidebarMenuItem> sidebarContextItems_;
     std::atomic<bool> sidebarWatchRunning_{false};
     std::atomic<bool> sidebarRefreshPending_{false};
     std::vector<UndoStep> undoStack_, redoStack_;
@@ -313,6 +363,21 @@ private:
     float consoleScrollY_ = 0.f;
     float consoleH_ = 150.f;
     bool consoleResizing_ = false;
+    size_t consoleLogReadPos_ = 0;
+    void pollConsoleLog();
+    PluginQuickPanelState pluginQuickPanel_;
+    PluginInputPanelState pluginInputPanel_;
+    std::set<std::string> handledPluginRequests_;
+    std::set<int> closedPluginViewIds_;
+    std::string pendingPluginCommand_;
+    uint32_t pendingPluginCommandTicks_ = 0;
+    void pollPluginBridge();
+    void finishPluginQuickPanel(int index);
+    void finishPluginInputPanel(bool accepted);
+    bool sendPluginViewTextCommand(const std::string& commandName, const std::string& characters);
+    bool sendPluginViewWindowCommand(const std::string& commandName);
+    void notifyPluginViewClosed(int id);
+    bool writePluginViewCommandRequest(const std::string& type, const std::string& commandName, const std::string& characters);
     void computeLineIndents();
     void computeMaxLineWidth();
     bool useTabs_ = false;
@@ -324,6 +389,7 @@ private:
     std::atomic<bool> gitBranchBusy_{false};
     std::vector<std::string> closedTabStack_;
     std::vector<std::string> recentFiles_;
+    std::vector<PluginPaletteCommand> pluginCommands_;
     bool closeConfirmOpen_ = false;
     size_t closeConfirmIndex_ = 0;
     std::string menuStyle_ = "icon";

@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+
+    env:
+      VCPKG_ROOT: ${{ github.workspace }}/.vcpkg
+      MORENO_BUILD_VERSION: 0.1.${{ github.run_number }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build pkg-config libgl1-mesa-dev libglu1-mesa-dev libx11-dev libxrandr-dev libxi-dev libxinerama-dev libxcursor-dev
+
+      - name: Cache vcpkg
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.VCPKG_ROOT }}
+            ${{ github.workspace }}/vcpkg_installed
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-${{ runner.os }}-
+
+      - name: Bootstrap vcpkg
+        shell: bash
+        run: |
+          if [ ! -d "$VCPKG_ROOT/.git" ]; then
+            git clone https://github.com/microsoft/vcpkg "$VCPKG_ROOT"
+          fi
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            "$VCPKG_ROOT/bootstrap-vcpkg.bat"
+          else
+            "$VCPKG_ROOT/bootstrap-vcpkg.sh"
+          fi
+
+      - name: Configure
+        shell: bash
+        run: |
+          cmake -B build -S . \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DMORENO_BUILD_VERSION="$MORENO_BUILD_VERSION" \
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
