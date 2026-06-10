@@ -1,8 +1,8 @@
 #include "Core/FileBackedBuffer.h"
 
 #include <algorithm>
-#include <array>
 #include <fstream>
+#include <vector>
 
 bool FileBackedBuffer::open(const std::filesystem::path& path) {
     path_ = path;
@@ -21,7 +21,7 @@ bool FileBackedBuffer::open(const std::filesystem::path& path) {
         return false;
     }
 
-    std::array<char, 1024 * 1024> buffer{};
+    std::vector<char> buffer(1024 * 1024);
     uint64_t absolute = 0;
     while (file) {
         file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
