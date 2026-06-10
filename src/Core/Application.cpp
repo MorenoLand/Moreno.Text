@@ -320,7 +320,11 @@ bool Application::init(int argc, char** argv) {
 #endif
     }
     SDL_StartTextInput();
-    if (argc > 1 && fs::exists(argv[1])) openFile(argv[1]);
+    if (argc > 1 && fs::exists(argv[1])) {
+        tabs_.clear();
+        selections_.clear();
+        openFile(argv[1]);
+    }
     else if (!loadSession()) newBuffer();
     return true;
 }
@@ -1559,6 +1563,40 @@ void Application::reopenClosedTab() {
     }
 }
 
+bool Application::detachTabToNewWindow(size_t index) {
+    saveCurrentTab();
+    if (index >= tabs_.size()) return false;
+    auto& tab = tabs_[index];
+    if (tab.pluginOwned || tab.filePath.rfind("plugin://view/", 0) == 0 || tab.filePath.empty()) {
+        consoleBuffer_ += "[tabs] Cannot tear out unsaved or plugin-owned tab yet\n";
+        return false;
+    }
+    if (tab.dirty) {
+        consoleBuffer_ += "[tabs] Save the tab before tearing it into a new window\n";
+        return false;
+    }
+    fs::path exe = fs::path(paths_.exeDir) / "moreno_text.exe";
+    if (!fs::exists(exe)) return false;
+#ifdef _WIN32
+    std::string command = "\"" + exe.string() + "\" \"" + tab.filePath + "\"";
+    STARTUPINFOA si = {}; si.cb = sizeof(si); si.dwFlags = STARTF_USESHOWWINDOW; si.wShowWindow = SW_SHOWNORMAL;
+    PROCESS_INFORMATION pi = {};
+    std::vector<char> cmd(command.begin(), command.end());
+    cmd.push_back('\0');
+    BOOL ok = CreateProcessA(nullptr, cmd.data(), nullptr, nullptr, FALSE, 0, nullptr, paths_.exeDir.c_str(), &si, &pi);
+    if (!ok) return false;
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+#elif defined(__APPLE__) || defined(__linux__)
+    std::string command = "\"" + exe.string() + "\" \"" + tab.filePath + "\" &";
+    if (std::system(command.c_str()) != 0) return false;
+#else
+    return false;
+#endif
+    closeTabNow(index);
+    return true;
+}
+
 void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
     auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
         solidVerts_.insert(solidVerts_.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
@@ -1616,13 +1654,10 @@ void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
         for (auto& group : editorGroups_) if (group.tab == i) { groupedTab = true; break; }
         if (i == activeTab_) {
             roundedTab(tx, tx + tw, 0.18f, 0.19f, 0.22f, 1.f, true);
-            ar(tx, barY + tabBarH_ - 2.f, tx + tw, barY + tabBarH_, accentColor_.r, accentColor_.g, accentColor_.b, 0.8f);
         } else if (groupedTab) {
             roundedTab(tx, tx + tw, 0.23f, 0.24f, 0.27f, 0.75f, false);
-            ar(tx, barY + tabBarH_ - 2.f, tx + tw, barY + tabBarH_, accentColor_.r, accentColor_.g, accentColor_.b, 0.5f);
         } else if (i == tabHoverIndex_) {
             roundedTab(tx, tx + tw, 0.24f, 0.25f, 0.28f, 0.55f, false);
-            ar(tx, barY + tabBarH_ - 2.f, tx + tw, barY + tabBarH_, accentColor_.r, accentColor_.g, accentColor_.b, 0.4f);
         }
         labels.push_back({i, tx, label});
         tx += tw;
@@ -1647,18 +1682,19 @@ void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
         float textY = barY + 8.f;
         float tw = tabWidthForLabel(label.text);
         float actionCenterX = lx + tw - tabActionPadR - tabActionW * 0.5f;
+        bool closeHover = label.index == tabHoverIndex_ && mouseX_ >= (int)(actionCenterX - 10.f) && mouseX_ <= (int)(actionCenterX + 10.f) &&
+            mouseY_ >= (int)(barY + 6.f) && mouseY_ <= (int)(barY + tabBarH_ - 4.f);
         float textClipRight = actionCenterX - tabTextGap;
         float clipLeft = std::max(lx + tabTextPadL, tabAreaX);
         float clipRight = std::min(textClipRight, menuX);
         if (clipRight > clipLeft) {
             font.drawTextClipped(label.text, lx + tabTextPadL, textY, clipLeft, clipRight, textBright, textBright, textBright+0.05f, 1.f);
         }
-        if (tabs_[label.index].dirty) {
-            float r = 3.2f;
-            float cy = barY + tabBarH_ * 0.5f + 0.5f;
-            ar(actionCenterX - r, cy - r, actionCenterX + r, cy + r, 0.95f, 0.72f, 0.27f, 1.f);
-        } else {
+        if (closeHover) {
             font.drawText("\xc3\x97", actionCenterX - 4.f, textY, 0.55f, 0.55f, 0.60f, 1.f);
+        } else {
+            if (tabs_[label.index].dirty) font.drawText("\xe2\x80\xa2", actionCenterX - 4.f, textY + 1.f, 0.95f, 0.72f, 0.27f, 1.f);
+            else font.drawText("\xe2\x80\xa2", actionCenterX - 4.f, textY + 1.f, 0.48f, 0.50f, 0.56f, 0.95f);
         }
     }
     flushTabSolids();
@@ -1687,7 +1723,6 @@ void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
         float dragW = tabWidthForLabel(dragLabel);
         float dragX = std::clamp(mouseX_ - dragW / 2.f, tabAreaX, std::max(tabAreaX, menuX - dragW));
         ar(dragX, barY, dragX + dragW, barY + tabBarH_, 0.20f, 0.20f, 0.23f, 0.6f);
-        ar(dragX, barY + tabBarH_ - 2.f, dragX + dragW, barY + tabBarH_, accentColor_.r, accentColor_.g, accentColor_.b, 0.5f);
         flushTabSolids();
         font.drawText(dragLabel, dragX + 12.f, barY + 8.f, 0.85f, 0.85f, 0.85f, 0.6f);
     }
@@ -1795,7 +1830,14 @@ bool Application::handleTabBarEvent(const SDL_Event& e, float windowW, float tit
         }
         return true;
     }
-    if (e.type == SDL_MOUSEBUTTONUP && e.button.button == 1 && tabDragging_) { tabDragging_ = false; return true; }
+    if (e.type == SDL_MOUSEBUTTONUP && e.button.button == 1 && tabDragging_) {
+        bool tearOut = e.button.y < (int)(barY - 24.f) || e.button.y > (int)(barY + tabBarH_ + 80.f);
+        size_t dragged = tabDragIndex_;
+        tabDragging_ = false;
+        SDL_CaptureMouse(SDL_FALSE);
+        if (tearOut) detachTabToNewWindow(dragged);
+        return true;
+    }
     if (e.type == SDL_MOUSEMOTION) {
         float mx = (float)e.motion.x, my = (float)e.motion.y;
         int ww, wh; SDL_GetWindowSize(window_, &ww, &wh);
@@ -1899,7 +1941,7 @@ bool Application::handleTabBarEvent(const SDL_Event& e, float windowW, float tit
                     collapseEditorGroupsTo(i);
                     switchToTab(i);
                 }
-                if (!ctrlClick && e.button.button == 1 && mx < actionLeft) { tabDragging_ = true; tabDragIndex_ = i; tabDragStartX_ = mx; }
+                if (!ctrlClick && e.button.button == 1 && mx < actionLeft) { tabDragging_ = true; tabDragIndex_ = i; tabDragStartX_ = mx; SDL_CaptureMouse(SDL_TRUE); }
                 return true;
             }
             tx += tw;
@@ -2475,7 +2517,7 @@ void Application::handleEvents() {
         if (e.type == SDL_KEYDOWN) {
             cursorLastInputTicks_ = SDL_GetTicks();
             auto mod = e.key.keysym.mod;
-            if (e.key.keysym.sym == SDLK_x && (mod & KMOD_SHIFT) && !(mod & KMOD_CTRL) && !(mod & KMOD_ALT)) {
+            if (e.key.keysym.sym == SDLK_f && (mod & KMOD_CTRL) && (mod & KMOD_SHIFT) && !(mod & KMOD_ALT)) {
                 debugFpsVisible_ = !debugFpsVisible_;
                 continue;
             }
@@ -2807,33 +2849,27 @@ void Application::handleEvents() {
         }
         if (find_.active && e.type == SDL_MOUSEBUTTONDOWN && e.button.button == 1) {
             float sbH = statusbar_->height();
-            float rowH = 30.f, barH = find_.replaceActive ? rowH * 2.f + 2.f : rowH;
+            float rowH = 28.f, barH = find_.replaceActive ? rowH * 2.f : rowH;
             float barY = (float)wh - sbH - barH;
             float mx = (float)e.button.x, my = (float)e.button.y;
             if (my >= barY && my < barY + barH) {
                 float panelW = (float)ww;
-                float fieldX = 108.f;
-                float rightButtonsW = find_.replaceActive ? 286.f : 164.f;
-                float fieldW = std::max(120.f, panelW - fieldX - rightButtonsW);
-                float fieldH = 22.f;
-                float fy = barY + (rowH - fieldH) / 2.f;
+                float fieldH = 24.f;
+                float toggleX = 18.f;
+                float findLabelX = find_.replaceActive ? 186.f : 154.f;
+                float fieldX = findLabelX + 48.f;
+                float closeButtonW = 24.f;
+                float closeX = panelW - closeButtonW - 8.f;
+                float actionW = find_.replaceActive ? 172.f : 304.f;
+                float fieldW = std::max(150.f, closeX - fieldX - actionW - 10.f);
+                float fy = barY + 2.f;
+                float findButtonX = fieldX + fieldW + 8.f;
                 auto inRect = [&](float x, float y, float w, float h) { return mx >= x && mx < x + w && my >= y && my < y + h; };
-                if (inRect(8.f, fy, 28.f, fieldH)) { find_.regex = !find_.regex; findAllMatches(); continue; }
-                if (inRect(40.f, fy, 28.f, fieldH)) { find_.caseSensitive = !find_.caseSensitive; findAllMatches(); continue; }
-                if (inRect(72.f, fy, 28.f, fieldH)) { find_.wholeWord = !find_.wholeWord; findAllMatches(); continue; }
+                if (inRect(toggleX, fy, 28.f, fieldH)) { find_.regex = !find_.regex; findAllMatches(); continue; }
+                if (inRect(toggleX + 34.f, fy, 28.f, fieldH)) { find_.caseSensitive = !find_.caseSensitive; findAllMatches(); continue; }
+                if (inRect(toggleX + 68.f, fy, 28.f, fieldH)) { find_.wholeWord = !find_.wholeWord; findAllMatches(); continue; }
                 if (inRect(fieldX, fy, fieldW, fieldH)) { findFocus_ = 0; continue; }
-                float prevX = fieldX + fieldW + 8.f;
-                float nextX = prevX + 62.f;
-                float closeX = panelW - 30.f;
-                if (inRect(prevX, fy, 56.f, fieldH)) {
-                    if (!find_.matches.empty()) {
-                        find_.currentMatch = (find_.currentMatch + find_.matches.size() - 1) % find_.matches.size();
-                        selections_[0].anchor = selections_[0].cursor = find_.matches[find_.currentMatch];
-                        ensureCursorVisible();
-                    }
-                    continue;
-                }
-                if (inRect(nextX, fy, 56.f, fieldH)) {
+                if (inRect(findButtonX, fy, 70.f, fieldH)) {
                     if (!find_.matches.empty()) {
                         find_.currentMatch = (find_.currentMatch + 1) % find_.matches.size();
                         selections_[0].anchor = selections_[0].cursor = find_.matches[find_.currentMatch];
@@ -2841,59 +2877,47 @@ void Application::handleEvents() {
                     }
                     continue;
                 }
-                if (inRect(closeX, fy, 22.f, fieldH)) { find_.active = false; continue; }
+                if (!find_.replaceActive && inRect(findButtonX + 76.f, fy, 88.f, fieldH)) {
+                    if (!find_.matches.empty()) {
+                        find_.currentMatch = (find_.currentMatch + find_.matches.size() - 1) % find_.matches.size();
+                        selections_[0].anchor = selections_[0].cursor = find_.matches[find_.currentMatch];
+                        ensureCursorVisible();
+                    }
+                    continue;
+                }
+                if (find_.replaceActive && inRect(findButtonX + 76.f, fy, 88.f, fieldH)) { doReplace(); continue; }
+                if (!find_.replaceActive && inRect(findButtonX + 170.f, fy, 90.f, fieldH)) {
+                    if (!find_.matches.empty()) {
+                        selections_.clear();
+                        size_t qLen = std::max<size_t>(1, find_.query.size());
+                        for (size_t m : find_.matches) selections_.emplace_back(m, std::min(textBuffer.size(), m + qLen));
+                        find_.currentMatch = 0;
+                        ensureCursorVisible();
+                    }
+                    continue;
+                }
+                if (inRect(closeX, fy, closeButtonW, fieldH)) { find_.active = false; continue; }
                 if (find_.replaceActive) {
-                    float ry = barY + rowH + 2.f;
-                    float rfy = ry + (rowH - fieldH) / 2.f;
-                    if (inRect(8.f, rfy, 28.f, fieldH)) continue;
-                    if (inRect(40.f, rfy, 28.f, fieldH)) continue;
+                    float rfy = barY + rowH + 2.f;
+                    if (inRect(toggleX, rfy, 28.f, fieldH)) continue;
+                    if (inRect(toggleX + 34.f, rfy, 28.f, fieldH)) continue;
                     if (inRect(fieldX, rfy, fieldW, fieldH)) { findFocus_ = 1; continue; }
-                    float replaceX = fieldX + fieldW + 8.f;
-                    float replaceAllX = replaceX + 82.f;
-                    if (inRect(replaceX, rfy, 76.f, fieldH)) { doReplace(); continue; }
-                    if (inRect(replaceAllX, rfy, 96.f, fieldH)) { doReplaceAll(); continue; }
+                    if (inRect(findButtonX, rfy, 70.f, fieldH)) {
+                        if (!find_.matches.empty()) {
+                            selections_.clear();
+                            size_t qLen = std::max<size_t>(1, find_.query.size());
+                            for (size_t m : find_.matches) selections_.emplace_back(m, std::min(textBuffer.size(), m + qLen));
+                            find_.currentMatch = 0;
+                            ensureCursorVisible();
+                        }
+                        continue;
+                    }
+                    if (inRect(findButtonX + 76.f, rfy, 106.f, fieldH)) { doReplaceAll(); continue; }
                 }
                 continue;
             }
         }
         if (handleSidebarEvent(e, (float)wh, titlebar_->height() + tabBarH_, statusbar_->height())) continue;
-        // find bar click handling
-        if (find_.active && e.type == SDL_MOUSEBUTTONDOWN && e.button.button == 1) {
-            float sbH = statusbar_->height();
-            float rowH = 30.f, barH = find_.replaceActive ? rowH * 2.f + 2.f : rowH;
-            float barY = (float)wh - sbH - barH;
-            float mx = (float)e.button.x, my = (float)e.button.y;
-            if (my >= barY && my < barY + barH) {
-                float editorRight = (float)ww - ((minimapVisible_) ? 100.f : 0.f);
-                float fieldW = editorRight - 220.f;
-                float btnX = fieldW + 16.f;
-                float fieldH = 22.f, fy = barY + (rowH - fieldH) / 2.f;
-                // toggle buttons
-                if (my >= fy && my < fy + fieldH) {
-                    if (mx >= btnX && mx < btnX + 28.f) { find_.regex = !find_.regex; findAllMatches(); continue; }
-                    btnX += 32.f;
-                    if (mx >= btnX && mx < btnX + 28.f) { find_.caseSensitive = !find_.caseSensitive; findAllMatches(); continue; }
-                    btnX += 32.f;
-                    if (mx >= btnX && mx < btnX + 28.f) { find_.wholeWord = !find_.wholeWord; findAllMatches(); continue; }
-                }
-                // close X
-                if (mx >= editorRight - 22.f && mx < editorRight && my >= barY && my < barY + rowH) { find_.active = false; continue; }
-                // replace row buttons
-                if (find_.replaceActive && my >= barY + rowH) {
-                    float rbx = fieldW + 16.f + 96.f;
-                    float rbw = fontAtlas().measureText("Replace");
-                    if (mx >= rbx && mx < rbx + rbw + 10.f) { doReplace(); continue; }
-                    rbx += rbw + 14.f;
-                    if (mx >= rbx) { doReplaceAll(); continue; }
-                }
-                // click in field area focuses
-                if (mx >= 8.f && mx < fieldW + 8.f) {
-                    findFocus_ = (my < barY + rowH) ? 0 : 1;
-                    if (!find_.replaceActive) findFocus_ = 0;
-                }
-                continue;
-            }
-        }
         if (e.type == SDL_WINDOWEVENT && (e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED || e.window.event == SDL_WINDOWEVENT_RESIZED)) {
             SDL_GL_GetDrawableSize(window_, &ww, &wh); GLRenderer::resize(ww, wh); titlebar_->layout(ww); render();
         }
@@ -4301,49 +4325,58 @@ void Application::render() {
     statusbar_->drawText(fontAtlas(), fww, fwh, currentLine, currentCol, syntax_->languageName(), useTabs_, tabSize_, branch);
     // find bar
     if (find_.active) {
-        float rowH = 30.f, barH = find_.replaceActive ? rowH * 2.f + 2.f : rowH;
+        float rowH = 28.f, barH = find_.replaceActive ? rowH * 2.f : rowH;
         float barY = fwh - sbH - barH;
         float barW = fww;
         auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
             addSolid(x0, y0, x1, y1, r, g, b, a);
         };
-        ar(0, barY, barW, barY + barH, 0.16f, 0.16f, 0.19f, 1.f);
-        ar(0, barY, barW, barY + 1, 0.30f, 0.30f, 0.35f, 1.f);
-        float fieldX = 108.f, fieldH = 22.f;
-        float rightButtonsW = find_.replaceActive ? 286.f : 164.f;
-        float fieldW = std::max(120.f, barW - fieldX - rightButtonsW);
-        float fy = barY + (rowH - fieldH) / 2.f;
-        ar(fieldX, fy, fieldX + fieldW, fy + fieldH, 0.12f, 0.12f, 0.14f, 1.f);
-        float btnX = 8.f;
-        auto toggleBtn = [&](const char* label, bool active, float x) {
-            ar(x, fy, x + 28.f, fy + fieldH, active ? 0.25f : 0.14f, active ? 0.28f : 0.14f, active ? 0.35f : 0.16f, 1.f);
+        ar(0, barY, barW, barY + barH, 0.18f, 0.18f, 0.21f, 1.f);
+        ar(0, barY, barW, barY + 1, 0.34f, 0.35f, 0.39f, 1.f);
+        float fieldH = 24.f;
+        float toggleX = 18.f;
+        float findLabelX = find_.replaceActive ? 186.f : 154.f;
+        float fieldX = findLabelX + 48.f;
+        float closeButtonW = 24.f;
+        float closeButtonX = barW - closeButtonW - 8.f;
+        float actionW = find_.replaceActive ? 172.f : 304.f;
+        float fieldW = std::max(150.f, closeButtonX - fieldX - actionW - 10.f);
+        float fy = barY + 2.f;
+        auto button = [&](float x, float y, float w, bool active = false) {
+            ar(x, y, x + w, y + fieldH, active ? 0.28f : 0.24f, active ? 0.31f : 0.26f, active ? 0.38f : 0.30f, 1.f);
         };
-        toggleBtn("/Re", find_.regex, btnX); btnX += 32.f;
-        toggleBtn("Aa", find_.caseSensitive, btnX); btnX += 32.f;
-        toggleBtn("\\b", find_.wholeWord, btnX); btnX += 32.f;
-        float prevButtonX = fieldX + fieldW + 8.f;
-        float nextButtonX = prevButtonX + 62.f;
-        float closeButtonX = barW - 30.f;
-        ar(prevButtonX, fy, prevButtonX + 56.f, fy + fieldH, 0.18f, 0.18f, 0.21f, 1.f);
-        ar(nextButtonX, fy, nextButtonX + 56.f, fy + fieldH, 0.18f, 0.18f, 0.21f, 1.f);
-        ar(closeButtonX, fy, closeButtonX + 22.f, fy + fieldH, 0.18f, 0.18f, 0.21f, 1.f);
+        auto toggleBtn = [&](bool active, float x, float y) {
+            button(x, y, 28.f, active);
+        };
+        toggleBtn(find_.regex, toggleX, fy);
+        toggleBtn(find_.caseSensitive, toggleX + 34.f, fy);
+        toggleBtn(find_.wholeWord, toggleX + 68.f, fy);
+        button(fieldX, fy, fieldW, false);
+        float findButtonX = fieldX + fieldW + 8.f;
+        button(findButtonX, fy, 70.f);
+        button(findButtonX + 76.f, fy, find_.replaceActive ? 88.f : 88.f);
+        if (!find_.replaceActive) button(findButtonX + 170.f, fy, 90.f);
+        button(closeButtonX, fy, closeButtonW);
         float replaceFieldY = 0.f;
         float replaceButtonX = 0.f;
         float replaceAllButtonX = 0.f;
         if (find_.replaceActive) {
-            float ry = barY + rowH + 2.f;
-            float rfy = ry + (rowH - fieldH) / 2.f;
+            float rfy = barY + rowH + 2.f;
             replaceFieldY = rfy;
-            ar(8.f, rfy, 36.f, rfy + fieldH, 0.14f, 0.14f, 0.16f, 1.f);
-            ar(40.f, rfy, 68.f, rfy + fieldH, 0.14f, 0.14f, 0.16f, 1.f);
-            ar(fieldX, rfy, fieldX + fieldW, rfy + fieldH, 0.12f, 0.12f, 0.14f, 1.f);
-            replaceButtonX = fieldX + fieldW + 8.f;
-            replaceAllButtonX = replaceButtonX + 82.f;
-            ar(replaceButtonX, rfy, replaceButtonX + 76.f, rfy + fieldH, 0.18f, 0.18f, 0.21f, 1.f);
-            ar(replaceAllButtonX, rfy, replaceAllButtonX + 96.f, rfy + fieldH, 0.18f, 0.18f, 0.21f, 1.f);
+            button(toggleX, rfy, 28.f);
+            button(toggleX + 34.f, rfy, 28.f);
+            button(fieldX, rfy, fieldW);
+            replaceButtonX = findButtonX;
+            replaceAllButtonX = replaceButtonX + 76.f;
+            button(replaceButtonX, rfy, 70.f);
+            button(replaceAllButtonX, rfy, 106.f);
         }
         flushSolid();
         std::string findText = find_.query + (findFocus_ == 0 ? "|" : "");
+        fontAtlas().drawText(".*", toggleX + 6.f, fy + 5.f, find_.regex ? 0.95f : 0.58f, find_.regex ? 0.86f : 0.58f, find_.regex ? 0.95f : 0.62f, 1.f);
+        fontAtlas().drawText("Aa", toggleX + 39.f, fy + 5.f, find_.caseSensitive ? 0.95f : 0.58f, find_.caseSensitive ? 0.86f : 0.58f, find_.caseSensitive ? 0.95f : 0.62f, 1.f);
+        fontAtlas().drawText("\\b", toggleX + 73.f, fy + 5.f, find_.wholeWord ? 0.95f : 0.58f, find_.wholeWord ? 0.86f : 0.58f, find_.wholeWord ? 0.95f : 0.62f, 1.f);
+        fontAtlas().drawText("Find:", findLabelX, fy + 5.f, 0.78f, 0.78f, 0.82f, 1.f);
         fontAtlas().drawText(findText, fieldX + 6.f, fy + 4.f, 0.85f, 0.85f, 0.88f, 1.f);
         if (!find_.matches.empty()) {
             std::string mc = std::to_string(find_.matches.size()) + " matches";
@@ -4353,19 +4386,18 @@ void Application::render() {
             float mw = fontAtlas().measureText("No matches");
             fontAtlas().drawText("No matches", fieldX + fieldW - mw - 8.f, fy + 4.f, 0.6f, 0.3f, 0.3f, 1.f);
         }
-        fontAtlas().drawText("/Re", 12.f, fy + 4.f, find_.regex ? 0.95f : 0.45f, find_.regex ? 0.85f : 0.45f, find_.regex ? 0.95f : 0.5f, 1.f);
-        fontAtlas().drawText("Aa", 44.f, fy + 4.f, find_.caseSensitive ? 0.95f : 0.45f, find_.caseSensitive ? 0.85f : 0.45f, find_.caseSensitive ? 0.95f : 0.5f, 1.f);
-        fontAtlas().drawText("\\b", 76.f, fy + 4.f, find_.wholeWord ? 0.95f : 0.45f, find_.wholeWord ? 0.85f : 0.45f, find_.wholeWord ? 0.95f : 0.5f, 1.f);
-        fontAtlas().drawText("Prev", prevButtonX + 9.f, fy + 4.f, 0.65f, 0.70f, 0.65f, 1.f);
-        fontAtlas().drawText("Next", nextButtonX + 9.f, fy + 4.f, 0.70f, 0.75f, 0.70f, 1.f);
-        fontAtlas().drawText("\xc3\x97", closeButtonX + 7.f, fy + 3.f, 0.6f, 0.6f, 0.6f, 1.f);
+        fontAtlas().drawText("Find", findButtonX + 19.f, fy + 5.f, 0.82f, 0.84f, 0.88f, 1.f);
+        fontAtlas().drawText(find_.replaceActive ? "Replace" : "Find Prev", findButtonX + 76.f + 12.f, fy + 5.f, 0.82f, 0.84f, 0.88f, 1.f);
+        if (!find_.replaceActive) fontAtlas().drawText("Find All", findButtonX + 170.f + 13.f, fy + 5.f, 0.82f, 0.84f, 0.88f, 1.f);
+        fontAtlas().drawText("\xc3\x97", closeButtonX + 7.f, fy + 4.f, 0.65f, 0.65f, 0.68f, 1.f);
         if (find_.replaceActive) {
             std::string repText = find_.replace + (findFocus_ == 1 ? "|" : "");
-            fontAtlas().drawText("^", 17.f, replaceFieldY + 4.f, 0.45f, 0.45f, 0.5f, 1.f);
-            fontAtlas().drawText("<>", 45.f, replaceFieldY + 4.f, 0.45f, 0.45f, 0.5f, 1.f);
+            fontAtlas().drawText("AB", toggleX + 4.f, replaceFieldY + 5.f, 0.58f, 0.58f, 0.62f, 1.f);
+            fontAtlas().drawText("<>", toggleX + 38.f, replaceFieldY + 5.f, 0.58f, 0.58f, 0.62f, 1.f);
+            fontAtlas().drawText("Replace:", findLabelX - 28.f, replaceFieldY + 5.f, 0.78f, 0.78f, 0.82f, 1.f);
             fontAtlas().drawText(repText, fieldX + 6.f, replaceFieldY + 4.f, 0.85f, 0.85f, 0.88f, 1.f);
-            fontAtlas().drawText("Replace", replaceButtonX + 8.f, replaceFieldY + 4.f, 0.7f, 0.75f, 0.7f, 1.f);
-            fontAtlas().drawText("All", replaceAllButtonX + 34.f, replaceFieldY + 4.f, 0.7f, 0.75f, 0.7f, 1.f);
+            fontAtlas().drawText("Find All", replaceButtonX + 12.f, replaceFieldY + 5.f, 0.82f, 0.84f, 0.88f, 1.f);
+            fontAtlas().drawText("Replace All", replaceAllButtonX + 10.f, replaceFieldY + 5.f, 0.82f, 0.84f, 0.88f, 1.f);
         }
     }
     // goto overlay

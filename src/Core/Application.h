@@ -149,6 +149,7 @@ public:
     void closeTab(size_t index);
     void closeCurrentTab() { closeTab(activeTab_); }
     void reopenClosedTab();
+    bool detachTabToNewWindow(size_t index);
     void openFileDialog();
     void openFolderDialog();
     void toggleSidebar() { sidebarVisible_ = !sidebarVisible_; }
