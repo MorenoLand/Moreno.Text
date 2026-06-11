@@ -178,6 +178,7 @@ static TabBuffer tabFromDetachedJson(const nlohmann::json& data) {
     tab.scrollY = data.value("scroll_y", 0.f);
     tab.pluginSyntax = data.value("syntax", "");
     tab.pluginColorScheme = data.value("color_scheme", "");
+    tab.manualSyntaxName = data.value("manual_syntax", "");
     size_t cursor = data.value("cursor", 0ull);
     if (cursor > tab.text.size()) cursor = tab.text.size();
     tab.selections.emplace_back(cursor);
@@ -194,7 +195,45 @@ static nlohmann::json detachedJsonFromTab(const TabBuffer& tab) {
     data["cursor"] = tab.selections.empty() ? 0 : tab.selections[0].cursor;
     data["syntax"] = tab.pluginSyntax;
     data["color_scheme"] = tab.pluginColorScheme;
+    data["manual_syntax"] = tab.manualSyntaxName;
     return data;
+}
+
+static std::string lowerPathPart(std::string s) {
+    std::replace(s.begin(), s.end(), '\\', '/');
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+    return s;
+}
+
+static bool startsWithText(std::string_view text, std::string_view prefix) {
+    return text.size() >= prefix.size() && text.substr(0, prefix.size()) == prefix;
+}
+
+static std::string inferSyntaxKey(const std::string& filePath, const std::string& fileName, const std::string& text) {
+    std::string name = lowerPathPart(fileName.empty() ? std::filesystem::path(filePath).filename().string() : fileName);
+    std::string path = lowerPathPart(filePath);
+    std::string ext = std::filesystem::path(path).extension().string();
+    if (!ext.empty() && ext[0] == '.') ext = ext.substr(1);
+    if (name == "makefile" || name == "gnumakefile" || name == "bsdmakefile") return "makefile";
+    if (name == "dockerfile" || name.rfind("dockerfile.", 0) == 0) return "dockerfile";
+    if (name == "cmakelists.txt" || ext == "cmake") return "cmake";
+    if (name == "go.mod" || name == "go.sum") return "go";
+    if (name == ".gitignore" || name == ".gitattributes" || name == ".gitmodules") return "git";
+    if (ext == "plist") return "xml";
+    if (ext == "gradle" || ext == "kts") return "kotlin";
+    if (ext == "tsx" || ext == "ts") return "ts";
+    if (ext == "jsx" || ext == "mjs" || ext == "cjs") return "js";
+    if (ext.empty() && startsWithText(text, "#!")) {
+        size_t end = text.find('\n');
+        std::string shebang = lowerPathPart(text.substr(0, end == std::string::npos ? text.size() : end));
+        if (shebang.find("python") != std::string::npos) return "py";
+        if (shebang.find("node") != std::string::npos || shebang.find("deno") != std::string::npos) return "js";
+        if (shebang.find("ruby") != std::string::npos) return "rb";
+        if (shebang.find("perl") != std::string::npos) return "pl";
+        if (shebang.find("php") != std::string::npos) return "php";
+        if (shebang.find("bash") != std::string::npos || shebang.find("zsh") != std::string::npos || shebang.find("sh") != std::string::npos) return "sh";
+    }
+    return ext;
 }
 
 Application& Application::instance() { static Application app; return app; }
@@ -525,6 +564,7 @@ bool Application::loadSession() {
             tab.largeFileWindowStartByte = windowStartByte;
             tab.largeFileWindowEndByte = windowEndByte;
             tab.largeFileBuffer = std::move(largeBuffer);
+            tab.manualSyntaxName = item.value("manualSyntax", "");
             tab.scrollY = item.value("scrollY", 0.f);
             size_t cursor = item.value("cursor", 0ull);
             if (cursor > tab.text.size()) cursor = tab.text.size();
@@ -559,6 +599,7 @@ void Application::saveSession() {
             item["path"] = tab.filePath;
             item["scrollY"] = tab.scrollY;
             item["cursor"] = tab.selections.empty() ? 0 : tab.selections[0].cursor;
+            if (!tab.manualSyntaxName.empty()) item["manualSyntax"] = tab.manualSyntaxName;
             if (i == activeTab_) data["active_tab"] = data["tabs"].size();
             data["tabs"].push_back(item);
         }
@@ -789,10 +830,13 @@ void Application::detectSyntax() {
         syntaxDirty_ = true; indentsDirty_ = true;
         return;
     }
-    if (openFilePath_.empty()) { syntax_->setLanguage(""); syntaxDirty_ = true; indentsDirty_ = true; return; }
-    std::string ext = fs::path(openFilePath_).extension().string();
-    if (!ext.empty() && ext[0] == '.') ext = ext.substr(1);
-    syntax_->setLanguage(ext);
+    if (activeTab_ < tabs_.size() && !tabs_[activeTab_].manualSyntaxName.empty()) {
+        syntax_->setLanguageByName(tabs_[activeTab_].manualSyntaxName);
+        syntaxDirty_ = true; indentsDirty_ = true;
+        return;
+    }
+    std::string syntaxKey = inferSyntaxKey(openFilePath_, openFile_, textBuffer);
+    syntax_->setLanguage(syntaxKey);
     syntaxDirty_ = true; indentsDirty_ = true;
 }
 
@@ -2100,11 +2144,13 @@ bool Application::handleTabBarEvent(const SDL_Event& e, float windowW, float tit
 // ── static data ──
 
 const char* Application::syntaxLanguages[] = {
-    "Plain Text","ActionScript","AppleScript","ASP","Batch File","C","C#","C++","Clojure","CSS",
-    "D","Diff","Erlang","Go","Graphviz","Groovy","Haskell","HTML","Java","JavaScript",
-    "JSON","LaTeX","Lisp","Lua","Makefile","Markdown","MATLAB","Objective-C","OCaml","Pascal",
-    "Perl","PHP","Python","R","Ruby","Rust","Scala","ShellScript","SQL","MorenoRC",
-    "TCL","TOML","XML","YAML"
+    "Automatic","Plain Text","ActionScript","ActionScript 2.0","AppleScript","ASP","Batch File","C","C#","C++",
+    "Clojure","CMake","CSS","D","Dart","Diff","Dockerfile","DTD","Elixir","Erlang","Generic Config",
+    "Git Config","Git Formats","Go","GraphQL","Graphviz","Groovy","GScript","GOption","Haskell","HTML",
+    "INI","Java","JavaScript","JSON","Kotlin","KSP configuration","LaTeX","Lisp","Lua","Makefile",
+    "Markdown","MATLAB","Objective-C","OCaml","Pascal","Perl","PHP","PowerShell","Python","R",
+    "Rails","Regular Expression","reStructuredText","Ruby","Rust","Scala","ShellScript","SQL",
+    "SublimeRC","Swift","TCL","Textile","TOML","TypeScript","XML","YAML"
 };
 
 struct PaletteCommandDef {
@@ -2911,7 +2957,13 @@ void Application::handleEvents() {
                             else if (idx == 6) convertIndentation(false);
                             else if (idx == 7) guessIndent();
                         } else {
-                            syntax_->setLanguageByName(syntaxLanguages[idx]);
+                            if (std::string(syntaxLanguages[idx]) == "Automatic") {
+                                if (activeTab_ < tabs_.size()) tabs_[activeTab_].manualSyntaxName.clear();
+                                detectSyntax();
+                            } else {
+                                syntax_->setLanguageByName(syntaxLanguages[idx]);
+                                if (activeTab_ < tabs_.size()) tabs_[activeTab_].manualSyntaxName = syntaxLanguages[idx];
+                            }
                             syntaxLangIndex_ = idx;
                             syntaxDirty_ = true; indentsDirty_ = true;
                             syntax_->parse(textBuffer);
@@ -3332,7 +3384,13 @@ void Application::handleEvents() {
                             else if (idx == 7) guessIndent();
                         } else {
                             if (idx < syntaxLangCount) {
-                                syntax_->setLanguageByName(syntaxLanguages[idx]);
+                                if (std::string(syntaxLanguages[idx]) == "Automatic") {
+                                    if (activeTab_ < tabs_.size()) tabs_[activeTab_].manualSyntaxName.clear();
+                                    detectSyntax();
+                                } else {
+                                    syntax_->setLanguageByName(syntaxLanguages[idx]);
+                                    if (activeTab_ < tabs_.size()) tabs_[activeTab_].manualSyntaxName = syntaxLanguages[idx];
+                                }
                                 syntaxLangIndex_ = idx;
                                 syntaxDirty_ = true; indentsDirty_ = true;
                                 syntax_->parse(textBuffer);

@@ -119,6 +119,7 @@ struct TabBuffer {
     float desiredCursorX = -1.f;
     std::string pluginSyntax;
     std::string pluginColorScheme;
+    std::string manualSyntaxName;
     bool pluginOwned = false;
 };
 

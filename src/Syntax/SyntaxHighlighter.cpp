@@ -35,26 +35,82 @@ void SyntaxHighlighter::setLanguage(const std::string& ext) {
     language_ = nullptr;
     pluginSyntaxMode_ = PluginSyntaxMode::None;
     useLocalColors_ = false;
-    if (ext == "js" || ext == "jsx" || ext == "ts" || ext == "tsx" || ext == "mjs") { setupJS(); setTreeSitterLanguage("JavaScript", tree_sitter_javascript()); }
-    else if (ext == "py" || ext == "pyw") { setupPython(); setTreeSitterLanguage("Python", tree_sitter_python()); }
-    else if (ext == "c") { setupCPP(); setTreeSitterLanguage("C", tree_sitter_c()); }
-    else if (ext == "cpp" || ext == "cc" || ext == "cxx" || ext == "h" || ext == "hpp" || ext == "hxx") { setupCPP(); setTreeSitterLanguage("C++", tree_sitter_cpp()); }
-    else if (ext == "json") { setupPlainText(); langName_ = "JSON"; language_ = nullptr; }
-    else if (ext == "md" || ext == "markdown") { setupPlainText(); setTreeSitterLanguage("Markdown", tree_sitter_markdown()); }
-    else if (ext == "xml") { setupPlainText(); langName_ = "XML"; }
-    else if (ext == "yml" || ext == "yaml") { setupPlainText(); langName_ = "YAML"; }
-    else if (ext == "toml") { setupPlainText(); langName_ = "TOML"; }
-    else if (ext == "html" || ext == "htm") { setupPlainText(); langName_ = "HTML"; }
-    else if (ext == "css") { setupPlainText(); langName_ = "CSS"; }
+    std::string e = ext;
+    std::transform(e.begin(), e.end(), e.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+    if (e == "js" || e == "jsx" || e == "mjs" || e == "cjs") { setupJS(); setTreeSitterLanguage("JavaScript", tree_sitter_javascript()); }
+    else if (e == "ts" || e == "tsx") { setupJS(); langName_ = "TypeScript"; setTreeSitterLanguage("TypeScript", tree_sitter_javascript()); }
+    else if (e == "py" || e == "pyw") { setupPython(); setTreeSitterLanguage("Python", tree_sitter_python()); }
+    else if (e == "c") { setupCPP(); setTreeSitterLanguage("C", tree_sitter_c()); }
+    else if (e == "cpp" || e == "cc" || e == "cxx" || e == "c++" || e == "hh" || e == "h" || e == "hpp" || e == "hxx" || e == "ipp" || e == "inl") { setupCPP(); setTreeSitterLanguage("C++", tree_sitter_cpp()); }
+    else if (e == "json" || e == "jsonc" || e == "sublime-settings" || e == "sublime-keymap" || e == "sublime-menu" || e == "sublime-build" || e == "sublime-project" || e == "sublime-workspace") { setupGenericCode("JSON"); }
+    else if (e == "md" || e == "markdown") { setupPlainText(); setTreeSitterLanguage("Markdown", tree_sitter_markdown()); }
+    else if (e == "xml" || e == "xsd" || e == "xsl" || e == "svg" || e == "plist") { setupGenericCode("XML"); }
+    else if (e == "yml" || e == "yaml") { setupGenericCode("YAML"); }
+    else if (e == "toml") { setupGenericCode("TOML"); }
+    else if (e == "html" || e == "htm" || e == "xhtml" || e == "shtml") { setupGenericCode("HTML"); }
+    else if (e == "css" || e == "scss" || e == "sass" || e == "less") { setupGenericCode("CSS"); }
+    else if (e == "cs") { setupGenericCode("C#"); }
+    else if (e == "java") { setupGenericCode("Java"); }
+    else if (e == "go" || e == "mod" || e == "sum") { setupGenericCode("Go"); }
+    else if (e == "rs") { setupGenericCode("Rust"); }
+    else if (e == "rb" || e == "rake" || e == "gemspec" || e == "rails") { setupGenericCode("Ruby"); }
+    else if (e == "php" || e == "phtml") { setupGenericCode("PHP"); }
+    else if (e == "lua") { setupGenericCode("Lua"); }
+    else if (e == "sql" || e == "ddl" || e == "dml") { setupGenericCode("SQL"); }
+    else if (e == "sh" || e == "bash" || e == "zsh" || e == "fish" || e == "profile" || e == "bashrc" || e == "shellscript") { setupGenericCode("ShellScript"); }
+    else if (e == "bat" || e == "cmd") { setupGenericCode("Batch File"); }
+    else if (e == "ps1" || e == "psm1" || e == "psd1") { setupGenericCode("PowerShell"); }
+    else if (e == "ini" || e == "cfg" || e == "conf" || e == "config" || e == "editorconfig" || e == "gitconfig" || e == "git" || e == "gitattributes" || e == "gitignore") { setupGenericCode("Generic Config"); }
+    else if (e == "diff" || e == "patch") { setupGenericCode("Diff"); }
+    else if (e == "make" || e == "mk" || e == "mak" || e == "makefile") { setupGenericCode("Makefile"); }
+    else if (e == "cmake") { setupGenericCode("CMake"); }
+    else if (e == "dockerfile") { setupGenericCode("Dockerfile"); }
+    else if (e == "kt" || e == "kts") { setupGenericCode("Kotlin"); }
+    else if (e == "swift") { setupGenericCode("Swift"); }
+    else if (e == "dart") { setupGenericCode("Dart"); }
+    else if (e == "scala" || e == "sc") { setupGenericCode("Scala"); }
+    else if (e == "clj" || e == "cljs" || e == "cljc" || e == "edn") { setupGenericCode("Clojure"); }
+    else if (e == "erl" || e == "hrl") { setupGenericCode("Erlang"); }
+    else if (e == "ex" || e == "exs") { setupGenericCode("Elixir"); }
+    else if (e == "hs" || e == "lhs") { setupGenericCode("Haskell"); }
+    else if (e == "pl" || e == "pm" || e == "t") { setupGenericCode("Perl"); }
+    else if (e == "r") { setupGenericCode("R"); }
+    else if (e == "m" || e == "mm") { setupGenericCode("Objective-C"); }
+    else if (e == "ml" || e == "mli") { setupGenericCode("OCaml"); }
+    else if (e == "pas" || e == "pp" || e == "inc") { setupGenericCode("Pascal"); }
+    else if (e == "d") { setupGenericCode("D"); }
+    else if (e == "groovy" || e == "gradle") { setupGenericCode("Groovy"); }
+    else if (e == "tex" || e == "latex" || e == "ltx") { setupGenericCode("LaTeX"); }
+    else if (e == "lisp" || e == "lsp" || e == "el" || e == "scm") { setupGenericCode("Lisp"); }
+    else if (e == "matlab") { setupGenericCode("MATLAB"); }
+    else if (e == "tcl") { setupGenericCode("TCL"); }
+    else if (e == "graphql" || e == "gql") { setupGenericCode("GraphQL"); }
+    else if (e == "dot" || e == "gv") { setupGenericCode("Graphviz"); }
+    else if (e == "re" || e == "regex" || e == "regexp") { setupGenericCode("Regular Expression"); }
+    else if (e == "rst") { setupGenericCode("reStructuredText"); }
+    else if (e == "textile") { setupGenericCode("Textile"); }
+    else if (e == "as" || e == "as2") { setupGenericCode("ActionScript"); }
+    else if (e == "applescript" || e == "scpt") { setupGenericCode("AppleScript"); }
+    else if (e == "asp") { setupGenericCode("ASP"); }
+    else if (e == "dtd") { setupGenericCode("DTD"); }
+    else if (e == "gscript") { setPluginSyntax("Packages/SublimeRC/GScript.sublime-syntax", ""); }
+    else if (e == "goption") { setPluginSyntax("Packages/SublimeRC/GOption.sublime-syntax", ""); }
     else setupPlainText();
 }
 
 void SyntaxHighlighter::setLanguageByName(const std::string& name) {
     static const struct { const char* name; const char* ext; } map[] = {
-        {"JavaScript","js"},{"Python","py"},{"C++","cpp"},{"C","c"},{"HTML","html"},{"CSS","css"},
-        {"JSON","json"},{"Java","java"},{"Go","go"},{"Rust","rs"},{"Ruby","rb"},{"PHP","php"},
-        {"SQL","sql"},{"Lua","lua"},{"Markdown","md"},{"XML","xml"},{"YAML","yml"},{"TOML","toml"},
-        {"C#","cs"},{"Objective-C","m"},{"Swift","swift"},{"TypeScript","ts"},{"ShellScript","sh"},{"Batch File","bat"},{"Plain Text",""},
+        {"JavaScript","js"},{"TypeScript","ts"},{"Python","py"},{"C++","cpp"},{"C","c"},{"HTML","html"},{"CSS","css"},
+        {"JSON","json"},{"Java","java"},{"Go","go"},{"Rust","rs"},{"Ruby","rb"},{"PHP","php"},{"PowerShell","ps1"},
+        {"SQL","sql"},{"Lua","lua"},{"Markdown","md"},{"XML","xml"},{"YAML","yml"},{"TOML","toml"},{"INI","ini"},
+        {"C#","cs"},{"Objective-C","m"},{"Swift","swift"},{"ShellScript","sh"},{"Batch File","bat"},{"Makefile","makefile"},
+        {"CMake","cmake"},{"Dockerfile","dockerfile"},{"Kotlin","kt"},{"Dart","dart"},{"Scala","scala"},{"Clojure","clj"},
+        {"Erlang","erl"},{"Elixir","ex"},{"Haskell","hs"},{"Perl","pl"},{"R","r"},{"OCaml","ml"},{"Pascal","pas"},
+        {"D","d"},{"Groovy","groovy"},{"LaTeX","tex"},{"Lisp","lisp"},{"MATLAB","matlab"},{"TCL","tcl"},{"GraphQL","graphql"},
+        {"Graphviz","dot"},{"Diff","diff"},{"Generic Config","ini"},{"Git Config","gitconfig"},{"Git Formats","gitattributes"},
+        {"Regular Expression","regex"},{"reStructuredText","rst"},{"Textile","textile"},{"ActionScript","as"},{"ActionScript 2.0","as2"},
+        {"AppleScript","applescript"},{"ASP","asp"},{"DTD","dtd"},{"GScript","gscript"},{"GOption","goption"},{"SublimeRC","gscript"},
+        {"KSP configuration","kts"},{"Rails","rb"},{"Plain Text",""},
     };
     for (auto& m : map) if (name == m.name) { setLanguage(m.ext); return; }
     keywords_.clear(); builtins_.clear(); types_.clear();
