@@ -668,7 +668,11 @@ void Application::rebuildLineIndex() const {
 }
 
 size_t Application::lineStart(size_t pos) const { if (pos == 0) return 0; size_t p = textBuffer.rfind('\n', pos - 1); return p == std::string::npos ? 0 : p + 1; }
-size_t Application::lineEnd(size_t pos) const { size_t p = textBuffer.find('\n', pos); return p == std::string::npos ? textBuffer.size() : p; }
+size_t Application::lineEnd(size_t pos) const {
+    size_t p = textBuffer.find('\n', pos);
+    size_t end = p == std::string::npos ? textBuffer.size() : p;
+    return (end > 0 && textBuffer[end - 1] == '\r') ? end - 1 : end;
+}
 size_t Application::lineStartForLine(size_t line) const {
     rebuildLineIndex();
     if (largeFileGuarded_) {

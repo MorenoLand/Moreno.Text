@@ -305,7 +305,7 @@ float FontAtlas::measureText(std::string_view text) {
     if (it != glyphs_.end()) spaceAdv = it->second.advance;
     for (size_t i = 0; i < text.size();) {
         uint32_t cp = decodeUtf8(text, i);
-        if (cp == '\n' || cp == '\r') { cx = 0; continue; }
+        if (cp == '\n' || cp == '\r') break;
         if (cp == '\t') { cx += spaceAdv * 4; continue; }
         cx += getGlyph(cp).advance;
     }
