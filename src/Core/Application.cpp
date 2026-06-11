@@ -83,6 +83,34 @@ static constexpr const char* kTabContextItems[] = {
 
 static float tabContextMenuWidth(FontAtlas& font);
 
+static size_t nextUtf8Boundary(std::string_view text, size_t i) {
+    if (i >= text.size()) return text.size();
+    unsigned char c = static_cast<unsigned char>(text[i]);
+    size_t step = 1;
+    if (c >= 0xF0) step = 4;
+    else if (c >= 0xE0) step = 3;
+    else if (c >= 0xC0) step = 2;
+    return std::min(text.size(), i + step);
+}
+
+static size_t byteOffsetForRenderedX(FontAtlas& font, std::string_view line, float x) {
+    if (line.empty() || x <= 0.f) return 0;
+    float fullWidth = font.measureText(line);
+    if (x >= fullWidth) return line.size();
+
+    float pen = 0.f;
+    size_t prev = 0;
+    for (size_t i = 0; i < line.size();) {
+        size_t next = nextUtf8Boundary(line, i);
+        float adv = font.measureText(line.substr(i, next - i));
+        if (x < pen + adv * 0.5f) return prev;
+        pen += adv;
+        prev = next;
+        i = next;
+    }
+    return line.size();
+}
+
 #ifdef _WIN32
 static constexpr ULONG_PTR MorenoTabDropCopyDataId = 0x4D545441; // MTTA
 static constexpr const char* MorenoWindowPropName = "MorenoText.MainWindow";
@@ -3274,16 +3302,7 @@ void Application::handleEvents() {
                 if (clickLine >= totalLines()) clickLine = totalLines() - 1;
                 size_t ls = lineStartForLine(clickLine), le = lineEnd(ls);
                 std::string_view lt(textBuffer.data() + ls, le - ls);
-                float charW = std::max(1.f, fontAtlas().measureText(" "));
-                int targetCol = std::max(0, (int)std::floor(((float)e.motion.x - textX + scrollX_) / charW));
-                size_t col = 0; int visualCol = 0;
-                for (size_t i = 0; i < lt.size();) {
-                    uint32_t cp = (uint8_t)lt[i]; int b = 1;
-                    if (cp >= 0xF0) b = 4; else if (cp >= 0xE0) b = 3; else if (cp >= 0xC0) b = 2;
-                    int step = (cp == '\t') ? tabSize_ : 1;
-                    if (visualCol + step > targetCol) break;
-                    visualCol += step; col += b; i += b;
-                }
+                size_t col = byteOffsetForRenderedX(fontAtlas(), lt, (float)e.motion.x - textX + scrollX_);
                 selections_[0].cursor = ls + col;
                 ensureCursorVisible();
                 continue;
@@ -3490,16 +3509,7 @@ void Application::handleEvents() {
                 if (clickLine >= totalLines()) clickLine = totalLines() - 1;
                 size_t ls = lineStartForLine(clickLine), le = lineEnd(ls);
                 std::string_view lt(textBuffer.data() + ls, le - ls);
-                float charW = std::max(1.f, fontAtlas().measureText(" "));
-                int targetCol = std::max(0, (int)std::floor((mx - textX + scrollX_) / charW));
-                size_t col = 0; int visualCol = 0;
-                for (size_t i = 0; i < lt.size(); ) {
-                    uint32_t cp = (uint8_t)lt[i]; int b = 1;
-                    if (cp >= 0xF0) b = 4; else if (cp >= 0xE0) b = 3; else if (cp >= 0xC0) b = 2;
-                    int step = (cp == '\t') ? tabSize_ : 1;
-                    if (visualCol + step > targetCol) break;
-                    visualCol += step; col += b; i += b;
-                }
+                size_t col = byteOffsetForRenderedX(fontAtlas(), lt, mx - textX + scrollX_);
                 size_t clickPos = ls + col;
                 if (mod & KMOD_CTRL) { selections_.emplace_back(clickPos); }
                 else if (mod & KMOD_ALT) {
