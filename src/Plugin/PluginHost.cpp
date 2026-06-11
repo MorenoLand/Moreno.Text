@@ -8,6 +8,7 @@
 #include <regex>
 #include <sstream>
 #include <set>
+#include <zlib.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -16,13 +17,144 @@
 
 namespace fs = std::filesystem;
 
-std::string PluginHost::legacyApiName() { return std::string("sub") + "lime"; }
+static uint16_t le16(const std::vector<unsigned char>& data, size_t off) {
+    if (off + 2 > data.size()) return 0;
+    return static_cast<uint16_t>(data[off] | (data[off + 1] << 8));
+}
 
-std::vector<PluginHost::Script> PluginHost::discoverScripts(const std::string& packagesDir) {
-    std::vector<Script> scripts;
+static uint32_t le32(const std::vector<unsigned char>& data, size_t off) {
+    if (off + 4 > data.size()) return 0;
+    return static_cast<uint32_t>(data[off] | (data[off + 1] << 8) | (data[off + 2] << 16) | (data[off + 3] << 24));
+}
+
+static bool isSafeZipPath(const std::string& name) {
+    if (name.empty() || name[0] == '/' || name[0] == '\\') return false;
+    fs::path p(name);
+    for (const auto& part : p) {
+        if (part == "..") return false;
+    }
+    return true;
+}
+
+static bool inflateRawDeflate(const unsigned char* src, size_t srcLen, std::vector<unsigned char>& out) {
+    z_stream zs{};
+    zs.next_in = const_cast<Bytef*>(reinterpret_cast<const Bytef*>(src));
+    zs.avail_in = static_cast<uInt>(srcLen);
+    zs.next_out = reinterpret_cast<Bytef*>(out.data());
+    zs.avail_out = static_cast<uInt>(out.size());
+    if (inflateInit2(&zs, -MAX_WBITS) != Z_OK) return false;
+    int rc = inflate(&zs, Z_FINISH);
+    inflateEnd(&zs);
+    return rc == Z_STREAM_END;
+}
+
+static bool extractZipToDirectory(const fs::path& zipPath, const fs::path& outDir) {
+    std::ifstream in(zipPath, std::ios::binary);
+    if (!in) return false;
+    std::vector<unsigned char> data((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    if (data.size() < 22) return false;
+
+    size_t eocd = std::string::npos;
+    size_t minOff = data.size() > 0x10000 + 22 ? data.size() - (0x10000 + 22) : 0;
+    for (size_t off = data.size() - 22; off + 4 <= data.size() && off >= minOff; --off) {
+        if (le32(data, off) == 0x06054b50) { eocd = off; break; }
+        if (off == 0) break;
+    }
+    if (eocd == std::string::npos) return false;
+
+    uint32_t cdSize = le32(data, eocd + 12);
+    uint32_t cdOff = le32(data, eocd + 16);
+    if (cdOff > data.size() || cdOff + cdSize > data.size()) return false;
+
+    fs::create_directories(outDir);
+    size_t p = cdOff;
+    while (p + 46 <= data.size() && p < cdOff + cdSize) {
+        if (le32(data, p) != 0x02014b50) return false;
+        uint16_t flags = le16(data, p + 8);
+        uint16_t method = le16(data, p + 10);
+        uint32_t compSize = le32(data, p + 20);
+        uint32_t uncompSize = le32(data, p + 24);
+        uint16_t nameLen = le16(data, p + 28);
+        uint16_t extraLen = le16(data, p + 30);
+        uint16_t commentLen = le16(data, p + 32);
+        uint32_t localOff = le32(data, p + 42);
+        if (p + 46 + nameLen + extraLen + commentLen > data.size()) return false;
+        std::string name(reinterpret_cast<const char*>(&data[p + 46]), nameLen);
+        p += 46 + nameLen + extraLen + commentLen;
+        if (name.empty() || name.back() == '/' || name.back() == '\\') continue;
+        if ((flags & 1) != 0 || !isSafeZipPath(name)) continue;
+        if (localOff + 30 > data.size() || le32(data, localOff) != 0x04034b50) return false;
+        uint16_t localNameLen = le16(data, localOff + 26);
+        uint16_t localExtraLen = le16(data, localOff + 28);
+        size_t dataOff = localOff + 30 + localNameLen + localExtraLen;
+        if (dataOff > data.size() || dataOff + compSize > data.size()) return false;
+        std::vector<unsigned char> out(uncompSize);
+        if (method == 0) {
+            if (compSize != uncompSize) return false;
+            std::copy(data.begin() + dataOff, data.begin() + dataOff + compSize, out.begin());
+        } else if (method == 8) {
+            if (!inflateRawDeflate(data.data() + dataOff, compSize, out)) return false;
+        } else {
+            continue;
+        }
+        fs::path target = outDir / fs::path(name);
+        fs::create_directories(target.parent_path());
+        std::ofstream file(target, std::ios::binary | std::ios::trunc);
+        if (!file) return false;
+        file.write(reinterpret_cast<const char*>(out.data()), static_cast<std::streamsize>(out.size()));
+    }
+    return true;
+}
+
+static std::string packageNameFromSublimePackage(const fs::path& path) {
+    std::string name = path.filename().string();
+    const std::string suffix = ".sublime-package";
+    if (name.size() > suffix.size() && name.substr(name.size() - suffix.size()) == suffix) {
+        name.resize(name.size() - suffix.size());
+    }
+    return name;
+}
+
+static std::vector<fs::path> materializeInstalledPackages(const std::string& packagesDir) {
+    std::vector<fs::path> dirs;
     try {
-        if (!fs::exists(packagesDir)) return scripts;
-        for (auto& packageEntry : fs::directory_iterator(packagesDir)) {
+        fs::path dataDir = fs::path(packagesDir).parent_path();
+        fs::path installedDir = dataDir / "Installed Packages";
+        fs::path cacheRoot = dataDir / "Cache" / "Installed Packages";
+        if (!fs::exists(installedDir)) return dirs;
+        fs::create_directories(cacheRoot);
+        for (auto& entry : fs::directory_iterator(installedDir)) {
+            if (!entry.is_regular_file() || entry.path().extension() != ".sublime-package") continue;
+            std::string package = packageNameFromSublimePackage(entry.path());
+            if (package.empty()) continue;
+            fs::path outDir = cacheRoot / package;
+            fs::path stamp = outDir / ".moreno_zip_stamp";
+            auto zipSize = fs::file_size(entry.path());
+            auto zipTime = fs::last_write_time(entry.path()).time_since_epoch().count();
+            std::string expected = std::to_string(zipSize) + ":" + std::to_string(zipTime);
+            bool fresh = false;
+            if (fs::exists(stamp)) {
+                std::ifstream sf(stamp, std::ios::binary);
+                std::string got;
+                std::getline(sf, got);
+                fresh = got == expected;
+            }
+            if (!fresh) {
+                fs::remove_all(outDir);
+                if (!extractZipToDirectory(entry.path(), outDir)) continue;
+                std::ofstream sf(stamp, std::ios::binary | std::ios::trunc);
+                sf << expected;
+            }
+            if (fs::exists(outDir)) dirs.push_back(outDir);
+        }
+    } catch (...) {}
+    return dirs;
+}
+
+static void discoverScriptsInPackageDir(const fs::path& packageRoot, std::vector<PluginHost::Script>& scripts) {
+    try {
+        if (!fs::exists(packageRoot)) return;
+        for (auto& packageEntry : fs::directory_iterator(packageRoot)) {
             if (!packageEntry.is_directory()) continue;
             std::string package = packageEntry.path().filename().string();
             if (package == "User") continue;
@@ -32,6 +164,60 @@ std::vector<PluginHost::Script> PluginHost::discoverScripts(const std::string& p
             }
         }
     } catch (...) {}
+}
+
+static void discoverCommandPaletteEntriesInPackageDir(const fs::path& packageRoot, std::vector<PluginHost::Command>& commands) {
+    try {
+        if (!fs::exists(packageRoot)) return;
+        for (auto& packageEntry : fs::directory_iterator(packageRoot)) {
+            if (!packageEntry.is_directory()) continue;
+            fs::path commandFile = packageEntry.path() / (std::string("Default.") + std::string("sub") + "lime-commands");
+            if (!fs::exists(commandFile)) continue;
+            std::ifstream f(commandFile, std::ios::binary);
+            if (!f) continue;
+            nlohmann::json j;
+            f >> j;
+            if (!j.is_array()) continue;
+            for (auto& entry : j) {
+                if (!entry.is_object()) continue;
+                std::string name = entry.value("command", "");
+                std::string caption = entry.value("caption", "");
+                if (name.empty()) continue;
+                if (caption.empty()) caption = PluginHost::commandCaptionFromName(name);
+                commands.push_back({caption, name, commandFile.string()});
+            }
+        }
+    } catch (...) {}
+}
+
+std::string PluginHost::legacyApiName() { return std::string("sub") + "lime"; }
+
+std::vector<PluginHost::Script> PluginHost::discoverScripts(const std::string& packagesDir) {
+    std::vector<Script> scripts;
+    discoverScriptsInPackageDir(packagesDir, scripts);
+    materializeInstalledPackages(packagesDir);
+    size_t packedStart = scripts.size();
+    fs::path dataDir = fs::path(packagesDir).parent_path();
+    fs::path cacheRoot = dataDir / "Cache" / "Installed Packages";
+    fs::path installedDir = dataDir / "Installed Packages";
+    discoverScriptsInPackageDir(cacheRoot, scripts);
+    for (size_t i = packedStart; i < scripts.size(); ++i) {
+        try {
+            fs::path scriptPath = scripts[i].path;
+            fs::path rel = fs::relative(scriptPath, cacheRoot);
+            if (rel.empty()) continue;
+            auto it = rel.begin();
+            if (it == rel.end()) continue;
+            fs::path package = *it++;
+            fs::path inner;
+            for (; it != rel.end(); ++it) inner /= *it;
+            fs::path archive = installedDir / (package.string() + ".sublime-package");
+            if (!inner.empty() && fs::exists(archive)) {
+                scripts[i].archive = archive.string();
+                scripts[i].relativePath = inner.generic_string();
+            }
+        } catch (...) {}
+    }
     return scripts;
 }
 
@@ -130,27 +316,9 @@ static void writePluginHostPid(const PluginHostPaths& paths, DWORD pid) {
 
 std::vector<PluginHost::Command> PluginHost::discoverCommandPaletteEntries(const std::string& packagesDir) {
     std::vector<Command> commands;
-    try {
-        if (!fs::exists(packagesDir)) return commands;
-        for (auto& packageEntry : fs::directory_iterator(packagesDir)) {
-            if (!packageEntry.is_directory()) continue;
-            fs::path commandFile = packageEntry.path() / ("Default." + legacyApiName() + "-commands");
-            if (!fs::exists(commandFile)) continue;
-            std::ifstream f(commandFile, std::ios::binary);
-            if (!f) continue;
-            nlohmann::json j;
-            f >> j;
-            if (!j.is_array()) continue;
-            for (auto& entry : j) {
-                if (!entry.is_object()) continue;
-                std::string name = entry.value("command", "");
-                std::string caption = entry.value("caption", "");
-                if (name.empty()) continue;
-                if (caption.empty()) caption = commandCaptionFromName(name);
-                commands.push_back({caption, name, commandFile.string()});
-            }
-        }
-    } catch (...) {}
+    discoverCommandPaletteEntriesInPackageDir(packagesDir, commands);
+    materializeInstalledPackages(packagesDir);
+    discoverCommandPaletteEntriesInPackageDir(fs::path(packagesDir).parent_path() / "Cache" / "Installed Packages", commands);
     return commands;
 }
 
@@ -213,29 +381,80 @@ bool PluginHost::writeBootstrapFiles(const PluginHostPaths& paths) {
               << "    if kwargs.get('daemon') is True: kwargs['daemon'] = False\n"
               << "    _thread_init(self, *args, **kwargs)\n"
               << "threading.Thread.__init__ = _moreno_thread_init\n"
+              << "def version(): return '4205'\n"
+              << "def platform():\n"
+              << "    return 'windows' if sys.platform.startswith('win') else ('osx' if sys.platform == 'darwin' else 'linux')\n"
+              << "def arch(): return 'x64' if sys.maxsize > 2**32 else 'x32'\n"
+              << "def executable_path(): return os.environ.get('MORENO_EXE_PATH', '')\n"
               << "def packages_path(): return os.environ.get('MORENO_PACKAGES_DIR', '')\n"
               << "def installed_packages_path(): return os.environ.get('MORENO_INSTALLED_PACKAGES_PATH', '')\n"
               << "def cache_path(): return os.environ.get('MORENO_CACHE_PATH', '')\n"
-              << "def _settings_candidates(name):\n"
-              << "    pkgs=packages_path(); out=[]\n"
-              << "    if pkgs:\n"
-              << "        out.append(os.path.join(pkgs, 'User', name))\n"
-              << "        for pkg in os.listdir(pkgs) if os.path.isdir(pkgs) else []:\n"
-              << "            out.append(os.path.join(pkgs, pkg, name))\n"
-              << "    return out\n"
-              << "def _load_json_with_comments(path):\n"
-              << "    text=open(path, 'r', encoding='utf-8').read(); out=[]\n"
-              << "    in_str=False; esc=False; i=0\n"
+              << "def _package_roots():\n"
+              << "    roots=[]; pkgs=packages_path(); cache=cache_path()\n"
+              << "    if pkgs: roots.append(pkgs)\n"
+              << "    if cache: roots.append(os.path.join(cache, 'Installed Packages'))\n"
+              << "    return roots\n"
+              << "def _resource_path(name):\n"
+              << "    if name.startswith('Packages/'):\n"
+              << "        parts=name.split('/', 2)\n"
+              << "        if len(parts) == 3:\n"
+              << "            for root in _package_roots():\n"
+              << "                p=os.path.join(root, parts[1], parts[2])\n"
+              << "                if os.path.exists(p): return p\n"
+              << "    return ''\n"
+              << "def load_resource(name):\n"
+              << "    p=_resource_path(name)\n"
+              << "    if not p: raise FileNotFoundError(name)\n"
+              << "    return open(p, 'r', encoding='utf-8').read()\n"
+              << "def find_resources(pattern):\n"
+              << "    import fnmatch\n"
+              << "    found=[]\n"
+              << "    for root in _package_roots():\n"
+              << "        if not os.path.isdir(root): continue\n"
+              << "        for pkg in os.listdir(root):\n"
+              << "            pkg_dir=os.path.join(root, pkg)\n"
+              << "            if not os.path.isdir(pkg_dir): continue\n"
+              << "            for base, _, files in os.walk(pkg_dir):\n"
+              << "                for file in files:\n"
+              << "                    rel=os.path.relpath(os.path.join(base, file), pkg_dir).replace(os.sep, '/')\n"
+              << "                    if fnmatch.fnmatch(file, pattern) or fnmatch.fnmatch(rel, pattern): found.append('Packages/' + pkg + '/' + rel)\n"
+              << "    return found\n"
+              << "def _strip_json_comments(text):\n"
+              << "    out=[]; in_str=False; esc=False; i=0\n"
               << "    while i < len(text):\n"
               << "        ch=text[i]\n"
               << "        if in_str:\n"
-              << "            out.append(ch); esc=(ch=='\\\\' and not esc); in_str = False if (ch=='\"' and not esc) else in_str; i+=1; continue\n"
+              << "            out.append(ch)\n"
+              << "            if esc: esc=False\n"
+              << "            elif ch=='\\\\': esc=True\n"
+              << "            elif ch=='\"': in_str=False\n"
+              << "            i+=1; continue\n"
               << "        if ch=='\"': in_str=True; out.append(ch); i+=1; continue\n"
               << "        if ch=='/' and i+1 < len(text) and text[i+1]=='/':\n"
               << "            while i < len(text) and text[i] not in '\\r\\n': i+=1\n"
               << "            continue\n"
+              << "        if ch=='/' and i+1 < len(text) and text[i+1]=='*':\n"
+              << "            i+=2\n"
+              << "            while i+1 < len(text) and not (text[i]=='*' and text[i+1]=='/'):\n"
+              << "                i+=1\n"
+              << "            i+=2; continue\n"
               << "        out.append(ch); i+=1\n"
-              << "    return json.loads(''.join(out))\n"
+              << "    import re\n"
+              << "    return re.sub(r',\\s*([}\\]])', r'\\1', ''.join(out))\n"
+              << "def decode_value(text): return json.loads(_strip_json_comments(text))\n"
+              << "def _settings_candidates(name):\n"
+              << "    pkgs=packages_path(); cache=cache_path(); out=[]\n"
+              << "    if pkgs:\n"
+              << "        out.append(os.path.join(pkgs, 'User', name))\n"
+              << "        for pkg in os.listdir(pkgs) if os.path.isdir(pkgs) else []:\n"
+              << "            out.append(os.path.join(pkgs, pkg, name))\n"
+              << "    if cache:\n"
+              << "        root=os.path.join(cache, 'Installed Packages')\n"
+              << "        for pkg in os.listdir(root) if os.path.isdir(root) else []:\n"
+              << "            out.append(os.path.join(root, pkg, name))\n"
+              << "    return out\n"
+              << "def _load_json_with_comments(path):\n"
+              << "    return decode_value(open(path, 'r', encoding='utf-8').read())\n"
               << "class Settings:\n"
               << "    def __init__(self, name): self.name=name; self.data={}; self._load()\n"
               << "    def _load(self):\n"
@@ -263,9 +482,13 @@ bool PluginHost::writeBootstrapFiles(const PluginHostPaths& paths) {
               << "def set_timeout(fn, delay=0):\n"
               << "    if delay <= 0: fn(); return None\n"
               << "    t=threading.Timer(delay/1000.0, fn); t.daemon=True; t.start(); _timers.append(t); return t\n"
+              << "def set_timeout_async(fn, delay=0): return set_timeout(fn, delay)\n"
               << "def cancel_timeout(timer):\n"
               << "    try: timer.cancel()\n"
               << "    except Exception: pass\n"
+              << "def select_folder_dialog(on_done, on_cancel=None, directory=''):\n"
+              << "    if on_cancel: on_cancel()\n"
+              << "    return None\n"
               << "_view_registry = {}\n"
               << "def _invalidate_view_id(view_id):\n"
               << "    view=_view_registry.pop(int(view_id), None)\n"
@@ -522,6 +745,9 @@ bool PluginHost::writeBootstrapFiles(const PluginHostPaths& paths) {
               << "_active_window = Window()\n"
               << "def active_window(): return _active_window\n"
               << "def windows(): return []\n"
+              << "class QuickPanelItem:\n"
+              << "    def __init__(self, trigger='', details='', annotation='', kind=None): self.trigger=str(trigger); self.details=str(details); self.annotation=str(annotation); self.kind=kind\n"
+              << "    def __str__(self): return self.trigger\n"
               << "class CompletionItem:\n"
               << "    @staticmethod\n"
               << "    def snippet_completion(trigger, annotation='', completion='', completion_format=None, kind=None, details=''): return (trigger, completion)\n"
@@ -552,7 +778,7 @@ bool PluginHost::writeBootstrapFiles(const PluginHostPaths& paths) {
         {
             std::ofstream f(lib / "moreno_plugin_bootstrap.py", std::ios::binary);
             if (!f) return false;
-            f << "import importlib.util, os, sys, traceback\n"
+            f << "import importlib.util, os, sys, traceback, types, zipimport\n"
               << "_log=os.environ.get('MORENO_CONSOLE_LOG','')\n"
               << "if _log:\n"
               << "    os.makedirs(os.path.dirname(_log), exist_ok=True)\n"
@@ -561,15 +787,43 @@ bool PluginHost::writeBootstrapFiles(const PluginHostPaths& paths) {
               << "sys.path.insert(0, os.environ['MORENO_API_PATH'])\n"
               << "for p in os.environ.get('MORENO_PACKAGE_PATHS','').split(os.pathsep):\n"
               << "    if p and p not in sys.path: sys.path.insert(0,p)\n"
-              << "for script in os.environ.get('MORENO_PLUGIN_SCRIPTS','').split(os.pathsep):\n"
-              << "    if not script: continue\n"
-              << "    name='moreno_package_' + str(abs(hash(script)))\n"
+              << "for item in os.environ.get('MORENO_PLUGIN_SCRIPTS','').split(os.pathsep):\n"
+              << "    if not item: continue\n"
+              << "    archive=''; rel=''\n"
+              << "    if '\\t' in item:\n"
+              << "        parts=item.split('\\t')\n"
+              << "        package=parts[0]; script=parts[1] if len(parts)>1 else ''\n"
+              << "        archive=parts[2] if len(parts)>2 else ''\n"
+              << "        rel=parts[3] if len(parts)>3 else ''\n"
+              << "    else:\n"
+              << "        script=item; package=os.path.basename(os.path.dirname(script))\n"
+              << "    module_name=os.path.splitext(os.path.basename(rel or script))[0]\n"
+              << "    name=package + '.' + module_name\n"
               << "    try:\n"
-              << "        print('reloading plugin ' + os.path.basename(os.path.dirname(script)) + '.' + os.path.splitext(os.path.basename(script))[0])\n"
-              << "        spec=importlib.util.spec_from_file_location(name, script)\n"
-              << "        mod=importlib.util.module_from_spec(spec)\n"
-              << "        sys.modules[name]=mod\n"
-              << "        spec.loader.exec_module(mod)\n"
+              << "        print('reloading plugin ' + package + '.' + module_name)\n"
+              << "        if package and package not in sys.modules:\n"
+              << "            pkg_mod=types.ModuleType(package)\n"
+              << "            pkg_mod.__path__=[archive or os.path.dirname(script)]\n"
+              << "            pkg_mod.__package__=package\n"
+              << "            pkg_mod.__file__=archive or os.path.dirname(script)\n"
+              << "            sys.modules[package]=pkg_mod\n"
+              << "        if archive:\n"
+              << "            zmod=os.path.splitext(rel.replace('\\\\','/'))[0].replace('/','.')\n"
+              << "            loader=zipimport.zipimporter(archive)\n"
+              << "            code=loader.get_code(zmod)\n"
+              << "            mod=types.ModuleType(name)\n"
+              << "            mod.__loader__=loader\n"
+              << "            mod.__file__=loader.get_filename(zmod)\n"
+              << "            mod.__spec__=importlib.util.spec_from_loader(name, loader, origin=mod.__file__)\n"
+              << "            mod.__package__=package\n"
+              << "            sys.modules[name]=mod\n"
+              << "            exec(code, mod.__dict__)\n"
+              << "        else:\n"
+              << "            spec=importlib.util.spec_from_file_location(name, script)\n"
+              << "            mod=importlib.util.module_from_spec(spec)\n"
+              << "            mod.__package__=package\n"
+              << "            sys.modules[name]=mod\n"
+              << "            spec.loader.exec_module(mod)\n"
               << "        cb=getattr(mod,'plugin_loaded',None)\n"
               << "        if cb: cb()\n"
               << "        print('[plugin-loaded]', script)\n"
@@ -663,8 +917,8 @@ void PluginHost::launchHost(const PluginHostPaths& paths, const std::string& com
     std::string scriptList, packageList;
     for (auto& script : scripts) {
         if (!scriptList.empty()) scriptList += ';';
-        scriptList += script.path;
-        fs::path packageDir = fs::path(script.path).parent_path();
+        scriptList += script.package + "\t" + script.path + "\t" + script.archive + "\t" + script.relativePath;
+        fs::path packageDir = script.archive.empty() ? fs::path(script.path).parent_path() : fs::path(script.archive);
         std::string packagePath = packageDir.string();
         if (packageList.find(packagePath) == std::string::npos) {
             if (!packageList.empty()) packageList += ';';
@@ -688,7 +942,13 @@ void PluginHost::launchHost(const PluginHostPaths& paths, const std::string& com
         appendLog("[plugin-host] missing bundled host: " + host.string());
         return;
     }
+    fs::create_directories(fs::path(paths.exeDir) / "Packages");
+    appendLog("[plugin-host] loading " + std::to_string(scripts.size()) + " plugin scripts");
+    for (const auto& script : scripts) {
+        if (script.package == "Package Control") appendLog("[plugin-host] found Package Control: " + script.path);
+    }
     if (persistent) stopPreviousPluginHost(paths, host, appendLog);
+    SetEnvironmentVariableA("MORENO_EXE_PATH", (fs::path(paths.exeDir) / "moreno_text.exe").string().c_str());
     SetEnvironmentVariableA("MORENO_API_PATH", (fs::path(paths.libDir) / "python38").string().c_str());
     SetEnvironmentVariableA("MORENO_PACKAGES_DIR", paths.packagesDir.c_str());
     SetEnvironmentVariableA("MORENO_PACKAGES_PATH", paths.packagesDir.c_str());

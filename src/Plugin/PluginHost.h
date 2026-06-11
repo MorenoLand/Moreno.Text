@@ -12,6 +12,8 @@ public:
     struct Script {
         std::string package;
         std::string path;
+        std::string archive;
+        std::string relativePath;
     };
     struct Command {
         std::string caption;

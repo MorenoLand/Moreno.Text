@@ -1702,6 +1702,8 @@ void Application::switchToTab(size_t index) {
 
 void Application::closeTabNow(size_t index) {
     if (index >= tabs_.size()) return;
+    size_t oldActiveGroup = activeGroup_;
+    size_t oldGroupCount = editorGroups_.size();
     bool pluginTab = tabs_[index].pluginOwned || tabs_[index].filePath.rfind("plugin://view/", 0) == 0;
     if (pluginTab) {
         try {
@@ -1715,12 +1717,35 @@ void Application::closeTabNow(size_t index) {
         if (closedTabStack_.size() > 10) closedTabStack_.erase(closedTabStack_.begin());
     }
     tabs_.erase(tabs_.begin() + index);
-    for (auto& group : editorGroups_) {
-        if (group.tab > index) --group.tab;
-        else if (group.tab == index) group.tab = activeTab_ >= tabs_.size() ? tabs_.size() - 1 : activeTab_;
+    if (tabs_.empty()) {
+        editorGroups_.clear();
+        activeGroup_ = 0;
+        newBuffer();
+        return;
     }
-    if (tabs_.empty()) { newBuffer(); return; }
-    if (activeTab_ >= tabs_.size()) activeTab_ = tabs_.size()-1;
+
+    size_t fallbackTab = activeTab_;
+    if (fallbackTab > index) --fallbackTab;
+    else if (fallbackTab == index) fallbackTab = std::min(index, tabs_.size() - 1);
+    if (fallbackTab >= tabs_.size()) fallbackTab = tabs_.size() - 1;
+
+    std::vector<EditorGroup> groups;
+    groups.reserve(editorGroups_.size());
+    size_t mappedActiveGroup = (size_t)-1;
+    for (size_t gi = 0; gi < editorGroups_.size(); ++gi) {
+        EditorGroup group = editorGroups_[gi];
+        bool closingGroupTab = group.tab == index;
+        if (closingGroupTab && oldGroupCount > 1) continue;
+        if (group.tab > index) --group.tab;
+        else if (closingGroupTab) group.tab = fallbackTab;
+        if (group.tab >= tabs_.size()) group.tab = tabs_.size() - 1;
+        if (gi == oldActiveGroup) mappedActiveGroup = groups.size();
+        groups.push_back(group);
+    }
+    if (groups.empty()) groups.push_back({fallbackTab});
+    editorGroups_ = std::move(groups);
+    activeGroup_ = mappedActiveGroup != (size_t)-1 ? mappedActiveGroup : std::min(oldActiveGroup, editorGroups_.size() - 1);
+    activeTab_ = editorGroups_[activeGroup_].tab;
     normalizeEditorGroups();
     loadTab(activeTab_);
     saveSession();

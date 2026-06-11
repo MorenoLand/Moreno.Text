@@ -1,8 +1,56 @@
 #include "Plugin/PluginHost.h"
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <string>
+#include <vector>
 
 namespace fs = std::filesystem;
+
+static void put16(std::vector<unsigned char>& out, uint16_t v) {
+    out.push_back(static_cast<unsigned char>(v & 0xff));
+    out.push_back(static_cast<unsigned char>((v >> 8) & 0xff));
+}
+
+static void put32(std::vector<unsigned char>& out, uint32_t v) {
+    out.push_back(static_cast<unsigned char>(v & 0xff));
+    out.push_back(static_cast<unsigned char>((v >> 8) & 0xff));
+    out.push_back(static_cast<unsigned char>((v >> 16) & 0xff));
+    out.push_back(static_cast<unsigned char>((v >> 24) & 0xff));
+}
+
+static void writeStoredZip(const fs::path& path, const std::vector<std::pair<std::string, std::string>>& files) {
+    std::vector<unsigned char> out;
+    struct Central { std::string name; uint32_t offset; uint32_t size; };
+    std::vector<Central> central;
+    for (const auto& [name, content] : files) {
+        uint32_t offset = static_cast<uint32_t>(out.size());
+        put32(out, 0x04034b50); put16(out, 20); put16(out, 0); put16(out, 0);
+        put16(out, 0); put16(out, 0); put32(out, 0);
+        put32(out, static_cast<uint32_t>(content.size()));
+        put32(out, static_cast<uint32_t>(content.size()));
+        put16(out, static_cast<uint16_t>(name.size())); put16(out, 0);
+        out.insert(out.end(), name.begin(), name.end());
+        out.insert(out.end(), content.begin(), content.end());
+        central.push_back({name, offset, static_cast<uint32_t>(content.size())});
+    }
+    uint32_t centralOffset = static_cast<uint32_t>(out.size());
+    for (const auto& item : central) {
+        put32(out, 0x02014b50); put16(out, 20); put16(out, 20); put16(out, 0); put16(out, 0);
+        put16(out, 0); put16(out, 0); put32(out, 0); put32(out, item.size); put32(out, item.size);
+        put16(out, static_cast<uint16_t>(item.name.size())); put16(out, 0); put16(out, 0);
+        put16(out, 0); put16(out, 0); put32(out, 0); put32(out, item.offset);
+        out.insert(out.end(), item.name.begin(), item.name.end());
+    }
+    uint32_t centralSize = static_cast<uint32_t>(out.size()) - centralOffset;
+    put32(out, 0x06054b50); put16(out, 0); put16(out, 0);
+    put16(out, static_cast<uint16_t>(central.size()));
+    put16(out, static_cast<uint16_t>(central.size()));
+    put32(out, centralSize); put32(out, centralOffset); put16(out, 0);
+    fs::create_directories(path.parent_path());
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    f.write(reinterpret_cast<const char*>(out.data()), static_cast<std::streamsize>(out.size()));
+}
 
 int main() {
     fs::path base = fs::temp_directory_path() / "moreno_pluginhost_test";
@@ -28,6 +76,19 @@ int main() {
     commands = PluginHost::discoverCommands(scripts);
     if (commands.size() != 2 || commands[0].caption != "RC: Connect to GServer" || commands[0].name != "rc_connect_server") return 6;
     if (commands[1].caption != "RC: Refresh Servers" || commands[1].name != "rc_refresh_servers") return 7;
+    fs::remove_all(base / "Packages" / "Example");
+    writeStoredZip(base / "Installed Packages" / "ZipPkg.sublime-package", {
+        {"plugin.py", "import sublime_plugin\nclass ZipInstallCommand(sublime_plugin.WindowCommand):\n    def run(self): pass\n"},
+        {"Default.sublime-commands", "[{\"caption\":\"Package Control: Install Package\",\"command\":\"install_package\"}]"}
+    });
+    scripts = PluginHost::discoverScripts((base / "Packages").string());
+    bool foundZipScript = false;
+    for (const auto& script : scripts) if (script.package == "ZipPkg" && fs::path(script.path).filename() == "plugin.py") foundZipScript = true;
+    if (!foundZipScript) return 17;
+    commands = PluginHost::discoverCommands(scripts);
+    bool foundZipCommand = false;
+    for (const auto& command : commands) if (command.caption == "Package Control: Install Package" && command.name == "install_package") foundZipCommand = true;
+    if (!foundZipCommand) return 18;
     PluginHostPaths paths;
     paths.exeDir = (base / "Bin").string();
     paths.dataDir = (base / "Data").string();
