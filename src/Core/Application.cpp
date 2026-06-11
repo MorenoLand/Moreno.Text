@@ -2199,7 +2199,7 @@ static float tabContextMenuWidth(FontAtlas& font) {
         if (!item || !item[0]) continue;
         maxTextW = std::max(maxTextW, font.measureText(item));
     }
-    return std::clamp(maxTextW + 32.f, 260.f, 460.f);
+    return std::clamp(maxTextW + 72.f, 300.f, 520.f);
 }
 
 void Application::updateCommandPalette() {
