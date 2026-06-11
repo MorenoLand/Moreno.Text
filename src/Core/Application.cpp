@@ -67,6 +67,24 @@ namespace fs = std::filesystem;
 #ifdef _WIN32
 static constexpr ULONG_PTR MorenoTabDropCopyDataId = 0x4D545441; // MTTA
 static constexpr const char* MorenoWindowPropName = "MorenoText.MainWindow";
+
+struct MorenoDropTargetSearch {
+    POINT point{};
+    HWND own = nullptr;
+    HWND found = nullptr;
+};
+
+static BOOL CALLBACK findMorenoDropTargetProc(HWND hwnd, LPARAM lParam) {
+    auto* search = reinterpret_cast<MorenoDropTargetSearch*>(lParam);
+    if (!search || hwnd == search->own || !IsWindowVisible(hwnd) || IsIconic(hwnd)) return TRUE;
+    if (!GetPropA(hwnd, MorenoWindowPropName)) return TRUE;
+    RECT rect{};
+    if (!GetWindowRect(hwnd, &rect) || !PtInRect(&rect, search->point)) return TRUE;
+    int localY = search->point.y - rect.top;
+    if (localY < 28 || localY > 82) return TRUE;
+    search->found = hwnd;
+    return FALSE;
+}
 #endif
 
 static std::string readLargeFileWindow(FileBackedBuffer& buffer, size_t startLine, uint64_t maxBytes,
@@ -1641,16 +1659,13 @@ bool Application::detachTabToExistingWindow(size_t index) {
     if (index >= tabs_.size()) return false;
     int globalX = 0, globalY = 0;
     SDL_GetGlobalMouseState(&globalX, &globalY);
-    POINT pt{globalX, globalY};
-    HWND target = WindowFromPoint(pt);
     HWND own = reinterpret_cast<HWND>(nativeWindowHandle_);
-    while (target && target != own && !GetPropA(target, MorenoWindowPropName)) target = GetParent(target);
-    if (!target || target == own || !GetPropA(target, MorenoWindowPropName)) return false;
-
-    RECT rect{};
-    if (!GetWindowRect(target, &rect)) return false;
-    int localY = globalY - rect.top;
-    if (localY < 28 || localY > 82) return false;
+    MorenoDropTargetSearch search{};
+    search.point = POINT{globalX, globalY};
+    search.own = own;
+    EnumWindows(findMorenoDropTargetProc, reinterpret_cast<LPARAM>(&search));
+    HWND target = search.found;
+    if (!target) return false;
 
     fs::path detachDir = fs::path(paths_.localDir) / "DetachedTabs";
     fs::create_directories(detachDir);
@@ -1667,8 +1682,12 @@ bool Application::detachTabToExistingWindow(size_t index) {
     cds.cbData = static_cast<DWORD>(handoffText.size() + 1);
     cds.lpData = handoffText.data();
     DWORD_PTR result = 0;
-    SendMessageTimeoutA(target, WM_COPYDATA, reinterpret_cast<WPARAM>(own), reinterpret_cast<LPARAM>(&cds),
-                        SMTO_ABORTIFHUNG, 1000, &result);
+    if (!SendMessageTimeoutA(target, WM_COPYDATA, reinterpret_cast<WPARAM>(own), reinterpret_cast<LPARAM>(&cds),
+                             SMTO_ABORTIFHUNG, 1000, &result)) {
+        std::error_code ec;
+        fs::remove(handoff, ec);
+        return false;
+    }
 
     for (int i = 0; i < 20 && fs::exists(handoff); ++i) SDL_Delay(10);
     if (!fs::exists(handoff)) return true;
