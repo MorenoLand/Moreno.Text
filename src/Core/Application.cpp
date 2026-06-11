@@ -784,12 +784,27 @@ void Application::ensureCursorVisible() {
     float tbH = titlebar_->height() + tabBarH_;
     float lineStep = fontAtlas().lineHeight();
     float textOriginY = tbH + fontAtlas().ascent() + 4.0f;
+    float sbH = statusbar_->height();
+    float findPanelH = find_.active ? (find_.replaceActive ? 62.f : 30.f) : 0.f;
+    float sidebarOffset = sidebarVisible_ ? sidebarWidth_ : 0.f;
+    size_t groupCount = std::max<size_t>(1, editorGroups_.size());
+    float groupAreaW = std::max(1.f, (float)ww - sidebarOffset);
+    float groupW = groupCount > 1 ? groupAreaW / (float)groupCount : groupAreaW;
+    bool drawMinimap = minimapVisible_ && groupW > 260.f;
+    float mmW = drawMinimap ? std::min(minimap_->width(), std::max(0.f, groupW * 0.18f)) : 0.f;
+    float editorLeft = sidebarOffset + gutter_->width() + 8.f;
+    float editorRight = sidebarOffset + groupW - mmW - (drawMinimap ? 0.f : 10.f);
+    float editorW = editorRight - editorLeft;
+    computeMaxLineWidth();
+    float hScrollbarH = (!wordWrap_ && editorW > 0.f && maxLineWidth_ > editorW) ? 12.f : 0.f;
+    float visibleBottom = (float)wh - sbH - findPanelH - hScrollbarH;
     float cursorY = textOriginY + curLine * lineStep - scrollY_;
     if (cursorY < textOriginY) scrollY_ -= (textOriginY - cursorY);
-    else if (cursorY + lineStep > wh - statusbar_->height()) scrollY_ += (cursorY + lineStep - (wh - statusbar_->height()));
-    float viewH = std::max(1.f, (float)wh - statusbar_->height() - textOriginY);
+    else if (cursorY + lineStep > visibleBottom) scrollY_ += (cursorY + lineStep - visibleBottom);
+    float viewH = std::max(1.f, visibleBottom - textOriginY);
     float contentH = (float)totalLines() * lineStep;
-    float maxScroll = contentH > viewH ? contentH - viewH : 0.f;
+    float scrollPad = scrollPastEnd_ ? lineStep * 5.f : 0.f;
+    float maxScroll = contentH + scrollPad > viewH ? contentH + scrollPad - viewH : 0.f;
     if (scrollY_ > maxScroll) scrollY_ = maxScroll;
     if (scrollY_ < 0) scrollY_ = 0;
 }
@@ -1870,7 +1885,8 @@ void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
         bool groupedTab = false;
         for (auto& group : editorGroups_) if (group.tab == i) { groupedTab = true; break; }
         if (i == activeTab_) {
-            roundedTab(tx, tx + tw, 0.18f, 0.19f, 0.22f, 1.f, true);
+            auto bg = syntax_->backgroundColor();
+            roundedTab(tx, tx + tw, bg.r, bg.g, bg.b, 1.f, true);
         } else if (groupedTab) {
             roundedTab(tx, tx + tw, 0.23f, 0.24f, 0.27f, 0.75f, false);
         } else if (i == tabHoverIndex_) {
@@ -3218,10 +3234,11 @@ void Application::handleEvents() {
                 continue;
             }
             if (selecting_) {
+                float textOriginY = tbH + fontAtlas().ascent() + 4.0f;
                 if (boxSelActive_) {
                     float sidebarOffset = sidebarVisible_ ? sidebarWidth_ : 0.f;
                     float gutterW = sidebarOffset + gutter_->width(), textX = gutterW + 8.0f;
-                    float clickY = (float)e.motion.y - tbH + scrollY_;
+                    float clickY = (float)e.motion.y + scrollY_ - textOriginY;
                     int endLine = clickY > 0.f ? (int)std::floor(clickY / lineStep) : 0;
                     if (endLine >= (int)totalLines()) endLine = (int)totalLines() - 1;
                     float charW = std::max(1.f, fontAtlas().measureText(" "));
@@ -3252,7 +3269,7 @@ void Application::handleEvents() {
                 }
                 float sidebarOffset = sidebarVisible_ ? sidebarWidth_ : 0.f;
                 float gutterW = sidebarOffset + gutter_->width(), textX = gutterW + 8.0f;
-                float clickY = (float)e.motion.y - tbH + scrollY_;
+                float clickY = (float)e.motion.y + scrollY_ - textOriginY;
                 size_t clickLine = clickY > 0.f ? (size_t)std::floor(clickY / lineStep) : 0;
                 if (clickLine >= totalLines()) clickLine = totalLines() - 1;
                 size_t ls = lineStartForLine(clickLine), le = lineEnd(ls);
@@ -3460,7 +3477,7 @@ void Application::handleEvents() {
             // gutter fold click
             if (my > tbH && mx < gutterW) {
                 float clickY = my + scrollY_ - textOriginY;
-                size_t clickLine = (size_t)(clickY / lineStep);
+                size_t clickLine = clickY > 0.f ? (size_t)std::floor(clickY / lineStep) : 0;
                 if (clickLine < totalLines()) {
                     computeLineIndents();
                     if (isFoldableLine(clickLine) || isFoldStart(clickLine)) { toggleFold(clickLine); continue; }
@@ -3468,7 +3485,7 @@ void Application::handleEvents() {
             }
             if (my > tbH && mx >= gutterW) {
                 auto mod = SDL_GetModState();
-                float clickY = my - tbH + scrollY_;
+                float clickY = my + scrollY_ - textOriginY;
                 size_t clickLine = clickY > 0.f ? (size_t)std::floor(clickY / lineStep) : 0;
                 if (clickLine >= totalLines()) clickLine = totalLines() - 1;
                 size_t ls = lineStartForLine(clickLine), le = lineEnd(ls);
