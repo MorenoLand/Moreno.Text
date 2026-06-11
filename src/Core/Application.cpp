@@ -4277,18 +4277,25 @@ void Application::render() {
 
     for (auto& s : selections_) {
         if (!s.hasSelection()) continue;
-        size_t a = s.min(), b = s.max(), la = lineOfPos(a), lb = lineOfPos(b);
+        size_t a = s.min(), b = s.max();
+        size_t startLine = lineOfPos(a), endLine = lineOfPos(b);
+        size_t la = startLine, lb = endLine;
         if (lb < firstRenderLine || la > lastRenderLine) continue;
         la = std::max(la, firstRenderLine);
         lb = std::min(lb, lastRenderLine);
         for (size_t ln = la; ln <= lb; ++ln) {
             if (isFolded(ln)) continue;
             size_t ls = lineStartForLine(ln), le = lineEnd(ls);
-            size_t ss = (ln == la) ? a : ls, se = (ln == lb) ? b : le;
+            size_t ss = (ln == startLine) ? a : ls;
+            size_t se = (ln == endLine) ? b : le;
+            ss = std::clamp(ss, ls, le);
+            se = std::clamp(se, ls, le);
+            if (ss == se && ln != endLine) se = le;
             float sy = textOriginY + ln * lineStep - scrollY_;
             if (sy + lineStep < tbH || sy > editorBottom) continue;
             float sx = drawTextX + fontAtlas().measureText(std::string_view(textBuffer.data() + ls, ss - ls));
             float ex = drawTextX + fontAtlas().measureText(std::string_view(textBuffer.data() + ls, se - ls));
+            if (ln < endLine) ex = editorRight;
             addSolid(sx, sy, ex, sy + lineStep, accentColor_.r, accentColor_.g, accentColor_.b, 0.35f);
         }
     }
