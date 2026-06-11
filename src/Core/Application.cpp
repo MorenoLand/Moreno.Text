@@ -64,6 +64,25 @@ extern GLuint gl_vbo();
 
 namespace fs = std::filesystem;
 
+static constexpr const char* kTabContextItems[] = {
+    "Close Tab",
+    "Close Other Tabs",
+    "Close Tabs to the Right",
+    "Close Tabs to the Left",
+    "Close Unmodified Tabs",
+    "Close Unmodified Tabs to the Right",
+    "Close Tabs With Deleted Files",
+    "",
+    "Split View",
+    "",
+    "New File",
+    "Open File    Ctrl+O",
+    "",
+    "Diff With Current Tab..."
+};
+
+static float tabContextMenuWidth(FontAtlas& font);
+
 #ifdef _WIN32
 static constexpr ULONG_PTR MorenoTabDropCopyDataId = 0x4D545441; // MTTA
 static constexpr const char* MorenoWindowPropName = "MorenoText.MainWindow";
@@ -1935,23 +1954,22 @@ void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
         }
     }
     if (tabContextOpen_ && !deferPopupDraw_) {
-        const char* items[] = {"Close Tab","Close Other Tabs","Close Tabs to the Right","Close Tabs to the Left","Close Unmodified Tabs","Close Unmodified Tabs to the Right","Close Tabs With Deleted Files","","Split View","","New File","Open File    Ctrl+O","","Diff With Current Tab..."};
         int itemCount = tabContextIndex_ != activeTab_ ? 14 : 13;
-        float itemH = 24.f, popW = 260.f, popH = 4.f + itemCount * itemH;
+        float itemH = 24.f, popW = tabContextMenuWidth(font), popH = 4.f + itemCount * itemH;
         std::vector<float> cv;
         auto cr = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
             cv.insert(cv.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
         };
         cr(tabContextX_, tabContextY_, tabContextX_ + popW, tabContextY_ + popH, 0.17f, 0.17f, 0.20f, 0.98f);
-        if (tabContextHover_ >= 0 && items[tabContextHover_][0]) cr(tabContextX_ + 2, tabContextY_ + 2 + tabContextHover_ * itemH, tabContextX_ + popW - 2, tabContextY_ + 2 + (tabContextHover_ + 1) * itemH, 0.25f, 0.30f, 0.45f, 1.f);
+        if (tabContextHover_ >= 0 && kTabContextItems[tabContextHover_][0]) cr(tabContextX_ + 2, tabContextY_ + 2 + tabContextHover_ * itemH, tabContextX_ + popW - 2, tabContextY_ + 2 + (tabContextHover_ + 1) * itemH, 0.25f, 0.30f, 0.45f, 1.f);
         GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
         glBufferData(GL_ARRAY_BUFFER, cv.size()*sizeof(float), cv.data(), GL_DYNAMIC_DRAW);
         glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(cv.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0);
         for (int i = 0; i < itemCount; ++i) {
-            if (!items[i][0]) { std::vector<float> sv; cr(tabContextX_ + 8.f, tabContextY_ + 13.f + i * itemH, tabContextX_ + popW - 8.f, tabContextY_ + 14.f + i * itemH, 0.3f, 0.3f, 0.33f, 1.f); continue; }
+            if (!kTabContextItems[i][0]) { std::vector<float> sv; cr(tabContextX_ + 8.f, tabContextY_ + 13.f + i * itemH, tabContextX_ + popW - 8.f, tabContextY_ + 14.f + i * itemH, 0.3f, 0.3f, 0.33f, 1.f); continue; }
             bool greyed = (i == 2 && tabContextIndex_ >= tabs_.size() - 1) || (i == 3 && tabContextIndex_ == 0);
             float alpha = greyed ? 0.4f : 1.f;
-            font.drawText(items[i], tabContextX_ + 10.f, tabContextY_ + 6.f + i * itemH, 0.78f * alpha, 0.78f * alpha, 0.82f * alpha, alpha);
+            font.drawText(kTabContextItems[i], tabContextX_ + 10.f, tabContextY_ + 6.f + i * itemH, 0.78f * alpha, 0.78f * alpha, 0.82f * alpha, alpha);
         }
     }
 }
@@ -2053,7 +2071,7 @@ bool Application::handleTabBarEvent(const SDL_Event& e, float windowW, float tit
         } else { tabHoverIndex_ = (size_t)-1; }
     }
     if (e.type == SDL_MOUSEMOTION && tabContextOpen_) {
-        float mx = (float)e.motion.x, my = (float)e.motion.y, itemH = 24.f, popW = 260.f;
+        float mx = (float)e.motion.x, my = (float)e.motion.y, itemH = 24.f, popW = tabContextMenuWidth(fontAtlas());
         int itemCount = tabContextIndex_ != activeTab_ ? 14 : 13;
         float popH = 4.f + itemCount * itemH;
         tabContextHover_ = (mx >= tabContextX_ && mx <= tabContextX_ + popW && my >= tabContextY_ && my <= tabContextY_ + popH) ? (int)((my - tabContextY_ - 2.f) / itemH) : -1;
@@ -2069,7 +2087,7 @@ bool Application::handleTabBarEvent(const SDL_Event& e, float windowW, float tit
     if (e.type == SDL_MOUSEBUTTONDOWN && (e.button.button == 1 || e.button.button == 2 || e.button.button == 3)) {
         float mx = (float)e.button.x, my = (float)e.button.y;
         if (tabContextOpen_) {
-            float itemH = 24.f, popW = 260.f;
+            float itemH = 24.f, popW = tabContextMenuWidth(fontAtlas());
             int itemCount = tabContextIndex_ != activeTab_ ? 14 : 13;
             float popH = 4.f + itemCount * itemH;
             if (mx >= tabContextX_ && mx <= tabContextX_ + popW && my >= tabContextY_ && my <= tabContextY_ + popH) {
@@ -2173,6 +2191,15 @@ static const PaletteCommandDef paletteCommands[] = {
 static std::string lowerCopy(std::string s) {
     std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return (char)std::tolower(c); });
     return s;
+}
+
+static float tabContextMenuWidth(FontAtlas& font) {
+    float maxTextW = 0.f;
+    for (const char* item : kTabContextItems) {
+        if (!item || !item[0]) continue;
+        maxTextW = std::max(maxTextW, font.measureText(item));
+    }
+    return std::clamp(maxTextW + 32.f, 260.f, 460.f);
 }
 
 void Application::updateCommandPalette() {
@@ -4914,7 +4941,7 @@ void Application::render() {
     } else if (tabContextOpen_) {
         mainX = tabContextX_; mainY = tabContextY_;
         int itemCount = tabContextIndex_ != activeTab_ ? 14 : 13;
-        mainW = 260.f; mainH = 4.f + itemCount * 24.f;
+        mainW = tabContextMenuWidth(fontAtlas()); mainH = 4.f + itemCount * 24.f;
         popupKind = PopupKind::TabContext; hasPopup = true;
     } else if (sidebarContextOpen_) {
         mainX = sidebarContextX_; mainY = sidebarContextY_;
@@ -4971,17 +4998,16 @@ void Application::render() {
                 fontAtlas().drawText(label, 10.f, 6.f + i * itemH, b, b, b + 0.03f, 1.f);
             }
         } else if (popupKind == PopupKind::TabContext) {
-            const char* items[] = {"Close Tab","Close Other Tabs","Close Tabs to the Right","Close Tabs to the Left","Close Unmodified Tabs","Close Unmodified Tabs to the Right","Close Tabs With Deleted Files","","Split View","","New File","Open File    Ctrl+O","","Diff With Current Tab..."};
             std::vector<float> cv; float itemH = 24.f;
             int itemCount = tabContextIndex_ != activeTab_ ? 14 : 13;
             drawRect(cv, 0, 0, mainW, mainH, 0.17f, 0.17f, 0.20f, 0.98f);
-            for (int i = 0; i < itemCount; ++i) if (!items[i][0]) drawRect(cv, 8.f, 13.f + i * itemH, mainW - 8.f, 14.f + i * itemH, 0.3f, 0.3f, 0.33f, 1.f);
-            if (tabContextHover_ >= 0 && tabContextHover_ < itemCount && items[tabContextHover_][0]) drawRect(cv, 2, 2 + tabContextHover_ * itemH, mainW - 2, 2 + (tabContextHover_ + 1) * itemH, 0.25f, 0.30f, 0.45f, 1.f);
+            for (int i = 0; i < itemCount; ++i) if (!kTabContextItems[i][0]) drawRect(cv, 8.f, 13.f + i * itemH, mainW - 8.f, 14.f + i * itemH, 0.3f, 0.3f, 0.33f, 1.f);
+            if (tabContextHover_ >= 0 && tabContextHover_ < itemCount && kTabContextItems[tabContextHover_][0]) drawRect(cv, 2, 2 + tabContextHover_ * itemH, mainW - 2, 2 + (tabContextHover_ + 1) * itemH, 0.25f, 0.30f, 0.45f, 1.f);
             flush(cv);
-            for (int i = 0; i < itemCount; ++i) if (items[i][0]) {
+            for (int i = 0; i < itemCount; ++i) if (kTabContextItems[i][0]) {
                 bool greyed = (i == 2 && tabContextIndex_ >= tabs_.size() - 1) || (i == 3 && tabContextIndex_ == 0);
                 float a = greyed ? 0.4f : 1.f;
-                fontAtlas().drawText(items[i], 10.f, 6.f + i * itemH, 0.78f * a, 0.78f * a, 0.82f * a, a);
+                fontAtlas().drawText(kTabContextItems[i], 10.f, 6.f + i * itemH, 0.78f * a, 0.78f * a, 0.82f * a, a);
             }
         } else if (popupKind == PopupKind::SidebarContext) {
             std::vector<float> cv; float itemH = 24.f;
