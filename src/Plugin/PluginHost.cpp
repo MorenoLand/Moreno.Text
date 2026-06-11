@@ -129,8 +129,8 @@ static std::vector<fs::path> materializeInstalledPackages(const std::string& pac
             if (package.empty()) continue;
             fs::path outDir = cacheRoot / package;
             fs::path stamp = outDir / ".moreno_zip_stamp";
-            auto zipSize = fs::file_size(entry.path());
-            auto zipTime = fs::last_write_time(entry.path()).time_since_epoch().count();
+            auto zipSize = static_cast<unsigned long long>(fs::file_size(entry.path()));
+            auto zipTime = static_cast<long long>(fs::last_write_time(entry.path()).time_since_epoch().count());
             std::string expected = std::to_string(zipSize) + ":" + std::to_string(zipTime);
             bool fresh = false;
             if (fs::exists(stamp)) {
