@@ -129,7 +129,7 @@ void Titlebar::drawMenuPopup(FontAtlas& font, float ox, float oy) {
     if (!menuOpen_) return;
     SDL_Window* window = SDL_GL_GetCurrentWindow();
     int ww = 1280, wh = 720;
-    if (window) SDL_GL_GetDrawableSize(window, &ww, &wh);
+    if (window) SDL_GetWindowSize(window, &ww, &wh);
     float maxW = 140.f;
     for (auto& item : menuItems_) {
         float w = font.measureText(item.label);
@@ -154,7 +154,7 @@ void Titlebar::drawMenuPopup(FontAtlas& font, float ox, float oy) {
         ar(ddX + 2, ddY + arrowH + 2 + (menuHovered_ - menuScroll_) * itemH, ddX + ddW - 2, ddY + arrowH + 2 + (menuHovered_ - menuScroll_ + 1) * itemH, 0.25f, 0.30f, 0.45f, 1.f);
     flushSolid(v);
     glEnable(GL_SCISSOR_TEST);
-    glScissor((int)ddX, wh - (int)(ddY + ddH + 4), (int)ddW, (int)(ddH + 4));
+    GLRenderer::scissor((int)ddX, wh - (int)(ddY + ddH + 4), (int)ddW, (int)(ddH + 4));
     for (int i = menuScroll_; i < menuScroll_ + visibleCount && i < (int)menuItems_.size(); ++i) {
         auto& item = menuItems_[i];
         float rowY = ddY + arrowH + 2 + (i - menuScroll_) * itemH;
@@ -197,7 +197,7 @@ void Titlebar::drawMenuPopup(FontAtlas& font, float ox, float oy) {
             ar(sx + 2, sy + 2 + submenuHovered_ * itemH, sx + sw - 2, sy + 2 + (submenuHovered_ + 1) * itemH, 0.25f, 0.30f, 0.45f, 1.f);
         flushSolid(v);
         glEnable(GL_SCISSOR_TEST);
-        glScissor((int)sx, wh - (int)(sy + sh), (int)sw, (int)sh);
+        GLRenderer::scissor((int)sx, wh - (int)(sy + sh), (int)sw, (int)sh);
         for (int i = 0; i < (int)sm.size(); ++i) {
             auto& item = sm[i];
             float iy = sy + 6.f + i * itemH;
@@ -322,7 +322,7 @@ bool Titlebar::handleMenuEvent(const SDL_Event& e) {
     if (!menuOpen_) return false;
     SDL_Window* window = SDL_GL_GetCurrentWindow();
     int ww = 1280, wh = 720;
-    if (window) SDL_GL_GetDrawableSize(window, &ww, &wh);
+    if (window) SDL_GetWindowSize(window, &ww, &wh);
     float ddX = lastMenuX_, ddY = lastMenuY_;
     float ddW = lastMenuW_, itemH = 24.f;
     int visibleCount = (int)menuItems_.size();

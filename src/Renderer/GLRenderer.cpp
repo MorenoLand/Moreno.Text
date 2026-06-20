@@ -1,9 +1,11 @@
 #include "Renderer/GLRenderer.h"
 #include <cstdio>
+#include <cmath>
 
 static GLuint s_shaderProgram = 0;
 static GLuint s_vao = 0, s_vbo = 0;
-static int s_width = 0, s_height = 0;
+static int s_logicalWidth = 0, s_logicalHeight = 0;
+static int s_drawableWidth = 0, s_drawableHeight = 0;
 
 static const char* vertexSrc = R"(
 #version 330 core
@@ -65,8 +67,11 @@ static void ortho(float* m, float l, float r, float b, float t) {
     m[3]=0;         m[7]=0;         m[11]=0;          m[15]=1.f;
 }
 
-bool GLRenderer::init(int width, int height) {
-    s_width = width; s_height = height;
+bool GLRenderer::init(int logicalWidth, int logicalHeight, int drawableWidth, int drawableHeight) {
+    s_logicalWidth = logicalWidth;
+    s_logicalHeight = logicalHeight;
+    s_drawableWidth = drawableWidth;
+    s_drawableHeight = drawableHeight;
     GLuint vs = compileShader(GL_VERTEX_SHADER, vertexSrc);
     GLuint fs = compileShader(GL_FRAGMENT_SHADER, fragmentSrc);
     if (!vs || !fs) return false;
@@ -106,15 +111,20 @@ void GLRenderer::destroy() {
     if (s_shaderProgram) { glDeleteProgram(s_shaderProgram); s_shaderProgram = 0; }
 }
 
-void GLRenderer::resize(int w, int h) { s_width = w; s_height = h; }
+void GLRenderer::resize(int logicalWidth, int logicalHeight, int drawableWidth, int drawableHeight) {
+    s_logicalWidth = logicalWidth;
+    s_logicalHeight = logicalHeight;
+    s_drawableWidth = drawableWidth;
+    s_drawableHeight = drawableHeight;
+}
 
 void GLRenderer::beginFrame() {
-    glViewport(0, 0, s_width, s_height);
+    glViewport(0, 0, s_drawableWidth, s_drawableHeight);
     glClearColor(0.20f, 0.20f, 0.22f, 1.f);
     glClear(GL_COLOR_BUFFER_BIT);
     glUseProgram(s_shaderProgram);
     float proj[16];
-    ortho(proj, 0, (float)s_width, (float)s_height, 0);
+    ortho(proj, 0, (float)s_logicalWidth, (float)s_logicalHeight, 0);
     glUniformMatrix4fv(glGetUniformLocation(s_shaderProgram, "uProjection"), 1, GL_FALSE, proj);
     glActiveTexture(GL_TEXTURE0);
     glUniform1i(glGetUniformLocation(s_shaderProgram, "uAtlas"), 0);
@@ -129,6 +139,15 @@ void GLRenderer::endFrame() {
 
 void GLRenderer::setDrawMode(int mode) {
     glUniform1i(glGetUniformLocation(s_shaderProgram, "uMode"), mode);
+}
+
+void GLRenderer::scissor(float x, float y, float width, float height) {
+    float sx = s_logicalWidth > 0 ? static_cast<float>(s_drawableWidth) / static_cast<float>(s_logicalWidth) : 1.f;
+    float sy = s_logicalHeight > 0 ? static_cast<float>(s_drawableHeight) / static_cast<float>(s_logicalHeight) : 1.f;
+    glScissor(static_cast<int>(std::lround(x * sx)),
+              static_cast<int>(std::lround(y * sy)),
+              static_cast<int>(std::lround(width * sx)),
+              static_cast<int>(std::lround(height * sy)));
 }
 
 GLuint gl_shaderProgram() { return s_shaderProgram; }

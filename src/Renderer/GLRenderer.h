@@ -4,10 +4,11 @@
 #include <string>
 
 namespace GLRenderer {
-    bool init(int width, int height);
+    bool init(int logicalWidth, int logicalHeight, int drawableWidth, int drawableHeight);
     void destroy();
-    void resize(int width, int height);
+    void resize(int logicalWidth, int logicalHeight, int drawableWidth, int drawableHeight);
     void beginFrame();
     void endFrame();
     void setDrawMode(int mode); // 0=font atlas, 1=rgba texture, 2=solid
+    void scissor(float x, float y, float width, float height);
 }

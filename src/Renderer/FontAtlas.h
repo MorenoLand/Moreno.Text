@@ -9,9 +9,9 @@
 
 struct AtlasGlyph {
     float u0, v0, u1, v1;
-    int width, height;
-    int bearingX, bearingY;
-    int advance;
+    float width, height;
+    float bearingX, bearingY;
+    float advance;
     bool colored = false;
 };
 
@@ -21,7 +21,7 @@ public:
     ~FontAtlas() { destroy(); }
     FontAtlas(const FontAtlas&) = delete;
     FontAtlas& operator=(const FontAtlas&) = delete;
-    bool init(const std::string& fontPath, int fontSize = 16);
+    bool init(const std::string& fontPath, int fontSize = 16, float backingScale = 1.f);
     void destroy();
     const AtlasGlyph& getGlyph(uint32_t codepoint);
     static size_t visibleGlyphReserve(size_t textSize, float clipLeft, float clipRight, float minGlyphAdvance) {
@@ -39,6 +39,7 @@ public:
     float ascent() const { return ascent_; }
     float descent() const { return descent_; }
     GLuint atlasTexture() const { return atlasTex_; }
+    float backingScale() const { return backingScale_; }
 private:
     void loadGlyph(uint32_t cp);
     bool loadFallbackFace(int fontSize);
@@ -52,6 +53,7 @@ private:
     float descent_ = 0;
     GLuint atlasTex_ = 0;
     int atlasW_ = 1024, atlasH_ = 1024;
+    float backingScale_ = 1.f;
     std::vector<uint8_t> atlasData_;
     mutable std::unordered_map<std::string, float> measureCache_;
     bool dirty_ = false;

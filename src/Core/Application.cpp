@@ -308,6 +308,29 @@ static std::string findMonospaceFont() {
     return "";
 }
 
+static void getWindowSizes(SDL_Window* window, int& logicalW, int& logicalH, int& drawableW, int& drawableH) {
+    SDL_GetWindowSize(window, &logicalW, &logicalH);
+    SDL_GL_GetDrawableSize(window, &drawableW, &drawableH);
+    if (logicalW <= 0) logicalW = drawableW;
+    if (logicalH <= 0) logicalH = drawableH;
+    if (drawableW <= 0) drawableW = logicalW;
+    if (drawableH <= 0) drawableH = logicalH;
+}
+
+static float getWindowBackingScale(SDL_Window* window) {
+    int logicalW = 0, logicalH = 0, drawableW = 0, drawableH = 0;
+    getWindowSizes(window, logicalW, logicalH, drawableW, drawableH);
+    float sx = logicalW > 0 ? static_cast<float>(drawableW) / static_cast<float>(logicalW) : 1.f;
+    float sy = logicalH > 0 ? static_cast<float>(drawableH) / static_cast<float>(logicalH) : 1.f;
+    return std::max(1.f, std::max(sx, sy));
+}
+
+static void resizeRendererForWindow(SDL_Window* window) {
+    int logicalW = 0, logicalH = 0, drawableW = 0, drawableH = 0;
+    getWindowSizes(window, logicalW, logicalH, drawableW, drawableH);
+    GLRenderer::resize(logicalW, logicalH, drawableW, drawableH);
+}
+
 bool Application::init(int argc, char** argv) {
     initPaths();
     static ConsoleBuf coutBuf(consoleBuffer_), cerrBuf(consoleBuffer_);
@@ -408,6 +431,12 @@ bool Application::init(int argc, char** argv) {
     selections_.emplace_back(0);
     TabBuffer initTab; initTab.fileName = "untitled"; initTab.selections.emplace_back(0);
     tabs_.push_back(std::move(initTab));
+#ifdef SDL_HINT_WINDOWS_DPI_AWARENESS
+    SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS, "permonitorv2");
+#endif
+#ifdef SDL_HINT_VIDEO_HIGHDPI_DISABLED
+    SDL_SetHint(SDL_HINT_VIDEO_HIGHDPI_DISABLED, "0");
+#endif
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS) != 0) { std::cerr << "SDL_Init: " << SDL_GetError() << std::endl; return false; }
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
@@ -426,11 +455,11 @@ bool Application::init(int argc, char** argv) {
     SDL_GL_SetSwapInterval(1);
     glewExperimental = GL_TRUE;
     if (GLenum err = glewInit(); err != GLEW_OK) { fprintf(stderr, "glewInit: %s\n", glewGetErrorString(err)); return false; }
-    int w, h;
-    SDL_GL_GetDrawableSize(window_, &w, &h);
-    if (!GLRenderer::init(w, h)) return false;
+    int w = 0, h = 0, drawableW = 0, drawableH = 0;
+    getWindowSizes(window_, w, h, drawableW, drawableH);
+    if (!GLRenderer::init(w, h, drawableW, drawableH)) return false;
     std::string fontPath = findMonospaceFont();
-    if (fontPath.empty() || !fontAtlas().init(fontPath)) { fprintf(stderr, "Font init failed\n"); return false; }
+    if (fontPath.empty() || !fontAtlas().init(fontPath, 16, getWindowBackingScale(window_))) { fprintf(stderr, "Font init failed\n"); return false; }
     titlebar_ = new Titlebar(); titlebar_->init(w);
     gutter_ = new Gutter();
     minimap_ = new Minimap();
@@ -812,7 +841,7 @@ void Application::pasteClipboard(bool andIndent) {
 
 void Application::ensureCursorVisible() {
     size_t curLine = lineOfPos(selections_[0].cursor);
-    int ww, wh; SDL_GL_GetDrawableSize(window_, &ww, &wh);
+    int ww, wh; SDL_GetWindowSize(window_, &ww, &wh);
     float tbH = titlebar_->height() + tabBarH_;
     float lineStep = fontAtlas().lineHeight();
     float textOriginY = tbH + fontAtlas().ascent() + 4.0f;
@@ -1233,7 +1262,7 @@ void Application::drawSidebar(FontAtlas& font, float windowH, float titlebarH, f
         float thumbY = titlebarH + (sidebarScrollY_ / maxScroll) * (viewH - thumbH);
         addSolidRect(v, sidebarWidth_ - 5.f, thumbY, sidebarWidth_ - 1.f, thumbY + thumbH, 0.29f, 0.29f, 0.29f, 1.f);
     }
-    glEnable(GL_SCISSOR_TEST); glScissor(0, (int)statusbarH, (int)sidebarWidth_, (int)(windowH - titlebarH - statusbarH));
+    glEnable(GL_SCISSOR_TEST); GLRenderer::scissor(0, (int)statusbarH, (int)sidebarWidth_, (int)(windowH - titlebarH - statusbarH));
     if (!v.empty()) {
         GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
         glBufferData(GL_ARRAY_BUFFER, v.size()*sizeof(float), v.data(), GL_DYNAMIC_DRAW);
@@ -1529,8 +1558,9 @@ void Application::renderPopupToWindow(int x, int y, int w, int h) {
     SDL_SetWindowSize(popupWin_, w, h);
     SDL_ShowWindow(popupWin_);
     if (SDL_GL_MakeCurrent(popupWin_, glContext_) != 0) return;
-    int pw, ph; SDL_GL_GetDrawableSize(popupWin_, &pw, &ph);
-    GLRenderer::resize(pw, ph);
+    int pw = 0, ph = 0, pdw = 0, pdh = 0;
+    getWindowSizes(popupWin_, pw, ph, pdw, pdh);
+    GLRenderer::resize(pw, ph, pdw, pdh);
     GLRenderer::beginFrame();
     drawPopupClearRect(pw, ph);
 }
@@ -2784,7 +2814,7 @@ void Application::handleEvents() {
             continue;
         }
         if (closeConfirmOpen_) {
-            int ww, wh; SDL_GL_GetDrawableSize(window_, &ww, &wh);
+            int ww, wh; SDL_GetWindowSize(window_, &ww, &wh);
             std::string name = closeConfirmIndex_ < tabs_.size() ? tabs_[closeConfirmIndex_].fileName : openFile_;
             CloseConfirmLayout dlg = makeCloseConfirmLayout(fontAtlas(), (float)ww, (float)wh, name);
             if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_ESCAPE) { closeConfirmOpen_ = false; continue; }
@@ -2957,9 +2987,9 @@ void Application::handleEvents() {
         }
         if (goto_.active && e.type == SDL_TEXTINPUT) { goto_.query += e.text.text; updateGotoResults(); continue; }
         // menu bar
-        int ww, wh; SDL_GL_GetDrawableSize(window_, &ww, &wh);
+        int ww, wh; SDL_GetWindowSize(window_, &ww, &wh);
         if (titlebar_->handleEvent(e, window_)) continue;
-        { int tbww,tbwh; SDL_GL_GetDrawableSize(window_,&tbww,&tbwh); if (handleTabBarEvent(e,(float)tbww,titlebar_->height())) continue; }
+        { int tbww,tbwh; SDL_GetWindowSize(window_,&tbww,&tbwh); if (handleTabBarEvent(e,(float)tbww,titlebar_->height())) continue; }
         if (commandPalette_.active) {
             float ow = std::max(260.f, std::min(560.f, (float)ww - 48.f));
             float ox = ((float)ww - ow) / 2.f, oy = titlebar_->height() + tabBarH_ + 36.f;
@@ -3126,7 +3156,7 @@ void Application::handleEvents() {
             continue;
         }
         if (consoleOpen_ && e.type == SDL_MOUSEWHEEL) {
-            SDL_GL_GetDrawableSize(window_, &ww, &wh);
+            SDL_GetWindowSize(window_, &ww, &wh);
             float sbH = statusbar_->height();
             float consoleTop = (float)wh - sbH - consoleH_;
             if ((float)mouseY_ >= consoleTop && (float)mouseY_ <= (float)wh - sbH) {
@@ -3226,7 +3256,7 @@ void Application::handleEvents() {
         }
         if (handleSidebarEvent(e, (float)wh, titlebar_->height() + tabBarH_, statusbar_->height())) continue;
         if (e.type == SDL_WINDOWEVENT && (e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED || e.window.event == SDL_WINDOWEVENT_RESIZED)) {
-            SDL_GL_GetDrawableSize(window_, &ww, &wh); GLRenderer::resize(ww, wh); titlebar_->layout(ww); render();
+            SDL_GetWindowSize(window_, &ww, &wh); resizeRendererForWindow(window_); titlebar_->layout(ww); render();
         }
 #ifdef _WIN32
         else if (e.type == SDL_SYSWMEVENT) {
@@ -3239,7 +3269,7 @@ void Application::handleEvents() {
                 }
                 continue;
             }
-            if (msg.msg == WM_SIZING) { SDL_GL_GetDrawableSize(window_, &ww, &wh); GLRenderer::resize(ww, wh); titlebar_->layout(ww); render(); }
+            if (msg.msg == WM_SIZING) { SDL_GetWindowSize(window_, &ww, &wh); resizeRendererForWindow(window_); titlebar_->layout(ww); render(); }
         }
 #endif
         else if (e.type == SDL_MOUSEMOTION) {
@@ -3357,7 +3387,7 @@ void Application::handleEvents() {
             }
             float lineStep = fontAtlas().lineHeight();
             float contentH = totalLines() * lineStep + 100;
-            SDL_GL_GetDrawableSize(window_, &ww, &wh);
+            SDL_GetWindowSize(window_, &ww, &wh);
             if ((e.wheel.direction == SDL_MOUSEWHEEL_NORMAL) && (SDL_GetModState() & KMOD_SHIFT) && !wordWrap_) {
                 float mmW = (minimapVisible_) ? minimap_->width() : 0.f;
                 float editorW = (float)ww - mmW - 10.f - ((sidebarVisible_ ? sidebarWidth_ : 0.f) + gutter_->width() + 8.f);
@@ -3375,7 +3405,7 @@ void Application::handleEvents() {
             if (scrollY_ < 0) scrollY_ = 0;
         }
         else if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == 1) {
-            SDL_GL_GetDrawableSize(window_, &ww, &wh);
+            SDL_GetWindowSize(window_, &ww, &wh);
             float mx = (float)e.button.x, my = (float)e.button.y;
             float tbH = titlebar_->height() + tabBarH_;
             float lineStep = fontAtlas().lineHeight();
@@ -3557,7 +3587,7 @@ void Application::handleEvents() {
         }
         else if (e.type == SDL_MOUSEBUTTONUP && e.button.button == 1) {
             if (minimapPendingJump_) {
-                int rw = 0, rh = 0; SDL_GL_GetDrawableSize(window_, &rw, &rh);
+                int rw = 0, rh = 0; SDL_GetWindowSize(window_, &rw, &rh);
                 float tbH = titlebar_->height() + tabBarH_;
                 float sbH = statusbar_->height();
                 float viewH = (float)rh - tbH - sbH;
@@ -3820,13 +3850,13 @@ void Application::handleEvents() {
                 desiredCursorX_ = -1.f;
             }
             else if (sym == SDLK_PAGEUP) {
-                int w1, h1; SDL_GL_GetDrawableSize(window_, &w1, &h1);
+                int w1, h1; SDL_GetWindowSize(window_, &w1, &h1);
                 float vl = (h1 - titlebar_->height() - tabBarH_ - statusbar_->height()) / fontAtlas().lineHeight();
                 size_t cl = lineOfPos(sel.cursor), tl = (cl > (size_t)vl) ? cl - (size_t)vl : 0;
                 size_t p = lineStartForLine(tl); if (shift) sel.cursor = p; else sel.anchor = sel.cursor = p; desiredCursorX_ = -1.f;
             }
             else if (sym == SDLK_PAGEDOWN) {
-                int w1, h1; SDL_GL_GetDrawableSize(window_, &w1, &h1);
+                int w1, h1; SDL_GetWindowSize(window_, &w1, &h1);
                 float vl = (h1 - titlebar_->height() - tabBarH_ - statusbar_->height()) / fontAtlas().lineHeight();
                 size_t cl = lineOfPos(sel.cursor), tl = cl + (size_t)vl, tot = totalLines();
                 if (tl >= tot) tl = tot - 1;
@@ -4152,7 +4182,7 @@ void Application::render() {
         glBindVertexArray(0); GLRenderer::setDrawMode(0); solidVerts_.clear();
     };
     updateTitle();
-    int ww, wh; SDL_GL_GetDrawableSize(window_, &ww, &wh);
+    int ww, wh; SDL_GetWindowSize(window_, &ww, &wh);
     float fww = (float)ww, fwh = (float)wh;
     normalizeEditorGroups();
     float sidebarOffset = sidebarVisible_ ? sidebarWidth_ : 0.f;
@@ -4233,7 +4263,7 @@ void Application::render() {
         addSolid(paneRight - 1.f, tbH, paneRight, fwh - sbH, 0.35f, 0.37f, 0.43f, 1.f);
         flushSolid();
         glEnable(GL_SCISSOR_TEST);
-        glScissor((int)paneLeft, (int)sbH, (int)std::max(1.f, paneRight - paneLeft - 1.f), wh - (int)(tbH + sbH));
+        GLRenderer::scissor((int)paneLeft, (int)sbH, (int)std::max(1.f, paneRight - paneLeft - 1.f), wh - (int)(tbH + sbH));
         const std::string& preview = tab.text;
         float yPreview = tbH + fontAtlas().ascent() + 4.f - tab.scrollY;
         size_t line = 0, pos = 0;
@@ -4304,7 +4334,7 @@ void Application::render() {
     gutter_->draw(fontAtlas(), lineCount, currentLine, firstVisibleLine, activePaneLeft, firstVisibleY, lineStep, fwh - sbH, tbH);
 
     glEnable(GL_SCISSOR_TEST);
-    glScissor((int)gutterRight, (int)(sbH + hScrollbarH), (int)std::max(1.f, editorRight - gutterRight), wh - (int)(tbH + sbH + hScrollbarH));
+    GLRenderer::scissor((int)gutterRight, (int)(sbH + hScrollbarH), (int)std::max(1.f, editorRight - gutterRight), wh - (int)(tbH + sbH + hScrollbarH));
 
     {
         float cy = textOriginY + currentLine * lineStep - scrollY_;
@@ -4598,7 +4628,7 @@ void Application::render() {
         addSolid(0, consoleY + consoleH_ - 2, fww, consoleY + consoleH_, 0.325f, 0.545f, 1.f, 0.6f);
         flushSolid();
         glEnable(GL_SCISSOR_TEST);
-        glScissor(0, wh - (int)(consoleY + consoleH_), ww, (int)(consoleH_));
+        GLRenderer::scissor(0, wh - (int)(consoleY + consoleH_), ww, (int)(consoleH_));
         float cy = consoleY + 4.f;
         float lineStep = fontAtlas().lineHeight();
         std::string_view buf(consoleBuffer_);
@@ -4818,7 +4848,7 @@ void Application::render() {
         }
         flushSolid();
         glEnable(GL_SCISSOR_TEST);
-        glScissor((int)mainX, wh - (int)(mainY + mainH), (int)mainW, (int)mainH);
+        GLRenderer::scissor((int)mainX, wh - (int)(mainY + mainH), (int)mainW, (int)mainH);
         for (int row = 0; row < visible; ++row) {
             int idx = pluginQuickPanel_.scroll + row;
             float b = idx == pluginQuickPanel_.selected ? 0.98f : 0.72f;
@@ -4840,7 +4870,7 @@ void Application::render() {
         std::string caption = pluginInputPanel_.caption.empty() ? "Input:" : pluginInputPanel_.caption;
         fontAtlas().drawText(caption, mainX + 12.f, mainY + 14.f, 0.88f, 0.88f, 0.90f, 1.f);
         glEnable(GL_SCISSOR_TEST);
-        glScissor((int)(mainX + 12.f), wh - (int)(mainY + 68.f), (int)(mainW - 24.f), 26);
+        GLRenderer::scissor((int)(mainX + 12.f), wh - (int)(mainY + 68.f), (int)(mainW - 24.f), 26);
         fontAtlas().drawText(pluginInputPanel_.text, mainX + 16.f, mainY + 48.f, 0.94f, 0.94f, 0.96f, 1.f);
         float tw = fontAtlas().measureText(pluginInputPanel_.text);
         uint32_t blink = (SDL_GetTicks() / 500) % 2;
@@ -4889,7 +4919,7 @@ void Application::render() {
             ar(popupX_ + 2, popupY_ + 2 + popupSelected_ * 24.f, popupX_ + popW - 2, popupY_ + 2 + (popupSelected_ + 1) * 24.f, 0.25f, 0.30f, 0.45f, 1.f);
         GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo()); glBufferData(GL_ARRAY_BUFFER, pv.size()*sizeof(float), pv.data(), GL_DYNAMIC_DRAW); glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(pv.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0);
         glEnable(GL_SCISSOR_TEST);
-        glScissor((int)popupX_, wh - (int)(popupY_ + popH + 2), (int)popW + 2, (int)popH + 2);
+        GLRenderer::scissor((int)popupX_, wh - (int)(popupY_ + popH + 2), (int)popW + 2, (int)popH + 2);
         if (statusPopup_ == StatusPopup::Indent) {
             const char* indentItems[] = {"Indent Using Spaces","Indent Using Tabs","Tab Width: 2","Tab Width: 4","Tab Width: 8","Convert Indentation to Spaces","Convert Indentation to Tabs","Detect Indentation"};
             for (int i = 0; i < itemCount; ++i) {
@@ -4988,7 +5018,7 @@ void Application::render() {
         GLRenderer::endFrame();
         SDL_GL_SwapWindow(popupWin_);
         SDL_GL_MakeCurrent(window_, glContext_);
-        GLRenderer::resize(ww, wh);
+        resizeRendererForWindow(window_);
         return;
     }
     bool hasPopup = false;
@@ -5122,7 +5152,7 @@ void Application::render() {
         GLRenderer::endFrame();
         SDL_GL_SwapWindow(popupWin_);
         SDL_GL_MakeCurrent(window_, glContext_);
-        GLRenderer::resize(ww, wh);
+        resizeRendererForWindow(window_);
     }
     if (popupWin_ && (!externalPopupWindow || !hasPopup)) hidePopupWindow();
 }

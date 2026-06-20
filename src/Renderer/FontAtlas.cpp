@@ -3,6 +3,7 @@
 #include <GL/glew.h>
 #include <cstdio>
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 
 extern GLuint gl_shaderProgram();
@@ -24,14 +25,16 @@ static void appendGlyphQuad(std::vector<float>& verts,
                                 x1, y0, gl.u1, gl.v0, cr, cg, cb, a });
 }
 
-bool FontAtlas::init(const std::string& fontPath, int fontSize) {
+bool FontAtlas::init(const std::string& fontPath, int fontSize, float backingScale) {
+    backingScale_ = std::max(1.f, backingScale);
+    int rasterSize = std::max(1, static_cast<int>(std::lround(fontSize * backingScale_)));
     if (FT_Init_FreeType(&ftLib_)) { fprintf(stderr, "FT_Init_FreeType failed\n"); return false; }
     if (FT_New_Face(ftLib_, fontPath.c_str(), 0, &ftFace_)) { fprintf(stderr, "Failed to load font: %s\n", fontPath.c_str()); return false; }
-    FT_Set_Pixel_Sizes(ftFace_, 0, fontSize);
-    loadFallbackFace(fontSize);
-    lineHeight_ = static_cast<float>(ftFace_->size->metrics.height >> 6);
-    ascent_ = static_cast<float>(ftFace_->size->metrics.ascender >> 6);
-    descent_ = static_cast<float>(ftFace_->size->metrics.descender >> 6);
+    FT_Set_Pixel_Sizes(ftFace_, 0, rasterSize);
+    loadFallbackFace(rasterSize);
+    lineHeight_ = static_cast<float>(ftFace_->size->metrics.height >> 6) / backingScale_;
+    ascent_ = static_cast<float>(ftFace_->size->metrics.ascender >> 6) / backingScale_;
+    descent_ = static_cast<float>(ftFace_->size->metrics.descender >> 6) / backingScale_;
     atlasData_.resize(atlasW_ * atlasH_ * 4, 0);
     for (uint32_t c = 32; c < 127; ++c) loadGlyph(c);
     if (!uploadAtlas()) return false;
@@ -79,7 +82,7 @@ void FontAtlas::loadGlyph(uint32_t cp) {
     if (FT_Load_Char(face, cp, FT_LOAD_RENDER | FT_LOAD_COLOR) &&
         FT_Load_Char(face, cp, FT_LOAD_RENDER)) {
         AtlasGlyph blank{};
-        blank.advance = glyphs_.count(' ') ? glyphs_[' '].advance : 8;
+        blank.advance = glyphs_.count(' ') ? glyphs_[' '].advance : 8.f;
         glyphs_[cp] = blank;
         measureCache_.clear();
         return;
@@ -87,11 +90,11 @@ void FontAtlas::loadGlyph(uint32_t cp) {
     int w = static_cast<int>(face->glyph->bitmap.width);
     int h = static_cast<int>(face->glyph->bitmap.rows);
     AtlasGlyph g;
-    g.width = w;
-    g.height = h;
-    g.bearingX = face->glyph->bitmap_left;
-    g.bearingY = face->glyph->bitmap_top;
-    g.advance = static_cast<int>(face->glyph->advance.x >> 6);
+    g.width = static_cast<float>(w) / backingScale_;
+    g.height = static_cast<float>(h) / backingScale_;
+    g.bearingX = static_cast<float>(face->glyph->bitmap_left) / backingScale_;
+    g.bearingY = static_cast<float>(face->glyph->bitmap_top) / backingScale_;
+    g.advance = static_cast<float>(face->glyph->advance.x >> 6) / backingScale_;
     if (w == 0 || h == 0) {
         g.u0 = g.v0 = g.u1 = g.v1 = 0;
         glyphs_[cp] = g;
@@ -195,7 +198,7 @@ void FontAtlas::drawText(std::string_view text, float x, float y, float r, float
 
 void FontAtlas::drawTextClipped(std::string_view text, float x, float y, float clipLeft, float clipRight, float r, float g, float b, float a) {
     if (text.empty() || clipRight <= clipLeft) return;
-    int spaceAdv = getGlyph(' ').advance;
+    float spaceAdv = getGlyph(' ').advance;
     std::vector<float> verts;
     verts.reserve(visibleGlyphReserve(text.size(), clipLeft, clipRight, static_cast<float>(spaceAdv)) * 6 * 8);
     float cursorX = x;
@@ -256,7 +259,7 @@ void FontAtlas::drawTextScaled(std::string_view text, float x, float y, float sc
 
 void FontAtlas::drawTextScaledClipped(std::string_view text, float x, float y, float scale, float clipLeft, float clipRight, float r, float g, float b, float a) {
     if (text.empty() || scale <= 0.f || clipRight <= clipLeft) return;
-    int spaceAdv = getGlyph(' ').advance;
+    float spaceAdv = getGlyph(' ').advance;
     std::vector<float> verts;
     verts.reserve(visibleGlyphReserve(text.size(), clipLeft, clipRight, static_cast<float>(spaceAdv) * scale) * 6 * 8);
     float cursorX = x;
@@ -300,7 +303,7 @@ float FontAtlas::measureText(std::string_view text) {
     auto cached = measureCache_.find(key);
     if (cached != measureCache_.end()) return cached->second;
     float cx = 0;
-    int spaceAdv = 0;
+    float spaceAdv = 0.f;
     auto it = glyphs_.find(' ');
     if (it != glyphs_.end()) spaceAdv = it->second.advance;
     for (size_t i = 0; i < text.size();) {

@@ -27,6 +27,14 @@ if(WIN32)
 elseif(APPLE)
     find_library(OPENGL_LIB OpenGL REQUIRED)
     target_link_libraries(moreno_text PRIVATE ${OPENGL_LIB})
+    set_target_properties(moreno_text PROPERTIES
+        MACOSX_BUNDLE TRUE
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/cmake/macos/Info.plist.in"
+        MACOSX_BUNDLE_BUNDLE_NAME "Moreno Text"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "land.moreno.text"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+        MACOSX_BUNDLE_BUNDLE_VERSION "${MORENO_BUILD_VERSION}"
+    )
 else()
     target_link_libraries(moreno_text PRIVATE GL)
 endif()
