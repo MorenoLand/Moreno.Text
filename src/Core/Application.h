@@ -82,6 +82,8 @@ struct PluginQuickPanelState {
     std::string requestPath;
     std::string responsePath;
     std::vector<std::string> items;
+    std::vector<int> results;
+    std::string query;
     int selected = 0;
     int scroll = 0;
 };
@@ -108,6 +110,10 @@ struct TabBuffer {
     std::vector<UndoStep> undoStack, redoStack;
     std::set<std::pair<int,int>> foldedRegions;
     bool dirty = false;
+    bool binaryView = false;
+    uintmax_t binaryFileSize = 0;
+    uintmax_t binaryLoadedBytes = 0;
+    bool preview = false;
     bool largeFileGuarded = false;
     uintmax_t largeFileSize = 0;
     size_t largeFileTotalLines = 0;
@@ -143,7 +149,7 @@ public:
     void newBuffer();
     void saveFile();
     void saveFileAs();
-    void openFile(const std::string& path);
+    void openFile(const std::string& path, bool preview = false);
     void openRecentFile(size_t index);
     const std::vector<std::string>& recentFiles() const { return recentFiles_; }
     void switchToTab(size_t index);
@@ -171,6 +177,8 @@ public:
     void toggleFullscreen();
     void toggleMinimap() { minimapVisible_ = !minimapVisible_; }
     void toggleWordWrap() { wordWrap_ = !wordWrap_; visualLines_.clear(); }
+    void toggleMaximize();
+    void toggleBoldText();
     void openSettingsFile();
     void swapLineUp();
     void swapLineDown();
@@ -244,6 +252,7 @@ private:
     void addEditorGroupForTab(size_t tabIndex);
     void closeTabNow(size_t index);
     bool importDetachedTabFromFile(const std::string& path);
+    void loadMoreBinaryText();
     bool detachTabToExistingWindow(size_t index);
     void drawTabBar(class FontAtlas& font, float windowW, float titlebarH);
     bool handleTabBarEvent(const SDL_Event& e, float windowW, float titlebarH);
@@ -251,9 +260,12 @@ private:
     float tabChevronX_ = 0.f;
     SDL_Window* window_ = nullptr;
     SDL_GLContext glContext_ = nullptr;
+    SDL_Cursor* sidebarResizeCursor_ = nullptr;
     void* nativeWindowHandle_ = nullptr;
     AppPaths paths_;
-    bool running_ = true, dirty_ = false;
+    bool running_ = true, dirty_ = false, binaryView_ = false;
+    uintmax_t binaryFileSize_ = 0, binaryLoadedBytes_ = 0;
+    bool pluginHostStartPending_ = false;
     bool syntaxDirty_ = true;
     std::string textBuffer;
     mutable bool lineIndexDirty_ = true;
@@ -289,6 +301,9 @@ private:
     float scrollbarDragOffset_ = 0.f;
     float horizontalScrollbarDragOffset_ = 0.f;
     int mouseX_ = 0, mouseY_ = 0;
+    bool autoScrollActive_ = false;
+    float autoScrollAnchorY_ = 0.f;
+    uint32_t autoScrollLastTick_ = 0;
     float tabScrollX_ = 0.f;
     bool tabDropdownOpen_ = false;
     int tabDropdownHover_ = -1;
@@ -299,11 +314,16 @@ private:
     bool sidebarVisible_ = false;
     bool sidebarResizing_ = false;
     bool sidebarScrollbarDragging_ = false;
+    bool sidebarHScrollbarDragging_ = false;
     float sidebarScrollbarDragStartY_ = 0.f;
     float sidebarScrollbarDragStartScrollY_ = 0.f;
+    float sidebarHScrollbarDragStartX_ = 0.f;
+    float sidebarHScrollbarDragStartScrollX_ = 0.f;
     float sidebarWidth_ = 200.f;
     float sidebarScrollY_ = 0.f;
+    float sidebarScrollX_ = 0.f;
     float sidebarContentH_ = 0.f;
+    float sidebarContentW_ = 0.f;
     std::string sidebarRoot_;
     SidebarNode sidebarTree_;
     bool sidebarContextOpen_ = false;
@@ -354,10 +374,14 @@ private:
     bool diffActive_ = false;
     std::vector<std::pair<size_t,size_t>> diffAdded_, diffRemoved_, diffChanged_;
     // tab drag
-    bool tabDragging_ = false;
+    bool tabDragging_ = false, tabDragPending_ = false;
     size_t tabDragIndex_ = 0;
     size_t tabHoverIndex_ = (size_t)-1;
-    float tabDragStartX_ = 0.f;
+    float tabDragStartX_ = 0.f, tabDragStartY_ = 0.f;
+    bool tabDropPreview_ = false;
+    uint32_t tabDropPreviewTick_ = 0;
+    std::string tabDropPreviewLabel_;
+    float tabDropPreviewX_ = -1.f;
     float tabDragOffsetX_ = 0.f;
     // word wrap
     bool wordWrap_ = false;
@@ -403,6 +427,10 @@ private:
     void computeMaxLineWidth();
     bool useTabs_ = false;
     int tabSize_ = 2;
+    int fontSize_ = 12;
+    int sidebarFontSize_ = 12;
+    int tabFontSize_ = 12;
+    bool fontBold_ = true;
     struct UiColor { float r, g, b, a; };
     UiColor accentColor_{0.306f, 0.788f, 0.690f, 1.f};
     std::string gitBranch_;

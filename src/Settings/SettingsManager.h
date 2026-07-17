@@ -23,9 +23,11 @@ public:
         if (f.is_open()) f << data_.dump(2);
     }
     void ensureDefaults() {
-        setDefault("font_face", "Cascadia Mono");
-        setDefault("font_size", 13);
-        setDefault("tab_size", 4);
+        setDefault("font_face", "Consolas");
+        setDefault("font_size", 12);
+        setDefault("sidebar_font_size", 12);
+        setDefault("font_bold", false);
+        setDefault("tab_size", 2);
         setDefault("translate_tabs_to_spaces", true);
         setDefault("word_wrap", false);
         setDefault("highlight_line", true);

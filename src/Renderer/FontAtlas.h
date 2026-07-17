@@ -21,7 +21,7 @@ public:
     ~FontAtlas() { destroy(); }
     FontAtlas(const FontAtlas&) = delete;
     FontAtlas& operator=(const FontAtlas&) = delete;
-    bool init(const std::string& fontPath, int fontSize = 16, float backingScale = 1.f);
+    bool init(const std::string& fontPath, int fontSize = 16, float backingScale = 1.f, bool bold = false);
     void destroy();
     const AtlasGlyph& getGlyph(uint32_t codepoint);
     static size_t visibleGlyphReserve(size_t textSize, float clipLeft, float clipRight, float minGlyphAdvance) {
@@ -54,6 +54,7 @@ private:
     GLuint atlasTex_ = 0;
     int atlasW_ = 1024, atlasH_ = 1024;
     float backingScale_ = 1.f;
+    bool bold_ = false;
     std::vector<uint8_t> atlasData_;
     mutable std::unordered_map<std::string, float> measureCache_;
     bool dirty_ = false;

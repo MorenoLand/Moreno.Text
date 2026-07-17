@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include FT_SYNTHESIS_H
 
 extern GLuint gl_shaderProgram();
 extern GLuint gl_vao();
@@ -25,8 +26,9 @@ static void appendGlyphQuad(std::vector<float>& verts,
                                 x1, y0, gl.u1, gl.v0, cr, cg, cb, a });
 }
 
-bool FontAtlas::init(const std::string& fontPath, int fontSize, float backingScale) {
+bool FontAtlas::init(const std::string& fontPath, int fontSize, float backingScale, bool bold) {
     backingScale_ = std::max(1.f, backingScale);
+    bold_ = bold;
     int rasterSize = std::max(1, static_cast<int>(std::lround(fontSize * backingScale_)));
     if (FT_Init_FreeType(&ftLib_)) { fprintf(stderr, "FT_Init_FreeType failed\n"); return false; }
     if (FT_New_Face(ftLib_, fontPath.c_str(), 0, &ftFace_)) { fprintf(stderr, "Failed to load font: %s\n", fontPath.c_str()); return false; }
@@ -87,6 +89,7 @@ void FontAtlas::loadGlyph(uint32_t cp) {
         measureCache_.clear();
         return;
     }
+    if (bold_ && !FT_HAS_COLOR(face)) FT_GlyphSlot_Embolden(face->glyph);
     int w = static_cast<int>(face->glyph->bitmap.width);
     int h = static_cast<int>(face->glyph->bitmap.rows);
     AtlasGlyph g;
@@ -151,6 +154,7 @@ bool FontAtlas::uploadAtlas() {
 }
 
 const AtlasGlyph& FontAtlas::getGlyph(uint32_t cp) {
+    if ((cp < 0x20 && cp != '\t' && cp != '\n' && cp != '\r') || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) cp = '?';
     auto it = glyphs_.find(cp);
     if (it != glyphs_.end()) return it->second;
     loadGlyph(cp);

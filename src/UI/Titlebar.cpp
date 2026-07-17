@@ -23,7 +23,7 @@ void Titlebar::buildMenu() {
         {"Preferences", ">", nullptr, false, 7},
     };
     submenus_ = {
-        {{"New File","Ctrl+N",[]{ Application::instance().newBuffer(); }},{"Open File...","Ctrl+O",[]{ Application::instance().openFileDialog(); }},{"Open Folder...","",[]{ Application::instance().openFolderDialog(); }},{"Open Recent",">",nullptr},{"","",nullptr,true},{"Save","Ctrl+S",[]{ Application::instance().saveFile(); }},{"Save As...","Ctrl+Shift+S",[]{ Application::instance().saveFileAs(); }},{"Save All","",[]{ Application::instance().saveAll(); }},{"","",nullptr,true},{"Close File","Ctrl+W",[]{ Application::instance().closeCurrentTab(); }},{"Reopen Closed Tab","Ctrl+Shift+T",[]{ Application::instance().reopenClosedTab(); }},{"Revert File","",[]{ Application::instance().revertFile(); }},{"","",nullptr,true},{"Exit","Ctrl+Q",[]{ Application::instance().quit(); }}},
+        {{"New File","Ctrl+N",[]{ Application::instance().newBuffer(); }},{"Open File...","Ctrl+O",[]{ Application::instance().openFileDialog(); }},{"Open Folder...","",[]{ Application::instance().openFolderDialog(); }},{"Open Recent",">",nullptr},{"","",nullptr,true},{"Save","Ctrl+S",[]{ Application::instance().saveFile(); }},{"Save As...","Ctrl+Shift+S",[]{ Application::instance().saveFileAs(); }},{"Save All","",[]{ Application::instance().saveAll(); }},{"","",nullptr,true},{"Toggle Bold Text","",[]{ Application::instance().toggleBoldText(); }},{"","",nullptr,true},{"Close File","Ctrl+W",[]{ Application::instance().closeCurrentTab(); }},{"Reopen Closed Tab","Ctrl+Shift+T",[]{ Application::instance().reopenClosedTab(); }},{"Revert File","",[]{ Application::instance().revertFile(); }},{"","",nullptr,true},{"Exit","Ctrl+Q",[]{ Application::instance().quit(); }}},
         {{"Undo","Ctrl+Z",[]{ Application::instance().commandUndo(); }},{"Redo","Ctrl+Y",[]{ Application::instance().commandRedo(); }},{"","",nullptr,true},{"Cut","Ctrl+X",[]{ Application::instance().commandCut(); }},{"Copy","Ctrl+C",[]{ Application::instance().commandCopy(); }},{"Paste","Ctrl+V",[]{ Application::instance().commandPaste(); }},{"Paste and Indent","Ctrl+Shift+V",[]{ Application::instance().commandPasteAndIndent(); }},{"","",nullptr,true},{"Select All","Ctrl+A",[]{ Application::instance().commandSelectAll(); }},{"","",nullptr,true},{"Indent Line","Ctrl+]",nullptr},{"Unindent Line","Ctrl+[",nullptr},{"","",nullptr,true},{"Swap Line Up","Ctrl+Shift+Up",[]{ Application::instance().swapLineUp(); }},{"Swap Line Down","Ctrl+Shift+Down",[]{ Application::instance().swapLineDown(); }},{"Duplicate Line","Ctrl+Shift+D",[]{ Application::instance().duplicateLine(); }},{"Delete Line","Ctrl+Shift+K",[]{ Application::instance().deleteLine(); }},{"Join Lines","Ctrl+Shift+J",[]{ Application::instance().joinLines(); }},{"","",nullptr,true},{"Toggle Line Comment","Ctrl+/",[]{ Application::instance().toggleLineComment(); }},{"Toggle Block Comment","Ctrl+Shift+/",[]{ Application::instance().toggleBlockComment(); }},{"","",nullptr,true},{"Upper Case","Ctrl+K Ctrl+U",[]{ Application::instance().convertCaseUpper(); }},{"Lower Case","Ctrl+K Ctrl+L",[]{ Application::instance().convertCaseLower(); }},{"Title Case","",[]{ Application::instance().convertCaseTitle(); }},{"Swap Case","",[]{ Application::instance().convertCaseSwap(); }}},
         {{"Select All","Ctrl+A",[]{ Application::instance().commandSelectAll(); }},{"Expand Selection to Line","Ctrl+L",nullptr},{"Expand Selection to Word","Ctrl+D",nullptr},{"Expand Selection to Brackets","Ctrl+Shift+M",nullptr},{"Expand Selection to Indentation","",nullptr},{"Expand Selection to Scope","Ctrl+Shift+Space",nullptr},{"","",nullptr,true},{"Split into Lines","Ctrl+Shift+L",nullptr},{"Single Selection","Escape",nullptr}},
         {{"Find...","Ctrl+F",[]{ Application::instance().commandFind(); }},{"Find Next","F3",nullptr},{"Find Previous","Shift+F3",nullptr},{"Find All","Alt+F3",nullptr},{"","",nullptr,true},{"Replace...","Ctrl+H",[]{ Application::instance().commandReplace(); }},{"","",nullptr,true},{"Find in Files...","Ctrl+Shift+F",nullptr}},
@@ -441,7 +441,7 @@ bool Titlebar::handleEvent(const SDL_Event& e, SDL_Window* window) {
                     switch (btn.type) {
                         case TitlebarButton::CLOSE: { SDL_Event q; q.type = SDL_QUIT; SDL_PushEvent(&q); return true; }
                         case TitlebarButton::MAXIMIZE:
-                            (SDL_GetWindowFlags(window) & SDL_WINDOW_MAXIMIZED) ? SDL_RestoreWindow(window) : SDL_MaximizeWindow(window);
+                            Application::instance().toggleMaximize();
                             return true;
                         case TitlebarButton::MINIMIZE: SDL_MinimizeWindow(window); return true;
                         case TitlebarButton::MENU: menuOpen_ = !menuOpen_; if (!menuOpen_) menuHovered_ = -1; return true;
@@ -449,7 +449,7 @@ bool Titlebar::handleEvent(const SDL_Event& e, SDL_Window* window) {
                 }
             }
             if (e.button.clicks == 2) {
-                (SDL_GetWindowFlags(window) & SDL_WINDOW_MAXIMIZED) ? SDL_RestoreWindow(window) : SDL_MaximizeWindow(window);
+                Application::instance().toggleMaximize();
                 return true;
             }
         }
