@@ -354,7 +354,7 @@ bool PluginHost::writeBootstrapFiles(const PluginHostPaths& paths) {
         {
             std::ofstream f(lib / (api + ".py"), std::ios::binary);
             if (!f) return false;
-            f << "import inspect, json, os, sys, threading, time, types, uuid\n"
+            f << "import inspect, json, os, re, sys, threading, time, types, uuid\n"
               << "ENCODED_POSITION = 0\n"
               << "DRAW_NO_FILL = 1\n"
               << "DRAW_NO_OUTLINE = 2\n"
@@ -389,6 +389,8 @@ bool PluginHost::writeBootstrapFiles(const PluginHostPaths& paths) {
               << "def packages_path(): return os.environ.get('MORENO_PACKAGES_DIR', '')\n"
               << "def installed_packages_path(): return os.environ.get('MORENO_INSTALLED_PACKAGES_PATH', '')\n"
               << "def cache_path(): return os.environ.get('MORENO_CACHE_PATH', '')\n"
+              << "def html_format_command(value): return str(value).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')\n"
+              << "KEEP_OPEN_ON_FOCUS_LOST=1\n"
               << "def _package_roots():\n"
               << "    roots=[]; pkgs=packages_path(); cache=cache_path()\n"
               << "    if pkgs: roots.append(pkgs)\n"
@@ -474,7 +476,12 @@ bool PluginHost::writeBootstrapFiles(const PluginHostPaths& paths) {
               << "    settings=load_settings(name); pkgs=packages_path(); path=os.path.join(pkgs, 'User', name)\n"
               << "    os.makedirs(os.path.dirname(path), exist_ok=True)\n"
               << "    with open(path, 'w', encoding='utf-8') as fp: json.dump(settings.data, fp, indent=2)\n"
-              << "def status_message(msg): print('[status]', msg)\n"
+              << "def status_message(msg):\n"
+              << "    print('[status]', msg)\n"
+              << "    bridge=os.environ.get('MORENO_BRIDGE_DIR','')\n"
+              << "    if not bridge: return\n"
+              << "    os.makedirs(bridge, exist_ok=True)\n"
+              << "    with open(os.path.join(bridge, str(uuid.uuid4()) + '.request.json'), 'w', encoding='utf-8') as fp: json.dump({'type':'status_message','text':str(msg)}, fp)\n"
               << "def error_message(msg): print('[error]', msg)\n"
               << "def message_dialog(msg): print('[message]', msg)\n"
               << "def ok_cancel_dialog(msg, ok_title='OK'): print('[ok-cancel]', msg); return False\n"
@@ -545,8 +552,8 @@ bool PluginHost::writeBootstrapFiles(const PluginHostPaths& paths) {
               << "    def assign_syntax(self, value): self._settings.set('syntax', value)\n"
               << "    def set_syntax_file(self, value): self.assign_syntax(value)\n"
               << "    def set_read_only(self, value): self._read_only=bool(value)\n"
-              << "    def set_status(self, key, value): self._statuses[str(key)]=str(value); self._emit(False)\n"
-              << "    def erase_status(self, key): self._statuses.pop(str(key), None); self._emit(False)\n"
+              << "    def set_status(self, key, value): self._statuses[str(key)]=str(value); status_message(value)\n"
+              << "    def erase_status(self, key): self._statuses.pop(str(key), None)\n"
               << "    def add_regions(self, key, regions, scope='', icon='', flags=0): self._settings.set('regions_'+str(key), [repr(r) for r in (regions or [])])\n"
               << "    def erase_regions(self, key): self._settings.erase('regions_'+str(key))\n"
               << "    def size(self): return len(self.text)\n"
@@ -558,9 +565,13 @@ bool PluginHost::writeBootstrapFiles(const PluginHostPaths& paths) {
               << "        point=max(0,min(int(point),len(self.text))); start=self.text.rfind('\\n',0,point)+1; end=self.text.find('\\n',point)\n"
               << "        if end < 0: end=len(self.text)\n"
               << "        return Region(start,end)\n"
+              << "    def viewport_position(self): return (0, 0)\n"
+              << "    def set_viewport_position(self, position, animate=False): return None\n"
               << "    def _set_cursor(self, point): self._sel.clear(); self._sel.add(Region(point, point))\n"
               << "    def run_command(self, name, args=None):\n"
               << "        args=args or {}\n"
+              << "        if name == 'insert':\n"
+              << "            region=self._sel[0] if len(self._sel) else Region(len(self.text), len(self.text)); self.replace(None, region, args.get('characters','')); return\n"
               << "        if name == 'mark_clean': self._dirty=False; self._emit(False); return\n"
               << "        if name == 'move_to': self._emit(False); return\n"
               << "        cls=_find_command_class(name)\n"
@@ -659,10 +670,37 @@ bool PluginHost::writeBootstrapFiles(const PluginHostPaths& paths) {
               << "        response=os.path.join(bridge, rid + '.response.json')\n"
               << "        request=os.path.join(bridge, rid + '.request.json')\n"
               << "        labels=[]\n"
+              << "        rich=False\n"
+              << "        plain=lambda value: re.sub(r'<[^>]*>', '', str(value)).replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')\n"
+              << "        package_dates={}\n"
+              << "        try:\n"
+              << "            from package_control.package_manager import PackageManager\n"
+              << "            package_dates=PackageManager().list_available_packages()\n"
+              << "        except Exception: pass\n"
               << "        for item in items:\n"
-              << "            labels.append(' '.join(map(str, item)) if isinstance(item, (list, tuple)) else str(item))\n"
+              << "            if isinstance(item, QuickPanelItem):\n"
+              << "                rich=True\n"
+              << "                details=item.details if isinstance(item.details, (list, tuple)) else [item.details]\n"
+              << "                link_url=''; link_text=''; clean_details=[]\n"
+              << "                for detail in details:\n"
+              << "                    match=re.search(r'<a href=\\\"([^\\\"]+)\\\">([^<]+)</a>', str(detail))\n"
+              << "                    if match: link_url=match.group(1); link_text=match.group(2); detail=str(detail)[:match.start()] + str(detail)[match.end():]\n"
+              << "                    clean_details.append(plain(detail))\n"
+              << "                annotation=plain(item.annotation or '')\n"
+              << "                if not annotation:\n"
+              << "                    release=(package_dates.get(str(item.trigger), {}).get('releases') or [{}])[0]\n"
+              << "                    date=release.get('date', '')\n"
+              << "                    if date:\n"
+              << "                        try:\n"
+              << "                            from datetime import datetime\n"
+              << "                            annotation='Updated on ' + datetime.strptime(date[:19], '%Y-%m-%d %H:%M:%S').strftime('%a %b %d, %Y')\n"
+              << "                        except Exception: annotation='Updated on ' + str(date)\n"
+              << "                labels.append({'title':plain(item.trigger),'details':clean_details,'annotation':annotation,'link_text':plain(link_text),'link_url':link_url})\n"
+              << "            elif isinstance(item, (list, tuple)):\n"
+              << "                labels.append({'title':plain(item[0]) if item else '', 'details':[plain(x) for x in item[1:] if x is not None], 'annotation':'','link_text':'','link_url':''})\n"
+              << "            else: labels.append({'title':plain(item),'details':[],'annotation':'','link_text':'','link_url':''})\n"
               << "        print('[quick-panel]', len(labels), 'items')\n"
-              << "        with open(request, 'w', encoding='utf-8') as fp: json.dump({'type':'quick_panel','items':labels,'response':response}, fp)\n"
+              << "        with open(request, 'w', encoding='utf-8') as fp: json.dump({'type':'quick_panel','items':labels,'rich':rich,'response':response}, fp)\n"
               << "        deadline=time.time()+120\n"
               << "        while time.time() < deadline:\n"
               << "            if os.path.exists(response):\n"
@@ -734,7 +772,9 @@ bool PluginHost::writeBootstrapFiles(const PluginHostPaths& paths) {
               << "        return list(self._views)\n"
               << "    def active_view(self):\n"
               << "        self.views()\n"
-              << "        return _ensure_view_api(self._active_view if getattr(self, '_active_view', None) and self._active_view.is_valid() else (self._views[-1] if self._views else None))\n"
+              << "        if getattr(self, '_active_view', None) and self._active_view.is_valid(): return _ensure_view_api(self._active_view)\n"
+              << "        if self._views: return _ensure_view_api(self._views[-1])\n"
+              << "        self._active_view=_ensure_view_api(View(self)); self._views.append(self._active_view); return self._active_view\n"
               << "    def focus_view(self, view):\n"
               << "        view=_ensure_view_api(view)\n"
               << "        if not view or not view.is_valid(): return\n"
@@ -746,7 +786,7 @@ bool PluginHost::writeBootstrapFiles(const PluginHostPaths& paths) {
               << "def active_window(): return _active_window\n"
               << "def windows(): return []\n"
               << "class QuickPanelItem:\n"
-              << "    def __init__(self, trigger='', details='', annotation='', kind=None): self.trigger=str(trigger); self.details=str(details); self.annotation=str(annotation); self.kind=kind\n"
+              << "    def __init__(self, trigger='', details='', annotation='', kind=None): self.trigger=str(trigger); self.details=details; self.annotation=str(annotation); self.kind=kind\n"
               << "    def __str__(self): return self.trigger\n"
               << "class CompletionItem:\n"
               << "    @staticmethod\n"
@@ -829,6 +869,25 @@ bool PluginHost::writeBootstrapFiles(const PluginHostPaths& paths) {
               << "        print('[plugin-loaded]', script)\n"
               << "    except Exception:\n"
               << "        traceback.print_exc()\n";
+            f << "try:\n"
+              << "    from package_control.package_installer import PackageInstaller\n"
+              << "    _moreno_make_package_list=PackageInstaller.make_package_list\n"
+              << "    def _moreno_package_list_with_dates(self, *args, **kwargs):\n"
+              << "        entries=_moreno_make_package_list(self, *args, **kwargs)\n"
+              << "        packages=self.manager.list_available_packages()\n"
+              << "        for entry in entries:\n"
+              << "            info=packages.get(getattr(entry, 'trigger', ''), {})\n"
+              << "            release=(info.get('releases') or [{}])[0]\n"
+              << "            date=release.get('date', '')\n"
+              << "            if date:\n"
+              << "                try:\n"
+              << "                    from datetime import datetime\n"
+              << "                    entry.annotation='Updated on ' + datetime.strptime(date[:19], '%Y-%m-%d %H:%M:%S').strftime('%a %b %d, %Y')\n"
+              << "                except Exception: entry.annotation='Updated on ' + str(date)\n"
+              << "        return entries\n"
+              << "    PackageInstaller.make_package_list=_moreno_package_list_with_dates\n"
+              << "except Exception:\n"
+              << "    traceback.print_exc()\n";
             f << "def _dispatch_window_command(cmd, args=None):\n"
               << "    import inspect\n"
               << "    args=args or {}\n"
@@ -964,16 +1023,9 @@ void PluginHost::launchHost(const PluginHostPaths& paths, const std::string& com
     STARTUPINFOA si = {}; si.cb = sizeof(si); si.dwFlags = STARTF_USESHOWWINDOW; si.wShowWindow = SW_HIDE;
     PROCESS_INFORMATION pi = {};
     if (CreateProcessA(nullptr, command.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, paths.dataDir.c_str(), &si, &pi)) {
-        DWORD wait = WaitForSingleObject(pi.hProcess, 1500);
-        DWORD exitCode = 1;
-        if (wait == WAIT_TIMEOUT) {
-            if (persistent) writePluginHostPid(paths, pi.dwProcessId);
-            CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
-            return;
-        }
-        GetExitCodeProcess(pi.hProcess, &exitCode);
+        if (persistent) writePluginHostPid(paths, pi.dwProcessId);
         CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
-        if (exitCode != 0) appendLog("[plugin-host] host exited with code " + std::to_string(exitCode));
+        return;
     } else {
         appendLog("[plugin-host] failed to launch bundled host: " + std::to_string(GetLastError()));
     }

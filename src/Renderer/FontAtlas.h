@@ -32,6 +32,7 @@ public:
     void drawText(std::string_view text, float x, float y, float r, float g, float b, float a);
     void drawTextClipped(std::string_view text, float x, float y, float clipLeft, float clipRight, float r, float g, float b, float a);
     void drawTextScaled(std::string_view text, float x, float y, float scale, float r, float g, float b, float a);
+    void drawTextItalic(std::string_view text, float x, float y, float scale, float r, float g, float b, float a);
     void drawTextScaledClipped(std::string_view text, float x, float y, float scale, float clipLeft, float clipRight, float r, float g, float b, float a);
     float measureText(std::string_view text);
     void resetMeasureCache() const { measureCache_.clear(); }
@@ -63,3 +64,4 @@ private:
 };
 
 FontAtlas& fontAtlas();
+FontAtlas& uiFontAtlas();

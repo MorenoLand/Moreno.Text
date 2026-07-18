@@ -65,6 +65,8 @@ struct GotoState {
 struct CommandPaletteState {
     bool active = false;
     std::string query;
+    size_t cursor = 0;
+    size_t anchor = 0;
     std::vector<int> results;
     int selected = 0;
     int scroll = 0;
@@ -79,9 +81,14 @@ struct PluginPaletteCommand {
 struct PluginQuickPanelState {
     bool active = false;
     bool submitted = false;
+    bool rich = false;
     std::string requestPath;
     std::string responsePath;
     std::vector<std::string> items;
+    std::vector<std::vector<std::string>> details;
+    std::vector<std::string> annotations;
+    std::vector<std::string> linkTexts;
+    std::vector<std::string> linkUrls;
     std::vector<int> results;
     std::string query;
     int selected = 0;
@@ -143,6 +150,7 @@ class Application {
 public:
     static Application& instance();
     int run(int argc, char** argv);
+    bool isBorderlessMaximized() const { return borderlessMaximized_; }
     const AppPaths& paths() const { return paths_; }
     void quit() { running_ = false; }
     SyntaxHighlighter& syntax() { return *syntax_; }
@@ -172,7 +180,7 @@ public:
     void commandFind() { find_.active = true; find_.replaceActive = false; find_.query.clear(); find_.matches.clear(); }
     void commandReplace() { find_.active = true; find_.replaceActive = true; find_.query.clear(); find_.matches.clear(); }
     void commandGotoAnything() { goto_.active = true; goto_.query.clear(); goto_.selected = 0; goto_.items.clear(); }
-    void commandPalette() { commandPalette_.active = true; commandPalette_.query.clear(); commandPalette_.selected = 0; commandPalette_.scroll = 0; commandPalette_.hover = -1; updateCommandPalette(); }
+    void commandPalette() { commandPalette_.active = true; commandPalette_.query.clear(); commandPalette_.cursor = commandPalette_.anchor = 0; commandPalette_.selected = 0; commandPalette_.scroll = 0; commandPalette_.hover = -1; updateCommandPalette(); }
     void toggleConsole();
     void toggleFullscreen();
     void toggleMinimap() { minimapVisible_ = !minimapVisible_; }
@@ -180,6 +188,8 @@ public:
     void toggleMaximize();
     void toggleBoldText();
     void openSettingsFile();
+    void openKeyBindingsFile();
+    void importVimSettings(bool neovim);
     void swapLineUp();
     void swapLineDown();
     void duplicateLine();
@@ -261,6 +271,7 @@ private:
     SDL_Window* window_ = nullptr;
     SDL_GLContext glContext_ = nullptr;
     SDL_Cursor* sidebarResizeCursor_ = nullptr;
+    SDL_Cursor* textCursor_ = nullptr;
     void* nativeWindowHandle_ = nullptr;
     AppPaths paths_;
     bool running_ = true, dirty_ = false, binaryView_ = false;
@@ -294,6 +305,8 @@ private:
     float minimapPendingJumpY_ = 0.f;
     bool minimapVisible_ = true;
     bool fullscreen_ = false;
+    bool borderlessMaximized_ = false;
+    int restoreWindowX_ = 0, restoreWindowY_ = 0, restoreWindowW_ = 0, restoreWindowH_ = 0;
     bool scrollbarHovered_ = false;
     bool scrollbarDragging_ = false;
     bool horizontalScrollbarHovered_ = false;
@@ -302,7 +315,7 @@ private:
     float horizontalScrollbarDragOffset_ = 0.f;
     int mouseX_ = 0, mouseY_ = 0;
     bool autoScrollActive_ = false;
-    float autoScrollAnchorY_ = 0.f;
+    float autoScrollAnchorX_ = 0.f, autoScrollAnchorY_ = 0.f;
     uint32_t autoScrollLastTick_ = 0;
     float tabScrollX_ = 0.f;
     bool tabDropdownOpen_ = false;
@@ -341,6 +354,8 @@ private:
     enum GotoMode { Files, Symbols, Lines, Words } gotoMode_ = Files;
     void updateGotoResults();
     CommandPaletteState commandPalette_;
+    std::string pluginStatusText_;
+    uint32_t pluginStatusUntil_ = 0;
     void updateCommandPalette();
     void executePaletteCommand(int commandIndex);
     // autocomplete

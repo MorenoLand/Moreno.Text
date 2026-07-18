@@ -60,6 +60,7 @@ extern GLuint gl_vbo();
 #include <windows.h>
 #include <commdlg.h>
 #include <shellapi.h>
+#include <dwmapi.h>
 #endif
 
 namespace fs = std::filesystem;
@@ -290,7 +291,9 @@ static void updatePluginQuickPanelResults(PluginQuickPanelState& panel) {
     };
     std::string query = lower(panel.query);
     for (int i = 0; i < (int)panel.items.size(); ++i) {
-        if (query.empty() || lower(panel.items[i]).find(query) != std::string::npos) panel.results.push_back(i);
+        std::string searchable = panel.items[i];
+        if (i < (int)panel.details.size()) for (const auto& detail : panel.details[i]) searchable += " " + detail;
+        if (query.empty() || lower(searchable).find(query) != std::string::npos) panel.results.push_back(i);
     }
     panel.selected = panel.results.empty() ? -1 : 0;
     panel.scroll = 0;
@@ -447,8 +450,12 @@ bool Application::init(int argc, char** argv) {
     {
         std::string userDir = paths_.dataDir + "/Packages/User";
         fs::create_directories(userDir);
-        std::string settingsPath = userDir + "/Preferences.moreno-settings";
+        std::string settingsPath = userDir + "/Preferences.sublime-settings";
         auto& settings = SettingsManager::instance();
+        if (!fs::exists(settingsPath)) {
+            std::string legacyPath = userDir + "/Preferences.moreno-settings";
+            if (fs::exists(legacyPath)) settings.load(legacyPath);
+        }
         settings.load(settingsPath);
         settings.ensureDefaults();
         if (settings.get<int>("font_defaults_version", 0) < 3) {
@@ -549,13 +556,15 @@ bool Application::init(int argc, char** argv) {
 #endif
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS) != 0) { std::cerr << "SDL_Init: " << SDL_GetError() << std::endl; return false; }
     sidebarResizeCursor_ = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_SIZEWE);
+    textCursor_ = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_IBEAM);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
 #ifdef __APPLE__
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG);
 #endif
-    int initialX = SDL_WINDOWPOS_CENTERED, initialY = SDL_WINDOWPOS_CENTERED;
+    int initialX = SDL_WINDOWPOS_CENTERED, initialY = SDL_WINDOWPOS_CENTERED, initialW = 1280, initialH = 720;
+    bool explicitPosition = false;
 #ifdef _WIN32
     for (int i = 3; i + 2 < argc; ++i) if (std::string(argv[i]) == "--position") {
         try {
@@ -564,12 +573,26 @@ bool Application::init(int argc, char** argv) {
             GetMonitorInfoA(MonitorFromPoint(POINT{mouseX, mouseY}, MONITOR_DEFAULTTONEAREST), &monitor);
             initialX = std::clamp(mouseX - 140, (int)monitor.rcWork.left, std::max((int)monitor.rcWork.left, (int)monitor.rcWork.right - 400));
             initialY = std::clamp(mouseY - 20, (int)monitor.rcWork.top, std::max((int)monitor.rcWork.top, (int)monitor.rcWork.bottom - 220));
+            explicitPosition = true;
         } catch (...) {}
         break;
     }
 #endif
+    if (!explicitPosition) {
+        auto& settings = SettingsManager::instance();
+        int savedX = settings.get<int>("window_x", SDL_WINDOWPOS_CENTERED), savedY = settings.get<int>("window_y", SDL_WINDOWPOS_CENTERED);
+        int savedW = settings.get<int>("window_width", initialW), savedH = settings.get<int>("window_height", initialH);
+        if (savedW >= 400 && savedH >= 300 && savedX != SDL_WINDOWPOS_CENTERED && savedY != SDL_WINDOWPOS_CENTERED) {
+            bool visible = false;
+            for (int display = 0; display < SDL_GetNumVideoDisplays(); ++display) {
+                SDL_Rect bounds{};
+                if (SDL_GetDisplayUsableBounds(display, &bounds) == 0 && savedX + savedW > bounds.x + 80 && savedX < bounds.x + bounds.w - 80 && savedY + savedH > bounds.y + 80 && savedY < bounds.y + bounds.h - 80) { visible = true; break; }
+            }
+            if (visible) { initialX = savedX; initialY = savedY; initialW = savedW; initialH = savedH; }
+        }
+    }
     window_ = SDL_CreateWindow("Moreno Text", initialX, initialY,
-        1280, 720, SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_BORDERLESS);
+        initialW, initialH, SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_BORDERLESS);
     if (!window_) { fprintf(stderr, "SDL_CreateWindow: %s\n", SDL_GetError()); return false; }
     SDL_SetWindowResizable(window_, SDL_TRUE);
     SDL_SetWindowMinimumSize(window_, 400, 300);
@@ -583,7 +606,7 @@ bool Application::init(int argc, char** argv) {
     getWindowSizes(window_, w, h, drawableW, drawableH);
     if (!GLRenderer::init(w, h, drawableW, drawableH)) return false;
     std::string fontPath = findMonospaceFont();
-    if (fontPath.empty() || !fontAtlas().init(fontPath, fontSize_, getWindowBackingScale(window_), fontBold_)) { fprintf(stderr, "Font init failed\n"); return false; }
+    if (fontPath.empty() || !fontAtlas().init(fontPath, fontSize_, getWindowBackingScale(window_), fontBold_) || !uiFontAtlas().init(fontPath, 14, getWindowBackingScale(window_), fontBold_)) { fprintf(stderr, "Font init failed\n"); return false; }
     titlebar_ = new Titlebar(); titlebar_->init(w);
     gutter_ = new Gutter();
     minimap_ = new Minimap();
@@ -973,7 +996,7 @@ void Application::ensureCursorVisible() {
     int ww, wh; SDL_GetWindowSize(window_, &ww, &wh);
     float tbH = titlebar_->height() + tabBarH_;
     float lineStep = fontAtlas().lineHeight();
-    float textOriginY = tbH + fontAtlas().ascent() + 4.0f;
+    float textOriginY = tbH + fontAtlas().ascent() + 5.0f;
     float sbH = statusbar_->height();
     float findPanelH = find_.active ? (find_.replaceActive ? 62.f : 30.f) : 0.f;
     float sidebarOffset = sidebarVisible_ ? sidebarWidth_ : 0.f;
@@ -1106,7 +1129,7 @@ void Application::openFile(const std::string& path, bool preview) {
     for (size_t i = 0; i < tabs_.size(); ++i) {
         std::error_code ec;
         if (!tabs_[i].filePath.empty() && fs::equivalent(tabs_[i].filePath, absPath, ec)) {
-            if (!preview && tabs_[i].preview) { tabs_[i].preview = false; saveSession(); }
+            if (tabs_[i].preview) { tabs_[i].preview = false; rememberRecentFile(absPath); saveSession(); }
             if (i != activeTab_) switchToTab(i);
             return;
         }
@@ -1293,7 +1316,25 @@ void Application::toggleFullscreen() {
 void Application::toggleMaximize() {
 #ifdef _WIN32
     HWND hwnd = reinterpret_cast<HWND>(nativeWindowHandle_);
-    if (hwnd) { ShowWindow(hwnd, IsZoomed(hwnd) ? SW_RESTORE : SW_MAXIMIZE); return; }
+    if (hwnd) {
+        if (borderlessMaximized_) {
+            SetWindowPos(hwnd, nullptr, restoreWindowX_, restoreWindowY_, restoreWindowW_, restoreWindowH_, SWP_NOZORDER | SWP_NOACTIVATE);
+            DWM_WINDOW_CORNER_PREFERENCE corner = DWMWCP_ROUND;
+            DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &corner, sizeof(corner));
+            borderlessMaximized_ = false;
+        } else {
+            RECT rect{}; GetWindowRect(hwnd, &rect);
+            restoreWindowX_ = rect.left; restoreWindowY_ = rect.top; restoreWindowW_ = rect.right - rect.left; restoreWindowH_ = rect.bottom - rect.top;
+            MONITORINFO monitor{sizeof(monitor)};
+            GetMonitorInfoA(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &monitor);
+            RECT work = monitor.rcWork;
+            SetWindowPos(hwnd, nullptr, work.left, work.top, work.right - work.left, work.bottom - work.top, SWP_NOZORDER | SWP_NOACTIVATE);
+            DWM_WINDOW_CORNER_PREFERENCE corner = DWMWCP_DONOTROUND;
+            DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &corner, sizeof(corner));
+            borderlessMaximized_ = true;
+        }
+        return;
+    }
 #endif
     (SDL_GetWindowFlags(window_) & SDL_WINDOW_MAXIMIZED) ? SDL_RestoreWindow(window_) : SDL_MaximizeWindow(window_);
 }
@@ -1382,7 +1423,7 @@ void Application::drawSidebar(FontAtlas& font, float windowH, float titlebarH, f
     std::vector<float> v;
     addSolidRect(v, 0, titlebarH, sidebarWidth_, windowH - statusbarH, 0.105f, 0.115f, 0.135f, 1.f);
     addSolidRect(v, sidebarWidth_ - 1.f, titlebarH, sidebarWidth_, windowH - statusbarH, 0.06f, 0.07f, 0.085f, 1.f);
-    float sidebarScale = std::clamp((float)sidebarFontSize_ / (float)fontSize_, 0.5f, 1.5f);
+    float sidebarScale = std::clamp((float)sidebarFontSize_ / 14.f, 0.5f, 1.5f);
     struct SidebarTextDraw { std::string text; float x, y, scale, r, g, b; };
     std::vector<SidebarTextDraw> textDraws;
     auto addDisclosure = [&](float x, float rowY, bool expanded) {
@@ -1391,12 +1432,12 @@ void Application::drawSidebar(FontAtlas& font, float windowH, float titlebarH, f
         else v.insert(v.end(), {x + 3.f,rowY + 5.f,0,0,r,g,b,1, x + 3.f,rowY + 13.f,0,0,r,g,b,1, x + 8.f,rowY + 9.f,0,0,r,g,b,1});
     };
     auto addFolderIcon = [&](float x, float rowY) {
-        addSolidRect(v, x + 1.f, rowY + 4.f, x + 6.f, rowY + 7.f, 0.47f, 0.50f, 0.53f, 1.f);
-        addSolidRect(v, x, rowY + 6.f, x + 11.f, rowY + 14.f, 0.50f, 0.53f, 0.56f, 1.f);
+        addSolidRect(v, x + 1.f, rowY + 3.f, x + 7.f, rowY + 7.f, 0.47f, 0.50f, 0.53f, 1.f);
+        addSolidRect(v, x, rowY + 6.f, x + 13.f, rowY + 16.f, 0.50f, 0.53f, 0.56f, 1.f);
     };
     auto addFileIcon = [&](float x, float rowY, float r, float g, float b, int kind) {
-        addSolidRect(v, x, rowY + 3.f, x + 8.f, rowY + 14.f, 0.64f, 0.67f, 0.71f, 1.f);
-        addSolidRect(v, x + 1.f, rowY + 4.f, x + 7.f, rowY + 13.f, 0.105f, 0.115f, 0.135f, 1.f);
+        addSolidRect(v, x, rowY + 2.f, x + 10.f, rowY + 16.f, 0.64f, 0.67f, 0.71f, 1.f);
+        addSolidRect(v, x + 1.f, rowY + 3.f, x + 9.f, rowY + 15.f, 0.105f, 0.115f, 0.135f, 1.f);
         if (kind == 1) {
             addSolidRect(v, x + 2.f, rowY + 6.f, x + 6.f, rowY + 7.f, r, g, b, 1.f);
             addSolidRect(v, x + 2.f, rowY + 9.f, x + 6.f, rowY + 10.f, r, g, b, 1.f);
@@ -1485,10 +1526,16 @@ void Application::drawSidebar(FontAtlas& font, float windowH, float titlebarH, f
                     addFolderIcon(x + 12.f, rowY);
                     labelX = x + 29.f;
                 } else {
-                    const char* glyph = iconKind == 0 ? "[]" : iconKind == 1 ? "#" : iconKind == 2 ? "</>" : iconKind == 3 ? "==" : iconKind == 4 ? "{}" : "/*";
                     float glyphX = x + 12.f;
-                    textDraws.push_back({glyph, glyphX, rowY, sidebarScale, ir, ig, ib});
-                    labelX = glyphX + font.measureText(glyph) * sidebarScale + 5.f;
+                    if (!node.name.empty() && node.name[0] == '.') {
+                        addFileIcon(glyphX, rowY, ir, ig, ib, 0);
+                        labelX = glyphX + 15.f;
+                    } else {
+                        const char* glyph = iconKind == 0 ? "*" : iconKind == 1 ? "#" : iconKind == 2 ? "</>" : iconKind == 3 ? "*" : iconKind == 4 ? "{}" : "/*";
+                        float glyphScale = (iconKind == 0 || iconKind == 3) ? sidebarScale * 1.55f : iconKind == 2 ? sidebarScale * 1.1f : sidebarScale * 1.25f;
+                        textDraws.push_back({glyph, glyphX, rowY, glyphScale, ir, ig, ib});
+                        labelX = glyphX + font.measureText(glyph) * glyphScale + 5.f;
+                    }
                 }
                 float b = active ? 0.94f : 0.73f;
                 textDraws.push_back({node.name, labelX, node.folder ? rowY + 3.f : rowY, sidebarScale, b, b, b + 0.03f});
@@ -1822,7 +1869,7 @@ void Application::shapePopupWindowForMenu() {
     SDL_SysWMinfo wmInfo; SDL_VERSION(&wmInfo.version);
     if (!SDL_GetWindowWMInfo(popupWin_, &wmInfo)) return;
     SDL_Rect mainRect{}, submenuRect{}; bool hasSubmenu = false;
-    titlebar_->getMenuPanelRects(fontAtlas(), 32000, 32000, mainRect, submenuRect, hasSubmenu);
+    titlebar_->getMenuPanelRects(uiFontAtlas(), 32000, 32000, mainRect, submenuRect, hasSubmenu);
     HRGN region = CreateRectRgn(mainRect.x + 3, mainRect.y + 3, mainRect.x + mainRect.w + 3, mainRect.y + mainRect.h + 3);
     if (hasSubmenu && submenuRect.w > 0 && submenuRect.h > 0) {
         HRGN submenu = CreateRectRgn(submenuRect.x + 3, submenuRect.y + 3, submenuRect.x + submenuRect.w + 3, submenuRect.y + submenuRect.h + 3);
@@ -2223,7 +2270,7 @@ bool Application::detachTabToNewWindow(size_t index) {
 }
 
 void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
-    float tabScale = std::clamp((float)tabFontSize_ / (float)fontSize_, 0.5f, 1.5f);
+    float tabScale = std::clamp((float)tabFontSize_ / 14.f, 0.5f, 1.5f);
     auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
         solidVerts_.insert(solidVerts_.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
     };
@@ -2235,10 +2282,10 @@ void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
     float menuX = std::max(tabStripInset, windowW - allFilesW);
     float initialVisibleW = std::max(0.f, menuX - tabStripInset);
     ar(0, barY, windowW, barY + tabBarH_, 0.25f, 0.25f, 0.28f, 1.f);
-    constexpr float tabTextPadL = 12.f;
-    constexpr float tabActionPadR = 14.f;
-    constexpr float tabActionW = 22.f;
-    constexpr float tabTextGap = 10.f;
+    constexpr float tabTextPadL = 10.f;
+    constexpr float tabActionPadR = 8.f;
+    constexpr float tabActionW = 26.f;
+    constexpr float tabTextGap = 8.f;
     auto tabWidthForLabel = [&](const std::string& label) {
         return std::max(font.measureText(label) * tabScale + tabTextPadL + tabTextGap + tabActionW + tabActionPadR, 58.f);
     };
@@ -2342,8 +2389,10 @@ void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
         if (clipRight > clipLeft) {
             font.drawTextScaledClipped(label.text, lx + tabTextPadL, textY, tabScale, clipLeft, clipRight, textBright, textBright, textBright+0.05f, 1.f);
         }
-        if (closeHover) {
-            font.drawTextScaled("\xc3\x97", actionCenterX - 4.5f, textY - 0.5f, tabScale * 1.15f, 0.55f, 0.55f, 0.60f, 1.f);
+        bool pluginTab = tabs_[label.index].pluginOwned || tabs_[label.index].filePath.rfind("plugin://view/", 0) == 0;
+        if (true) {
+            float closeBrightness = closeHover ? 0.82f : (pluginTab ? 0.64f : 0.48f);
+            font.drawTextScaled("\xc3\x97", actionCenterX - 4.5f, textY - 0.5f, tabScale * 1.15f, closeBrightness, closeBrightness, closeBrightness + 0.03f, 1.f);
         } else {
             if (tabs_[label.index].dirty) font.drawTextScaled("\xe2\x80\xa2", actionCenterX - 4.f, textY + 1.f, tabScale, 0.95f, 0.72f, 0.27f, 1.f);
         }
@@ -2414,7 +2463,7 @@ void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
 }
 
 bool Application::handleTabBarEvent(const SDL_Event& e, float windowW, float titlebarH) {
-    float tabScale = std::clamp((float)tabFontSize_ / (float)fontSize_, 0.5f, 1.5f);
+    float tabScale = std::clamp((float)tabFontSize_ / 14.f, 0.5f, 1.5f);
     float barY = titlebarH;
     constexpr float tabStripInset = 8.f;
     constexpr float scrollBtnW = 22.f;
@@ -2423,10 +2472,10 @@ bool Application::handleTabBarEvent(const SDL_Event& e, float windowW, float tit
     float initialVisibleW = std::max(0.f, menuX - tabStripInset);
     constexpr float tabTextPadL = 12.f;
     constexpr float tabActionPadR = 14.f;
-    constexpr float tabActionW = 22.f;
+    constexpr float tabActionW = 26.f;
     constexpr float tabTextGap = 10.f;
     auto tabWidthForLabel = [&](const std::string& label) {
-        return std::max(fontAtlas().measureText(label) * tabScale + tabTextPadL + tabTextGap + tabActionW + tabActionPadR, 58.f);
+        return std::max(uiFontAtlas().measureText(label) * tabScale + tabTextPadL + tabTextGap + tabActionW + tabActionPadR, 58.f);
     };
     float totalTabsW = 0.f;
     for (auto& tab : tabs_) {
@@ -2599,8 +2648,8 @@ bool Application::handleTabBarEvent(const SDL_Event& e, float windowW, float tit
             float tw = tabWidthForLabel(label);
             if (mx >= tx && mx < tx + tw) {
                 if (e.button.button == 3) { tabContextOpen_ = true; tabContextIndex_ = i; tabContextX_ = mx; tabContextY_ = barY + tabBarH_ + 2.f; tabContextHover_ = -1; return true; }
-                float actionLeft = tx + tw - tabActionPadR - tabActionW;
-                if (e.button.button == 2 || mx >= actionLeft) { closeTab(i); return true; }
+                float actionCenter = tx + tw - tabActionPadR - tabActionW * 0.5f;
+                if (e.button.button == 2 || (mx >= actionCenter - 12.f && mx <= actionCenter + 12.f)) { closeTab(i); return true; }
                 bool ctrlClick = (SDL_GetModState() & KMOD_CTRL) != 0;
                 if (ctrlClick) {
                     addEditorGroupForTab(i);
@@ -2608,7 +2657,7 @@ bool Application::handleTabBarEvent(const SDL_Event& e, float windowW, float tit
                     collapseEditorGroupsTo(i);
                     switchToTab(i);
                 }
-                if (!ctrlClick && e.button.button == 1 && mx < actionLeft) { tabDragPending_ = true; tabDragIndex_ = i; tabDragStartX_ = mx; tabDragStartY_ = my; }
+                if (!ctrlClick && e.button.button == 1) { tabDragPending_ = true; tabDragIndex_ = i; tabDragStartX_ = mx; tabDragStartY_ = my; }
                 return true;
             }
             tx += tw;
@@ -3079,6 +3128,43 @@ void Application::openSettingsFile() {
     if (!settingsPath.empty() && fs::exists(settingsPath)) openFile(settingsPath);
 }
 
+void Application::openKeyBindingsFile() {
+    fs::path path = fs::path(paths_.dataDir) / "Packages" / "User" / "Default (Windows).moreno-keymap";
+    if (!fs::exists(path)) { fs::create_directories(path.parent_path()); std::ofstream file(path); if (file) file << "[]\n"; }
+    openFile(path.string());
+}
+
+void Application::importVimSettings(bool neovim) {
+    std::vector<fs::path> candidates;
+    const char* home = std::getenv("USERPROFILE"); if (!home) home = std::getenv("HOME");
+    const char* appData = std::getenv("LOCALAPPDATA");
+    if (home) {
+        fs::path root(home);
+        if (neovim) { candidates.push_back(root / ".config" / "nvim" / "init.vim"); candidates.push_back(root / ".config" / "nvim" / "init.lua"); }
+        else { candidates.push_back(root / ".vimrc"); candidates.push_back(root / "_vimrc"); candidates.push_back(root / "vimfiles" / "vimrc"); }
+    }
+    if (neovim && appData) { fs::path root(appData); candidates.push_back(root / "nvim" / "init.vim"); candidates.push_back(root / "nvim" / "init.lua"); }
+    fs::path source;
+    for (const auto& candidate : candidates) if (fs::is_regular_file(candidate)) { source = candidate; break; }
+    if (source.empty()) { pluginStatusText_ = neovim ? "No Neovim init.vim or init.lua found" : "No vimrc found"; pluginStatusUntil_ = SDL_GetTicks() + 4000; return; }
+    std::ifstream in(source); std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    auto& settings = SettingsManager::instance();
+    auto number = [&](const std::regex& pattern, const char* key) { std::smatch match; if (std::regex_search(text, match, pattern)) settings.set(key, std::stoi(match[1].str())); };
+    number(std::regex(R"((?:tabstop|ts)\s*=\s*(\d+))", std::regex::icase), "tab_size");
+    number(std::regex(R"(vim\.o\.(?:tabstop|shiftwidth)\s*=\s*(\d+))", std::regex::icase), "tab_size");
+    auto enabled = [&](const std::string& on, const std::string& off, const char* key) { if (std::regex_search(text, std::regex(on, std::regex::icase))) settings.set(key, true); if (std::regex_search(text, std::regex(off, std::regex::icase))) settings.set(key, false); };
+    enabled(R"((?:^|\s)(?:set\s+)?expandtab\b|vim\.o\.expandtab\s*=\s*true)", R"((?:^|\s)(?:set\s+)?noexpandtab\b|vim\.o\.expandtab\s*=\s*false)", "translate_tabs_to_spaces");
+    enabled(R"((?:^|\s)(?:set\s+)?wrap\b|vim\.o\.wrap\s*=\s*true)", R"((?:^|\s)(?:set\s+)?nowrap\b|vim\.o\.wrap\s*=\s*false)", "word_wrap");
+    enabled(R"((?:^|\s)(?:set\s+)?number\b|vim\.o\.number\s*=\s*true)", R"((?:^|\s)(?:set\s+)?nonumber\b|vim\.o\.number\s*=\s*false)", "line_numbers");
+    enabled(R"((?:^|\s)(?:set\s+)?cursorline\b|vim\.o\.cursorline\s*=\s*true)", R"((?:^|\s)(?:set\s+)?nocursorline\b|vim\.o\.cursorline\s*=\s*false)", "highlight_line");
+    settings.save();
+    tabSize_ = std::clamp(settings.get<int>("tab_size", tabSize_), 1, 16);
+    useTabs_ = !settings.get<bool>("translate_tabs_to_spaces", !useTabs_);
+    wordWrap_ = settings.get<bool>("word_wrap", wordWrap_);
+    pluginStatusText_ = "Imported " + source.filename().string() + " into Preferences.sublime-settings";
+    pluginStatusUntil_ = SDL_GetTicks() + 5000;
+}
+
 void Application::buildVisualLineMap(float editorWidth, float gutterWidth) {
     visualLines_.clear();
     if (!wordWrap_) return;
@@ -3253,10 +3339,11 @@ void Application::handleEvents() {
         if (pluginQuickPanel_.active && e.type == SDL_KEYDOWN) {
             auto sym = e.key.keysym.sym;
             if (sym == SDLK_ESCAPE) { finishPluginQuickPanel(-1); continue; }
-            int maxScroll = std::max(0, (int)pluginQuickPanel_.results.size() - 12);
+            int rows = pluginQuickPanel_.rich ? 4 : 12;
+            int maxScroll = std::max(0, (int)pluginQuickPanel_.results.size() - rows);
             auto clampQuickPanelScroll = [&]() {
                 if (pluginQuickPanel_.selected < pluginQuickPanel_.scroll) pluginQuickPanel_.scroll = pluginQuickPanel_.selected;
-                if (pluginQuickPanel_.selected >= pluginQuickPanel_.scroll + 12) pluginQuickPanel_.scroll = pluginQuickPanel_.selected - 11;
+                if (pluginQuickPanel_.selected >= pluginQuickPanel_.scroll + rows) pluginQuickPanel_.scroll = pluginQuickPanel_.selected - rows + 1;
                 if (pluginQuickPanel_.scroll < 0) pluginQuickPanel_.scroll = 0;
                 if (pluginQuickPanel_.scroll > maxScroll) pluginQuickPanel_.scroll = maxScroll;
             };
@@ -3279,6 +3366,19 @@ void Application::handleEvents() {
         }
         if (commandPalette_.active && e.type == SDL_KEYDOWN) {
             auto sym = e.key.keysym.sym;
+            bool ctrl = (e.key.keysym.mod & KMOD_CTRL) != 0;
+            bool shift = (e.key.keysym.mod & KMOD_SHIFT) != 0;
+            auto& query = commandPalette_.query;
+            auto hasQuerySelection = [&]() { return commandPalette_.cursor != commandPalette_.anchor; };
+            auto eraseQuerySelection = [&]() {
+                size_t first = std::min(commandPalette_.cursor, commandPalette_.anchor), last = std::max(commandPalette_.cursor, commandPalette_.anchor);
+                query.erase(first, last - first); commandPalette_.cursor = commandPalette_.anchor = first;
+            };
+            auto previousChar = [&](size_t pos) { if (!pos) return pos; --pos; while (pos && (query[pos] & 0xC0) == 0x80) --pos; return pos; };
+            auto nextChar = [&](size_t pos) { if (pos >= query.size()) return query.size(); ++pos; while (pos < query.size() && (query[pos] & 0xC0) == 0x80) ++pos; return pos; };
+            auto wordLeft = [&](size_t pos) { while (pos && std::isspace((unsigned char)query[previousChar(pos)])) pos = previousChar(pos); while (pos && !std::isspace((unsigned char)query[previousChar(pos)])) pos = previousChar(pos); return pos; };
+            auto wordRight = [&](size_t pos) { while (pos < query.size() && std::isspace((unsigned char)query[pos])) pos = nextChar(pos); while (pos < query.size() && !std::isspace((unsigned char)query[pos])) pos = nextChar(pos); return pos; };
+            auto moveQueryCursor = [&](size_t pos) { commandPalette_.cursor = pos; if (!shift) commandPalette_.anchor = pos; };
             if (sym == SDLK_ESCAPE) { commandPalette_.active = false; continue; }
             auto scrollPaletteSelection = [&]() {
                 if (commandPalette_.selected < commandPalette_.scroll) commandPalette_.scroll = commandPalette_.selected;
@@ -3297,14 +3397,29 @@ void Application::handleEvents() {
             }
             if (sym == SDLK_UP) { if (commandPalette_.selected > 0) --commandPalette_.selected; scrollPaletteSelection(); continue; }
             if (sym == SDLK_DOWN) { if (commandPalette_.selected < (int)commandPalette_.results.size() - 1) ++commandPalette_.selected; scrollPaletteSelection(); continue; }
-            if (sym == SDLK_BACKSPACE && !commandPalette_.query.empty()) {
-                auto it = commandPalette_.query.end(); --it;
-                while (it != commandPalette_.query.begin() && (*it & 0xC0) == 0x80) --it;
-                commandPalette_.query.erase(it, commandPalette_.query.end()); updateCommandPalette(); continue;
+            if (ctrl && sym == SDLK_a) { commandPalette_.anchor = 0; commandPalette_.cursor = query.size(); continue; }
+            if (sym == SDLK_HOME) { moveQueryCursor(0); continue; }
+            if (sym == SDLK_END) { moveQueryCursor(query.size()); continue; }
+            if (sym == SDLK_LEFT) { moveQueryCursor(ctrl ? wordLeft(commandPalette_.cursor) : previousChar(commandPalette_.cursor)); continue; }
+            if (sym == SDLK_RIGHT) { moveQueryCursor(ctrl ? wordRight(commandPalette_.cursor) : nextChar(commandPalette_.cursor)); continue; }
+            if (sym == SDLK_BACKSPACE) {
+                if (hasQuerySelection()) eraseQuerySelection();
+                else if (commandPalette_.cursor) { size_t start = ctrl ? wordLeft(commandPalette_.cursor) : previousChar(commandPalette_.cursor); query.erase(start, commandPalette_.cursor - start); commandPalette_.cursor = commandPalette_.anchor = start; }
+                updateCommandPalette(); continue;
+            }
+            if (sym == SDLK_DELETE) {
+                if (hasQuerySelection()) eraseQuerySelection();
+                else if (commandPalette_.cursor < query.size()) { size_t end = ctrl ? wordRight(commandPalette_.cursor) : nextChar(commandPalette_.cursor); query.erase(commandPalette_.cursor, end - commandPalette_.cursor); }
+                updateCommandPalette(); continue;
             }
             continue;
         }
-        if (commandPalette_.active && e.type == SDL_TEXTINPUT) { commandPalette_.query += e.text.text; updateCommandPalette(); continue; }
+        if (commandPalette_.active && e.type == SDL_TEXTINPUT) {
+            size_t first = std::min(commandPalette_.cursor, commandPalette_.anchor), last = std::max(commandPalette_.cursor, commandPalette_.anchor);
+            commandPalette_.query.replace(first, last - first, e.text.text);
+            commandPalette_.cursor = commandPalette_.anchor = first + std::strlen(e.text.text);
+            updateCommandPalette(); continue;
+        }
         // goto mode
         if (goto_.active && e.type == SDL_KEYDOWN) {
             auto sym = e.key.keysym.sym;
@@ -3360,7 +3475,7 @@ void Application::handleEvents() {
         if (titlebar_->handleEvent(e, window_)) continue;
         { int tbww,tbwh; SDL_GetWindowSize(window_,&tbww,&tbwh); if (handleTabBarEvent(e,(float)tbww,titlebar_->height())) continue; }
         if (commandPalette_.active) {
-            float ow = std::max(260.f, std::min(560.f, (float)ww - 48.f));
+            float ow = std::max(360.f, std::min(600.f, (float)ww - 96.f));
             float ox = ((float)ww - ow) / 2.f, oy = titlebar_->height() + tabBarH_ + 36.f;
             float rowH = 24.f, listY = oy + 38.f;
             int visibleRows = std::min(12, std::max(0, (int)commandPalette_.results.size() - commandPalette_.scroll));
@@ -3489,13 +3604,15 @@ void Application::handleEvents() {
         }
         if (pluginQuickPanel_.active &&
             (e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_MOUSEBUTTONUP || e.type == SDL_MOUSEMOTION || e.type == SDL_MOUSEWHEEL)) {
-            float ow = std::max(260.f, std::min(560.f, (float)ww - 48.f));
+            bool rich = pluginQuickPanel_.rich;
+            float ow = rich ? std::max(360.f, std::min(600.f, (float)ww - 96.f)) : std::max(260.f, std::min(560.f, (float)ww - 48.f));
             float ox = ((float)ww - ow) / 2.f, oy = titlebar_->height() + tabBarH_ + 36.f;
-            float rowH = 28.f, headerH = 38.f, listY = oy + headerH;
-            int visibleRows = std::min(12, std::max(0, (int)pluginQuickPanel_.results.size() - pluginQuickPanel_.scroll));
+            float rowH = rich ? 66.f : 28.f, headerH = rich ? 42.f : 38.f, listY = oy + headerH;
+            int rows = rich ? 4 : 12;
+            int visibleRows = std::min(rows, std::max(0, (int)pluginQuickPanel_.results.size() - pluginQuickPanel_.scroll));
             float panelH = headerH + visibleRows * rowH + 4.f;
             float listH = visibleRows * rowH;
-            int maxScroll = std::max(0, (int)pluginQuickPanel_.results.size() - 12);
+            int maxScroll = std::max(0, (int)pluginQuickPanel_.results.size() - rows);
             if (e.type == SDL_MOUSEMOTION) {
                 float mx = (float)e.motion.x, my = (float)e.motion.y;
                 if (mx >= ox && mx <= ox + ow && my >= listY && my < listY + listH) {
@@ -3516,7 +3633,17 @@ void Application::handleEvents() {
                 if (mx >= ox && mx <= ox + ow && my >= listY && my < listY + listH) {
                     int row = (int)((my - listY) / rowH);
                     int idx = pluginQuickPanel_.scroll + row;
-                    if (idx >= 0 && idx < (int)pluginQuickPanel_.results.size()) finishPluginQuickPanel(pluginQuickPanel_.results[idx]);
+                    if (idx >= 0 && idx < (int)pluginQuickPanel_.results.size()) {
+                        int itemIndex = pluginQuickPanel_.results[idx];
+                        bool linkRow = rich && my >= listY + row * rowH + 38.f && my <= listY + row * rowH + 59.f;
+                        if (linkRow && itemIndex < (int)pluginQuickPanel_.details.size() && pluginQuickPanel_.details[itemIndex].size() > 1 &&
+                            itemIndex < (int)pluginQuickPanel_.linkTexts.size() && itemIndex < (int)pluginQuickPanel_.linkUrls.size() && !pluginQuickPanel_.linkUrls[itemIndex].empty()) {
+                            float linkX = ox + 16.f + uiFontAtlas().measureText(pluginQuickPanel_.details[itemIndex][1]) * 0.85f;
+                            float linkW = uiFontAtlas().measureText(pluginQuickPanel_.linkTexts[itemIndex]) * 0.85f;
+                            if (mx >= linkX && mx <= linkX + linkW) { SDL_OpenURL(pluginQuickPanel_.linkUrls[itemIndex].c_str()); continue; }
+                        }
+                        finishPluginQuickPanel(itemIndex);
+                    }
                 } else if (mx < ox || mx > ox + ow || my < oy || my > oy + panelH) {
                     finishPluginQuickPanel(-1);
                 }
@@ -3668,6 +3795,8 @@ void Application::handleEvents() {
             auto clampScroll = [&] { if (scrollY_ < 0.f) scrollY_ = 0.f; if (scrollY_ > maxScroll) scrollY_ = maxScroll; };
             float editorLeft = (sidebarVisible_ ? sidebarWidth_ : 0.f) + gutter_->width() + 8.f;
             float editorRight = mmX - (!drawMinimap ? 10.f : 0.f);
+            bool overText = e.motion.x >= (int)editorLeft && e.motion.x < (int)editorRight && e.motion.y >= (int)tbH && e.motion.y < wh - (int)(sbH + findPanelH);
+            SDL_SetCursor(overText && textCursor_ ? textCursor_ : SDL_GetDefaultCursor());
             float editorW = editorRight - editorLeft;
             computeMaxLineWidth();
             float maxScrollX = (!wordWrap_ && editorW > 0.f) ? std::max(0.f, maxLineWidth_ - editorW) : 0.f;
@@ -3701,7 +3830,7 @@ void Application::handleEvents() {
                 continue;
             }
             if (selecting_) {
-                float textOriginY = tbH + fontAtlas().ascent() + 4.0f;
+                float textOriginY = tbH + fontAtlas().ascent() + 5.0f;
                 if (boxSelActive_) {
                     float sidebarOffset = sidebarVisible_ ? sidebarWidth_ : 0.f;
                     float gutterW = sidebarOffset + gutter_->width(), textX = gutterW + 8.0f;
@@ -3820,6 +3949,7 @@ void Application::handleEvents() {
             if (autoScrollActive_) autoScrollActive_ = false;
             else if ((float)e.button.x >= editorLeft && (float)e.button.y >= editorTop && (float)e.button.y < editorBottom) {
                 autoScrollActive_ = true;
+                autoScrollAnchorX_ = (float)e.button.x;
                 autoScrollAnchorY_ = (float)e.button.y;
                 autoScrollLastTick_ = SDL_GetTicks();
             }
@@ -3831,7 +3961,7 @@ void Application::handleEvents() {
             float mx = (float)e.button.x, my = (float)e.button.y;
             float tbH = titlebar_->height() + tabBarH_;
             float lineStep = fontAtlas().lineHeight();
-            float textOriginY = tbH + fontAtlas().ascent() + 4.0f;
+            float textOriginY = tbH + fontAtlas().ascent() + 5.0f;
             float sidebarOffset = sidebarVisible_ ? sidebarWidth_ : 0.f;
             float sbH = statusbar_->height();
             float findPanelH = find_.active ? (find_.replaceActive ? 62.f : 30.f) : 0.f;
@@ -4339,6 +4469,12 @@ void Application::pollPluginBridge() {
         if (!f) return;
         nlohmann::json j; f >> j;
         std::string type = j.value("type", "");
+        if (type == "status_message") {
+            pluginStatusText_ = j.value("text", "");
+            pluginStatusUntil_ = SDL_GetTicks() + 5000;
+            handledPluginRequests_.insert(chosen.string());
+            return;
+        }
         if (type == "view_update") {
             int id = j.value("id", 0);
             if (closedPluginViewIds_.count(id)) {
@@ -4431,9 +4567,28 @@ void Application::pollPluginBridge() {
         pendingPluginCommand_.clear();
         pendingPluginCommandTicks_ = 0;
         pluginQuickPanel_.items.clear();
-        for (auto& item : j["items"]) pluginQuickPanel_.items.push_back(item.get<std::string>());
+        pluginQuickPanel_.details.clear();
+        pluginQuickPanel_.annotations.clear();
+        pluginQuickPanel_.linkTexts.clear();
+        pluginQuickPanel_.linkUrls.clear();
+        for (auto& item : j["items"]) {
+            if (item.is_object()) {
+                pluginQuickPanel_.items.push_back(item.value("title", ""));
+                pluginQuickPanel_.details.push_back(item.value("details", std::vector<std::string>{}));
+                pluginQuickPanel_.annotations.push_back(item.value("annotation", ""));
+                pluginQuickPanel_.linkTexts.push_back(item.value("link_text", ""));
+                pluginQuickPanel_.linkUrls.push_back(item.value("link_url", ""));
+            } else {
+                pluginQuickPanel_.items.push_back(item.get<std::string>());
+                pluginQuickPanel_.details.emplace_back();
+                pluginQuickPanel_.annotations.emplace_back();
+                pluginQuickPanel_.linkTexts.emplace_back();
+                pluginQuickPanel_.linkUrls.emplace_back();
+            }
+        }
         pluginQuickPanel_.requestPath = chosen.string();
         pluginQuickPanel_.responsePath = j.value("response", "");
+        pluginQuickPanel_.rich = j.value("rich", false);
         pluginQuickPanel_.query.clear();
         updatePluginQuickPanelResults(pluginQuickPanel_);
         pluginQuickPanel_.submitted = false;
@@ -4640,7 +4795,7 @@ void Application::render() {
     float sbH = statusbar_->height();
     float findPanelH = find_.active ? (find_.replaceActive ? 62.f : 30.f) : 0.f;
     float lineStep = fontAtlas().lineHeight();
-    float textOriginY = tbH + fontAtlas().ascent() + 4.0f;
+    float textOriginY = tbH + fontAtlas().ascent() + 5.0f;
     size_t lineCount = totalLines();
     size_t firstVisibleLine = (size_t)(scrollY_ / lineStep);
     ensureLargeFileWindowForLine(firstVisibleLine);
@@ -4660,8 +4815,8 @@ void Application::render() {
         tabs_[activeTab_].dirty = dirty_;
     }
 
-    drawTabBar(fontAtlas(), fww, titlebar_->height());
-    drawSidebar(fontAtlas(), fwh, tbH, sbH);
+    drawTabBar(uiFontAtlas(), fww, titlebar_->height());
+    drawSidebar(uiFontAtlas(), fwh, tbH, sbH);
 
     float gutterW = gutter_->width();
     static std::unordered_map<std::string, std::unique_ptr<SyntaxHighlighter>> previewSyntaxCache;
@@ -4966,6 +5121,17 @@ void Application::render() {
         float ct = cy, cb = cy + fontAtlas().ascent() - fontAtlas().descent();
         addSolid(cx, ct, cx + 2.5f, cb, 0.82f, 0.98f, 1.0f, 1.f);
     }
+    if (autoScrollActive_) {
+        float x = autoScrollAnchorX_, y = autoScrollAnchorY_;
+        addSolid(x - 5.f, y - 7.f, x + 5.f, y - 6.f, 0.78f, 0.82f, 0.86f, 0.95f);
+        addSolid(x - 7.f, y - 5.f, x - 6.f, y + 5.f, 0.78f, 0.82f, 0.86f, 0.95f);
+        addSolid(x + 6.f, y - 5.f, x + 7.f, y + 5.f, 0.78f, 0.82f, 0.86f, 0.95f);
+        addSolid(x - 5.f, y + 6.f, x + 5.f, y + 7.f, 0.78f, 0.82f, 0.86f, 0.95f);
+        addSolid(x - 2.f, y - 2.f, x + 2.f, y + 2.f, 0.78f, 0.82f, 0.86f, 0.95f);
+        float distance = (float)mouseY_ - y;
+        if (distance < -8.f) addSolid(x - 2.f, y - 11.f, x + 2.f, y - 7.f, 0.78f, 0.82f, 0.86f, 0.95f);
+        else if (distance > 8.f) addSolid(x - 2.f, y + 7.f, x + 2.f, y + 11.f, 0.78f, 0.82f, 0.86f, 0.95f);
+    }
     flushSolid();
     // bracket matching
     {
@@ -5100,9 +5266,13 @@ void Application::render() {
         glDisable(GL_SCISSOR_TEST);
     }
     { std::lock_guard<std::mutex> lock(gitBranchMutex_); branch = gitBranch_; }
-    statusbar_->appendSolidRects(fontAtlas(), solidVerts_, fww, fwh, currentLine, currentCol, branch);
+    statusbar_->appendSolidRects(uiFontAtlas(), solidVerts_, fww, fwh, currentLine, currentCol, branch);
     flushSolid();
-    statusbar_->drawText(fontAtlas(), fww, fwh, currentLine, currentCol, syntax_->languageName(), useTabs_, tabSize_, branch);
+    statusbar_->drawText(uiFontAtlas(), fww, fwh, currentLine, currentCol, syntax_->languageName(), useTabs_, tabSize_, branch);
+    if (!pluginStatusText_.empty() && SDL_GetTicks() < pluginStatusUntil_) {
+        float statusX = 170.f, statusRight = std::max(statusX, fww - 230.f);
+        uiFontAtlas().drawTextClipped(pluginStatusText_, statusX, fwh - sbH + 3.f, statusX, statusRight, 0.72f, 0.78f, 0.92f, 1.f);
+    }
     // find bar
     if (find_.active) {
         float rowH = 28.f, barH = find_.replaceActive ? rowH * 2.f : rowH;
@@ -5250,7 +5420,14 @@ void Application::render() {
         flushSolid();
         fontAtlas().drawText(">", ox + 12.f, oy + 9.f, 0.70f, 0.72f, 0.78f, 1.f);
         fontAtlas().drawText("_", ox + 22.f, oy + 12.f, 0.70f, 0.72f, 0.78f, 1.f);
-        fontAtlas().drawText(commandPalette_.query + "|", ox + 42.f, oy + 8.f, 0.84f, 0.84f, 0.86f, 1.f);
+        size_t selectStart = std::min(commandPalette_.anchor, commandPalette_.cursor), selectEnd = std::max(commandPalette_.anchor, commandPalette_.cursor);
+        float inputX = ox + 42.f, selectionX = inputX + fontAtlas().measureText(commandPalette_.query.substr(0, selectStart));
+        float selectionW = fontAtlas().measureText(commandPalette_.query.substr(selectStart, selectEnd - selectStart));
+        if (selectionW > 0.f) { addSolid(selectionX, oy + 6.f, selectionX + selectionW, oy + 29.f, 0.22f, 0.36f, 0.65f, 0.95f); flushSolid(); }
+        fontAtlas().drawText(commandPalette_.query, inputX, oy + 8.f, 0.84f, 0.84f, 0.86f, 1.f);
+        float cursorX = inputX + fontAtlas().measureText(commandPalette_.query.substr(0, commandPalette_.cursor));
+        addSolid(cursorX, oy + 7.f, cursorX + 1.f, oy + 29.f, 0.84f, 0.84f, 0.86f, 1.f);
+        flushSolid();
         std::string count = std::to_string(total) + " commands";
         float countW = fontAtlas().measureText(count);
         fontAtlas().drawText(count, ox + ow - countW - 14.f, oy + 8.f, 0.46f, 0.46f, 0.50f, 1.f);
@@ -5269,10 +5446,12 @@ void Application::render() {
         }
     }
     if (pluginQuickPanel_.active) {
-        float mainW = std::max(260.f, std::min(560.f, fww - 48.f));
-        float headerH = 38.f, rowH = 28.f;
+        bool rich = pluginQuickPanel_.rich;
+        float mainW = rich ? std::max(360.f, std::min(600.f, fww - 96.f)) : std::max(260.f, std::min(560.f, fww - 48.f));
+        float headerH = rich ? 42.f : 38.f, rowH = rich ? 66.f : 28.f;
+        int maxRows = rich ? 4 : 12;
         int total = (int)pluginQuickPanel_.results.size();
-        int visible = std::min(12, total - pluginQuickPanel_.scroll);
+        int visible = std::min(maxRows, total - pluginQuickPanel_.scroll);
         if (visible < 0) visible = 0;
         float mainH = headerH + visible * rowH + 4.f;
         float mainX = (fww - mainW) / 2.f;
@@ -5280,27 +5459,55 @@ void Application::render() {
         auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
             addSolid(x0, y0, x1, y1, r, g, b, a);
         };
-        ar(mainX, mainY, mainX + mainW, mainY + mainH, 0.15f, 0.15f, 0.18f, 0.98f);
+        if (rich) {
+            ar(mainX + 4.f, mainY, mainX + mainW - 4.f, mainY + mainH, 0.15f, 0.15f, 0.18f, 0.98f);
+            ar(mainX, mainY + 4.f, mainX + mainW, mainY + mainH - 4.f, 0.15f, 0.15f, 0.18f, 0.98f);
+        } else ar(mainX, mainY, mainX + mainW, mainY + mainH, 0.15f, 0.15f, 0.18f, 0.98f);
         int selectedRow = pluginQuickPanel_.selected - pluginQuickPanel_.scroll;
-        if (selectedRow >= 0 && selectedRow < visible)
-            ar(mainX + 2.f, mainY + headerH + selectedRow * rowH, mainX + mainW - 8.f, mainY + headerH + (selectedRow + 1) * rowH, 0.25f, 0.30f, 0.45f, 1.f);
-        if (total > 12) {
+        if (selectedRow >= 0 && selectedRow < visible) {
+            float selectedY = mainY + headerH + selectedRow * rowH;
+            if (rich) ar(mainX + 4.f, selectedY + 1.f, mainX + mainW - 11.f, selectedY + rowH - 1.f, 0.25f, 0.30f, 0.45f, 1.f);
+            else ar(mainX + 2.f, selectedY, mainX + mainW - 8.f, selectedY + rowH, 0.25f, 0.30f, 0.45f, 1.f);
+        }
+        if (total > maxRows) {
             float trackX = mainX + mainW - 6.f;
-            float listH = 12.f * rowH;
-            float thumbH = std::max(20.f, listH * (12.f / (float)total));
-            float maxScroll = (float)std::max(1, total - 12);
+            float listH = maxRows * rowH;
+            if (rich) ar(trackX - 1.f, mainY + headerH + 3.f, trackX + 4.f, mainY + headerH + listH - 3.f, 0.12f, 0.12f, 0.14f, 1.f);
+            float thumbH = std::max(20.f, listH * (maxRows / (float)total));
+            float maxScroll = (float)std::max(1, total - maxRows);
             float thumbY = mainY + headerH + ((float)pluginQuickPanel_.scroll / maxScroll) * (listH - thumbH);
-            ar(trackX, thumbY, trackX + 4.f, thumbY + thumbH, 0.32f, 0.32f, 0.35f, 1.f);
+            ar(trackX, thumbY, trackX + 3.f, thumbY + thumbH, 0.32f, 0.32f, 0.35f, 1.f);
         }
         flushSolid();
-        fontAtlas().drawText(">", mainX + 12.f, mainY + 9.f, 0.70f, 0.72f, 0.78f, 1.f);
-        fontAtlas().drawText(pluginQuickPanel_.query + "|", mainX + 32.f, mainY + 8.f, 0.84f, 0.84f, 0.86f, 1.f);
+        if (rich) { addSolid(mainX + 14.f, mainY + 10.f, mainX + 35.f, mainY + 32.f, 0.28f, 0.30f, 0.35f, 1.f); flushSolid(); }
+        uiFontAtlas().drawText(">", rich ? mainX + 21.f : mainX + 12.f, mainY + (rich ? 12.f : 9.f), 0.86f, 0.88f, 0.93f, 1.f);
+        uiFontAtlas().drawText(pluginQuickPanel_.query + "|", rich ? mainX + 43.f : mainX + 32.f, mainY + (rich ? 12.f : 8.f), 0.88f, 0.89f, 0.92f, 1.f);
         glEnable(GL_SCISSOR_TEST);
         GLRenderer::scissor((int)mainX, wh - (int)(mainY + mainH), (int)mainW, (int)mainH);
         for (int row = 0; row < visible; ++row) {
             int idx = pluginQuickPanel_.scroll + row;
             float b = idx == pluginQuickPanel_.selected ? 0.98f : 0.72f;
-            fontAtlas().drawText(pluginQuickPanel_.items[pluginQuickPanel_.results[idx]], mainX + 12.f, mainY + headerH + 5.f + row * rowH, b, b, b + 0.03f, 1.f);
+            int itemIndex = pluginQuickPanel_.results[idx];
+            float rowY = mainY + headerH + row * rowH;
+            uiFontAtlas().drawText(pluginQuickPanel_.items[itemIndex], rich ? mainX + 16.f : mainX + 12.f, rowY + (rich ? 7.f : 5.f), b, b, b + 0.03f, 1.f);
+            if (rich && itemIndex < (int)pluginQuickPanel_.details.size()) {
+                const auto& details = pluginQuickPanel_.details[itemIndex];
+                for (size_t detail = 0; detail < details.size() && detail < 2; ++detail) {
+                    uiFontAtlas().drawTextItalic(details[detail], mainX + 16.f, rowY + 26.f + detail * 16.f, 0.85f, 0.53f, 0.57f, 0.65f, 1.f);
+                }
+                if (details.size() > 1 && itemIndex < (int)pluginQuickPanel_.linkTexts.size() && !pluginQuickPanel_.linkTexts[itemIndex].empty()) {
+                    float linkX = mainX + 16.f + uiFontAtlas().measureText(details[1]) * 0.85f;
+                    float linkY = rowY + 42.f;
+                    uiFontAtlas().drawTextScaled(pluginQuickPanel_.linkTexts[itemIndex], linkX, linkY, 0.85f, 0.30f, 0.72f, 0.96f, 1.f);
+                    float linkW = uiFontAtlas().measureText(pluginQuickPanel_.linkTexts[itemIndex]) * 0.85f;
+                    addSolid(linkX, linkY + uiFontAtlas().lineHeight() * 0.85f - 1.f, linkX + linkW, linkY + uiFontAtlas().lineHeight() * 0.85f, 0.30f, 0.72f, 0.96f, 1.f);
+                    flushSolid();
+                }
+            }
+            if (rich && itemIndex < (int)pluginQuickPanel_.annotations.size() && !pluginQuickPanel_.annotations[itemIndex].empty()) {
+                float annotationW = uiFontAtlas().measureText(pluginQuickPanel_.annotations[itemIndex]) * 0.85f;
+                uiFontAtlas().drawTextScaled(pluginQuickPanel_.annotations[itemIndex], mainX + mainW - annotationW - 14.f, rowY + 8.f, 0.85f, 0.48f, 0.52f, 0.60f, 1.f);
+            }
         }
         glDisable(GL_SCISSOR_TEST);
     }
@@ -5392,7 +5599,7 @@ void Application::render() {
     if (titlebar_->isMenuOpen() && deferPopupDraw_) titlebar_->deferMenuDraw();
     titlebar_->appendSolidRects(solidVerts_);
     flushSolid();
-    titlebar_->drawForeground(fontAtlas());
+    titlebar_->drawForeground(uiFontAtlas());
     if (closeConfirmOpen_) {
         std::string name = closeConfirmIndex_ < tabs_.size() ? tabs_[closeConfirmIndex_].fileName : openFile_;
         CloseConfirmLayout dlg = makeCloseConfirmLayout(fontAtlas(), fww, fwh, name);
@@ -5473,7 +5680,7 @@ void Application::render() {
     float mainX = 0.f, mainY = 0.f, mainW = 0.f, mainH = 0.f;
     enum class PopupKind { None, Menu, TabDropdown, TabContext, SidebarContext, Status, Autocomplete } popupKind = PopupKind::None;
     if (titlebar_->isMenuOpen()) {
-        titlebar_->getMenuPopupBounds(fontAtlas(), mainX, mainY, mainW, mainH);
+        titlebar_->getMenuPopupBounds(uiFontAtlas(), mainX, mainY, mainW, mainH);
         popupKind = PopupKind::Menu; hasPopup = true;
     } else if (tabDropdownOpen_) {
         mainX = tabChevronX_; mainY = titlebar_->height() + tabBarH_;
@@ -5524,7 +5731,7 @@ void Application::render() {
             glBindVertexArray(0); GLRenderer::setDrawMode(0); verts.clear();
         };
         if (popupKind == PopupKind::Menu) {
-            titlebar_->drawMenuPopup(fontAtlas(), mainX, mainY);
+            titlebar_->drawMenuPopup(uiFontAtlas(), mainX, mainY);
         } else if (popupKind == PopupKind::TabDropdown) {
             std::vector<float> pv;
             float itemH = 24.f;
@@ -5608,6 +5815,12 @@ void Application::render() {
 void Application::shutdown() {
     saveSession();
     saveRecentFiles();
+    if (window_) {
+        int x = 0, y = 0, w = 0, h = 0;
+        SDL_GetWindowPosition(window_, &x, &y); SDL_GetWindowSize(window_, &w, &h);
+        if (borderlessMaximized_) { x = restoreWindowX_; y = restoreWindowY_; w = restoreWindowW_; h = restoreWindowH_; }
+        if (w >= 400 && h >= 300) { auto& settings = SettingsManager::instance(); settings.set("window_x", x); settings.set("window_y", y); settings.set("window_width", w); settings.set("window_height", h); settings.save(); }
+    }
     sidebarWatchRunning_ = false;
     if (popupWin_) { SDL_DestroyWindow(popupWin_); popupWin_ = nullptr; }
 #ifdef _WIN32
@@ -5615,7 +5828,8 @@ void Application::shutdown() {
 #endif
     delete syntax_; delete statusbar_; delete minimap_; delete gutter_; delete titlebar_;
     if (sidebarResizeCursor_) { SDL_FreeCursor(sidebarResizeCursor_); sidebarResizeCursor_ = nullptr; }
-    fontAtlas().destroy(); GLRenderer::destroy();
+    if (textCursor_) { SDL_FreeCursor(textCursor_); textCursor_ = nullptr; }
+    fontAtlas().destroy(); uiFontAtlas().destroy(); GLRenderer::destroy();
     SDL_StopTextInput(); SDL_GL_DeleteContext(glContext_); SDL_DestroyWindow(window_); SDL_Quit();
 }
 

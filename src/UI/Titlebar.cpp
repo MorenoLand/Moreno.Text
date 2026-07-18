@@ -30,7 +30,7 @@ void Titlebar::buildMenu() {
         {{"Toggle Side Bar","Ctrl+K Ctrl+B",[]{ Application::instance().toggleSidebar(); }},{"Toggle Minimap","",[]{ Application::instance().toggleMinimap(); }},{"Hide Tabs","",nullptr},{"Hide Status Bar","",nullptr},{"","",nullptr,true},{"Show Console","Ctrl+`",[]{ Application::instance().toggleConsole(); }},{"","",nullptr,true},{"Word Wrap","Alt+Z",[]{ Application::instance().toggleWordWrap(); }},{"","",nullptr,true},{"Enter Full Screen","F11",[]{ Application::instance().toggleFullscreen(); }},{"Enter Distraction Free Mode","Shift+F11",nullptr},{"","",nullptr,true},{"Syntax",">",nullptr},{"Indentation",">",nullptr}},
         {{"Goto Anything...","Ctrl+P",[]{ Application::instance().commandGotoAnything(); }},{"Goto Symbol...","Ctrl+R",nullptr},{"Goto Line...","Ctrl+G",nullptr},{"Goto Word...","Ctrl+;",nullptr},{"","",nullptr,true},{"Jump Back","Alt+-",nullptr},{"Jump Forward","Alt+Shift+-",nullptr},{"","",nullptr,true},{"Next Bookmark","F2",nullptr},{"Previous Bookmark","Shift+F2",nullptr},{"Toggle Bookmark","Ctrl+F2",nullptr},{"Clear All Bookmarks","Ctrl+Shift+F2",nullptr}},
         {{"Command Palette...","Ctrl+Shift+P",[]{ Application::instance().commandPalette(); }},{"","",nullptr,true},{"Record Macro","",[]{}},{"Playback Macro","",[]{}}},
-        {{"Settings","",[]{ Application::instance().openSettingsFile(); }},{"Key Bindings","",[]{}},{"Color Scheme",">",[]{}},{"Font",">",[]{}},{"Theme",">",[]{}}},
+        {{"Settings","",[]{ Application::instance().openSettingsFile(); }},{"Import Vim Settings","",[]{ Application::instance().importVimSettings(false); }},{"Import Neovim Settings","",[]{ Application::instance().importVimSettings(true); }},{"","",nullptr,true},{"Key Bindings","",[]{ Application::instance().openKeyBindingsFile(); }},{"Color Scheme",">",[]{}},{"Font",">",[]{}},{"Theme",">",[]{}}},
     };
 }
 
@@ -402,6 +402,7 @@ bool Titlebar::handleMenuEvent(const SDL_Event& e) {
 }
 
 SDL_HitTestResult Titlebar::hitTest(int mx, int my, SDL_Window* window) {
+    if (Application::instance().isBorderlessMaximized()) return SDL_HITTEST_NORMAL;
     int ww, wh; SDL_GetWindowSize(window, &ww, &wh);
     int re = static_cast<int>(resizeEdge_);
     bool left = mx >= 0 && mx < re;
