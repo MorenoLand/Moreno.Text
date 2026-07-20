@@ -21,7 +21,7 @@ public:
         std::string script;
     };
     static std::vector<Script> discoverScripts(const std::string& packagesDir);
-    static std::vector<Command> discoverCommands(const std::vector<Script>& scripts);
+    static std::vector<Command> discoverCommands(const std::vector<Script>& scripts, const std::string& packagesDir);
     static std::vector<Command> discoverCommandPaletteEntries(const std::string& packagesDir);
     static std::string commandNameFromClass(const std::string& className);
     static std::string commandCaptionFromName(const std::string& name);

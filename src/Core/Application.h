@@ -71,6 +71,8 @@ struct CommandPaletteState {
     int selected = 0;
     int scroll = 0;
     int hover = -1;
+    bool scrollbarDragging = false;
+    float scrollbarDragOffset = 0.f;
 };
 
 struct PluginPaletteCommand {
@@ -93,6 +95,8 @@ struct PluginQuickPanelState {
     std::string query;
     int selected = 0;
     int scroll = 0;
+    bool scrollbarDragging = false;
+    float scrollbarDragOffset = 0.f;
 };
 
 struct PluginInputPanelState {

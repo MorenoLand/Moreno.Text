@@ -157,13 +157,64 @@ static void discoverScriptsInPackageDir(const fs::path& packageRoot, std::vector
         for (auto& packageEntry : fs::directory_iterator(packageRoot)) {
             if (!packageEntry.is_directory()) continue;
             std::string package = packageEntry.path().filename().string();
-            if (package == "User") continue;
+            if (package == "User" || package == "0_package_control_loader") continue;
             for (auto& fileEntry : fs::directory_iterator(packageEntry.path())) {
                 if (!fileEntry.is_regular_file() || fileEntry.path().extension() != ".py") continue;
                 scripts.push_back({package, fileEntry.path().string()});
             }
         }
     } catch (...) {}
+}
+
+static std::string normalizeSublimeJson(const std::string& text) {
+    std::string withoutComments;
+    withoutComments.reserve(text.size());
+    bool inString = false, escaped = false;
+    for (size_t i = 0; i < text.size(); ++i) {
+        char ch = text[i];
+        if (inString) {
+            withoutComments += ch;
+            if (escaped) escaped = false;
+            else if (ch == '\\') escaped = true;
+            else if (ch == '"') inString = false;
+            continue;
+        }
+        if (ch == '"') { inString = true; withoutComments += ch; continue; }
+        if (ch == '/' && i + 1 < text.size() && text[i + 1] == '/') {
+            i += 2;
+            while (i < text.size() && text[i] != '\n') ++i;
+            if (i < text.size()) withoutComments += '\n';
+            continue;
+        }
+        if (ch == '/' && i + 1 < text.size() && text[i + 1] == '*') {
+            i += 2;
+            while (i + 1 < text.size() && !(text[i] == '*' && text[i + 1] == '/')) ++i;
+            ++i;
+            continue;
+        }
+        withoutComments += ch;
+    }
+    std::string normalized;
+    normalized.reserve(withoutComments.size());
+    inString = false; escaped = false;
+    for (size_t i = 0; i < withoutComments.size(); ++i) {
+        char ch = withoutComments[i];
+        if (inString) {
+            normalized += ch;
+            if (escaped) escaped = false;
+            else if (ch == '\\') escaped = true;
+            else if (ch == '"') inString = false;
+            continue;
+        }
+        if (ch == '"') { inString = true; normalized += ch; continue; }
+        if (ch == ',') {
+            size_t next = i + 1;
+            while (next < withoutComments.size() && std::isspace(static_cast<unsigned char>(withoutComments[next]))) ++next;
+            if (next < withoutComments.size() && (withoutComments[next] == '}' || withoutComments[next] == ']')) continue;
+        }
+        normalized += ch;
+    }
+    return normalized;
 }
 
 static void discoverCommandPaletteEntriesInPackageDir(const fs::path& packageRoot, std::vector<PluginHost::Command>& commands) {
@@ -175,8 +226,10 @@ static void discoverCommandPaletteEntriesInPackageDir(const fs::path& packageRoo
             if (!fs::exists(commandFile)) continue;
             std::ifstream f(commandFile, std::ios::binary);
             if (!f) continue;
+            std::ostringstream raw; raw << f.rdbuf();
             nlohmann::json j;
-            f >> j;
+            j = nlohmann::json::parse(normalizeSublimeJson(raw.str()), nullptr, false);
+            if (j.is_discarded()) continue;
             if (!j.is_array()) continue;
             for (auto& entry : j) {
                 if (!entry.is_object()) continue;
@@ -322,14 +375,11 @@ std::vector<PluginHost::Command> PluginHost::discoverCommandPaletteEntries(const
     return commands;
 }
 
-std::vector<PluginHost::Command> PluginHost::discoverCommands(const std::vector<Script>& scripts) {
+std::vector<PluginHost::Command> PluginHost::discoverCommands(const std::vector<Script>& scripts, const std::string& packagesDir) {
     std::vector<Command> commands;
     std::set<std::string> seen;
-    if (!scripts.empty()) {
-        fs::path packagesDir = fs::path(scripts.front().path).parent_path().parent_path();
-        commands = discoverCommandPaletteEntries(packagesDir.string());
-        for (auto& command : commands) seen.insert(command.name);
-    }
+    commands = discoverCommandPaletteEntries(packagesDir);
+    for (auto& command : commands) seen.insert(command.name);
     std::regex re(R"(class\s+([A-Za-z_][A-Za-z0-9_]*Command)\s*\([^)]*(?:TextCommand|WindowCommand|ApplicationCommand))");
     for (auto& script : scripts) {
         std::ifstream f(script.path, std::ios::binary);
@@ -406,6 +456,7 @@ bool PluginHost::writeBootstrapFiles(const PluginHostPaths& paths) {
               << "    return ''\n"
               << "def load_resource(name):\n"
               << "    p=_resource_path(name)\n"
+              << "    if not p and name == 'Packages/Default/Preferences.sublime-settings': return '{}'\n"
               << "    if not p: raise FileNotFoundError(name)\n"
               << "    return open(p, 'r', encoding='utf-8').read()\n"
               << "def find_resources(pattern):\n"
@@ -869,25 +920,6 @@ bool PluginHost::writeBootstrapFiles(const PluginHostPaths& paths) {
               << "        print('[plugin-loaded]', script)\n"
               << "    except Exception:\n"
               << "        traceback.print_exc()\n";
-            f << "try:\n"
-              << "    from package_control.package_installer import PackageInstaller\n"
-              << "    _moreno_make_package_list=PackageInstaller.make_package_list\n"
-              << "    def _moreno_package_list_with_dates(self, *args, **kwargs):\n"
-              << "        entries=_moreno_make_package_list(self, *args, **kwargs)\n"
-              << "        packages=self.manager.list_available_packages()\n"
-              << "        for entry in entries:\n"
-              << "            info=packages.get(getattr(entry, 'trigger', ''), {})\n"
-              << "            release=(info.get('releases') or [{}])[0]\n"
-              << "            date=release.get('date', '')\n"
-              << "            if date:\n"
-              << "                try:\n"
-              << "                    from datetime import datetime\n"
-              << "                    entry.annotation='Updated on ' + datetime.strptime(date[:19], '%Y-%m-%d %H:%M:%S').strftime('%a %b %d, %Y')\n"
-              << "                except Exception: entry.annotation='Updated on ' + str(date)\n"
-              << "        return entries\n"
-              << "    PackageInstaller.make_package_list=_moreno_package_list_with_dates\n"
-              << "except Exception:\n"
-              << "    traceback.print_exc()\n";
             f << "def _dispatch_window_command(cmd, args=None):\n"
               << "    import inspect\n"
               << "    args=args or {}\n"
@@ -906,8 +938,11 @@ bool PluginHost::writeBootstrapFiles(const PluginHostPaths& paths) {
               << "                    print('[plugin-command]', cmd)\n"
               << "                    api_mod=__import__('sub'+'lime')\n"
               << "                    plugin_mod=__import__('sub'+'lime_plugin')\n"
-              << "                    base=getattr(plugin_mod, 'WindowCommand', None)\n"
-              << "                    inst=obj(api_mod.active_window()) if base and issubclass(obj, base) else obj(None)\n"
+              << "                    window_base=getattr(plugin_mod, 'WindowCommand', None)\n"
+              << "                    text_base=getattr(plugin_mod, 'TextCommand', None)\n"
+              << "                    if window_base and issubclass(obj, window_base): inst=obj(api_mod.active_window())\n"
+              << "                    elif text_base and issubclass(obj, text_base): inst=obj(api_mod.active_window().active_view())\n"
+              << "                    else: inst=obj()\n"
               << "                    try: inst.run(**args)\n"
               << "                    except TypeError:\n"
               << "                        try: inst.run()\n"

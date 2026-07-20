@@ -1436,6 +1436,12 @@ void Application::drawSidebar(FontAtlas& font, float windowH, float titlebarH, f
         addSolidRect(v, x, rowY + 6.f, x + 13.f, rowY + 16.f, 0.50f, 0.53f, 0.56f, 1.f);
     };
     auto addFileIcon = [&](float x, float rowY, float r, float g, float b, int kind) {
+        if (kind == 0) {
+            addSolidRect(v, x + 1.f, rowY + 5.f, x + 10.f, rowY + 6.f, r, g, b, 1.f);
+            addSolidRect(v, x + 1.f, rowY + 8.f, x + 8.f, rowY + 9.f, r, g, b, 1.f);
+            addSolidRect(v, x + 1.f, rowY + 11.f, x + 6.f, rowY + 12.f, r, g, b, 1.f);
+            return;
+        }
         addSolidRect(v, x, rowY + 2.f, x + 10.f, rowY + 16.f, 0.64f, 0.67f, 0.71f, 1.f);
         addSolidRect(v, x + 1.f, rowY + 3.f, x + 9.f, rowY + 15.f, 0.105f, 0.115f, 0.135f, 1.f);
         if (kind == 1) {
@@ -1519,6 +1525,7 @@ void Application::drawSidebar(FontAtlas& font, float windowH, float titlebarH, f
                 else if (ext == ".txt") { ir = node.name == "CMakeLists.txt" ? 0.92f : 0.62f; ig = node.name == "CMakeLists.txt" ? 0.64f : 0.66f; ib = node.name == "CMakeLists.txt" ? 0.28f : 0.72f; iconKind = 3; }
                 else if (node.name == "gradlew" || node.name == "gradlew.bat" || node.name.rfind("headless-revamp", 0) == 0) { ir = 0.48f; ig = 0.78f; ib = 0.68f; iconKind = 5; }
                 else if (node.name == "Jenkinsfile" || node.name == "Makefile" || node.name == "GNUmakefile" || node.name == "Dockerfile" || node.name == "Rakefile" || node.name == "Gemfile" || node.name == "Vagrantfile") { ir = 0.92f; ig = 0.82f; ib = 0.34f; iconKind = 2; }
+                else if (node.name == ".gitignore") { ir = 0.88f; ig = 0.72f; ib = 0.28f; iconKind = 4; }
                 else if (!node.name.empty() && node.name[0] == '.') { ir = 0.62f; ig = 0.66f; ib = 0.72f; iconKind = 4; }
                 float labelX = x + 36.f;
                 if (node.folder) {
@@ -2734,7 +2741,7 @@ void Application::updateCommandPalette() {
 
 void Application::refreshPluginCommands() {
     pluginCommands_.clear();
-    auto commands = PluginHost::discoverCommands(PluginHost::discoverScripts(paths_.packagesDir));
+    auto commands = PluginHost::discoverCommands(PluginHost::discoverScripts(paths_.packagesDir), paths_.packagesDir);
     pluginCommands_.reserve(commands.size());
     for (auto& command : commands) pluginCommands_.push_back({command.caption, command.name});
 }
@@ -3475,17 +3482,28 @@ void Application::handleEvents() {
         if (titlebar_->handleEvent(e, window_)) continue;
         { int tbww,tbwh; SDL_GetWindowSize(window_,&tbww,&tbwh); if (handleTabBarEvent(e,(float)tbww,titlebar_->height())) continue; }
         if (commandPalette_.active) {
-            float ow = std::max(360.f, std::min(600.f, (float)ww - 96.f));
+            float ow = std::max(260.f, std::min(560.f, (float)ww - 48.f));
             float ox = ((float)ww - ow) / 2.f, oy = titlebar_->height() + tabBarH_ + 36.f;
             float rowH = 24.f, listY = oy + 38.f;
             int visibleRows = std::min(12, std::max(0, (int)commandPalette_.results.size() - commandPalette_.scroll));
             float panelH = 38.f + visibleRows * rowH + 4.f;
             float listH = visibleRows * rowH;
             int maxScroll = std::max(0, (int)commandPalette_.results.size() - 12);
+            float trackX = ox + ow - 6.f;
+            float thumbH = std::max(20.f, listH * (12.f / (float)std::max(1, (int)commandPalette_.results.size())));
+            if (thumbH > listH) thumbH = listH;
+            float thumbY = listY + (maxScroll > 0 ? ((float)commandPalette_.scroll / maxScroll) * (listH - thumbH) : 0.f);
+            auto setPaletteScroll = [&](float my) {
+                float usable = listH - thumbH;
+                float rel = usable > 0.f ? (my - listY - commandPalette_.scrollbarDragOffset) / usable : 0.f;
+                commandPalette_.scroll = std::clamp((int)std::lround(rel * maxScroll), 0, maxScroll);
+            };
             if (e.type == SDL_MOUSEMOTION) {
                 float mx = (float)e.motion.x, my = (float)e.motion.y;
+                SDL_SetCursor(SDL_GetDefaultCursor());
                 commandPalette_.hover = -1;
-                if (mx >= ox && mx <= ox + ow && my >= listY && my < listY + listH) {
+                if (commandPalette_.scrollbarDragging) setPaletteScroll(my);
+                else if (mx >= ox && mx < trackX - 2.f && my >= listY && my < listY + listH) {
                     int row = (int)((my - listY) / rowH);
                     int idx = commandPalette_.scroll + row;
                     if (idx >= 0 && idx < (int)commandPalette_.results.size()) {
@@ -3501,9 +3519,17 @@ void Application::handleEvents() {
                 if (commandPalette_.scroll > maxScroll) commandPalette_.scroll = maxScroll;
                 continue;
             }
+            if (e.type == SDL_MOUSEBUTTONUP && e.button.button == 1) {
+                commandPalette_.scrollbarDragging = false;
+                continue;
+            }
             if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == 1) {
                 float mx = (float)e.button.x, my = (float)e.button.y;
-                if (mx >= ox && mx <= ox + ow && my >= listY && my < listY + listH) {
+                if (maxScroll > 0 && mx >= trackX - 4.f && mx <= ox + ow && my >= listY && my < listY + listH) {
+                    commandPalette_.scrollbarDragging = true;
+                    commandPalette_.scrollbarDragOffset = my >= thumbY && my <= thumbY + thumbH ? my - thumbY : thumbH * 0.5f;
+                    setPaletteScroll(my);
+                } else if (mx >= ox && mx < trackX - 2.f && my >= listY && my < listY + listH) {
                     int row = (int)((my - listY) / rowH);
                     int resultIndex = commandPalette_.scroll + row;
                     if (resultIndex >= 0 && resultIndex < (int)commandPalette_.results.size()) {
@@ -3613,9 +3639,20 @@ void Application::handleEvents() {
             float panelH = headerH + visibleRows * rowH + 4.f;
             float listH = visibleRows * rowH;
             int maxScroll = std::max(0, (int)pluginQuickPanel_.results.size() - rows);
+            float trackX = ox + ow - 6.f;
+            float thumbH = listH > 0.f ? std::max(20.f, listH * (rows / (float)std::max(1, (int)pluginQuickPanel_.results.size()))) : 0.f;
+            if (thumbH > listH) thumbH = listH;
+            float thumbY = listY + (maxScroll > 0 ? ((float)pluginQuickPanel_.scroll / maxScroll) * (listH - thumbH) : 0.f);
+            auto setQuickPanelScroll = [&](float my) {
+                float usable = listH - thumbH;
+                float rel = usable > 0.f ? (my - listY - pluginQuickPanel_.scrollbarDragOffset) / usable : 0.f;
+                pluginQuickPanel_.scroll = std::clamp((int)std::lround(rel * maxScroll), 0, maxScroll);
+            };
             if (e.type == SDL_MOUSEMOTION) {
                 float mx = (float)e.motion.x, my = (float)e.motion.y;
-                if (mx >= ox && mx <= ox + ow && my >= listY && my < listY + listH) {
+                SDL_SetCursor(SDL_GetDefaultCursor());
+                if (pluginQuickPanel_.scrollbarDragging) setQuickPanelScroll(my);
+                else if (mx >= ox && mx < trackX - 2.f && my >= listY && my < listY + listH) {
                     int row = (int)((my - listY) / rowH);
                     int idx = pluginQuickPanel_.scroll + row;
                     if (idx >= 0 && idx < (int)pluginQuickPanel_.results.size()) pluginQuickPanel_.selected = idx;
@@ -3628,9 +3665,17 @@ void Application::handleEvents() {
                 if (pluginQuickPanel_.scroll > maxScroll) pluginQuickPanel_.scroll = maxScroll;
                 continue;
             }
+            if (e.type == SDL_MOUSEBUTTONUP && e.button.button == 1) {
+                pluginQuickPanel_.scrollbarDragging = false;
+                continue;
+            }
             if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == 1) {
                 float mx = (float)e.button.x, my = (float)e.button.y;
-                if (mx >= ox && mx <= ox + ow && my >= listY && my < listY + listH) {
+                if (maxScroll > 0 && mx >= trackX - 4.f && mx <= ox + ow && my >= listY && my < listY + listH) {
+                    pluginQuickPanel_.scrollbarDragging = true;
+                    pluginQuickPanel_.scrollbarDragOffset = my >= thumbY && my <= thumbY + thumbH ? my - thumbY : thumbH * 0.5f;
+                    setQuickPanelScroll(my);
+                } else if (mx >= ox && mx < trackX - 2.f && my >= listY && my < listY + listH) {
                     int row = (int)((my - listY) / rowH);
                     int idx = pluginQuickPanel_.scroll + row;
                     if (idx >= 0 && idx < (int)pluginQuickPanel_.results.size()) {
@@ -3664,6 +3709,51 @@ void Application::handleEvents() {
                 consoleScrollY_ += (float)e.wheel.y * 3.f;
                 if (consoleScrollY_ < 0.f) consoleScrollY_ = 0.f;
                 if (consoleScrollY_ > maxBack) consoleScrollY_ = maxBack;
+                continue;
+            }
+        }
+        if (commandPalette_.active &&
+            (e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_MOUSEBUTTONUP || e.type == SDL_MOUSEMOTION || e.type == SDL_MOUSEWHEEL)) {
+            float ow = std::max(260.f, std::min(560.f, (float)ww - 48.f));
+            float headerH = 38.f, rowH = 24.f, ox = ((float)ww - ow) / 2.f, oy = titlebar_->height() + tabBarH_ + 36.f;
+            int total = (int)commandPalette_.results.size(), rows = 12, maxScroll = std::max(0, total - rows);
+            float listY = oy + headerH, listH = rows * rowH, trackX = ox + ow - 6.f;
+            float thumbH = std::max(20.f, listH * (rows / (float)std::max(1, total)));
+            if (thumbH > listH) thumbH = listH;
+            float thumbY = listY + (maxScroll > 0 ? ((float)commandPalette_.scroll / maxScroll) * (listH - thumbH) : 0.f);
+            auto setPaletteScroll = [&](float my) {
+                float usable = listH - thumbH;
+                float rel = usable > 0.f ? (my - listY - commandPalette_.scrollbarDragOffset) / usable : 0.f;
+                commandPalette_.scroll = std::clamp((int)std::lround(rel * maxScroll), 0, maxScroll);
+            };
+            if (e.type == SDL_MOUSEMOTION) {
+                float mx = (float)e.motion.x, my = (float)e.motion.y;
+                SDL_SetCursor(SDL_GetDefaultCursor());
+                if (commandPalette_.scrollbarDragging) setPaletteScroll(my);
+                else if (mx >= ox && mx < trackX - 2.f && my >= listY && my < listY + listH) {
+                    int index = commandPalette_.scroll + (int)((my - listY) / rowH);
+                    if (index >= 0 && index < total) commandPalette_.selected = index;
+                }
+                continue;
+            }
+            if (e.type == SDL_MOUSEWHEEL) {
+                commandPalette_.scroll = std::clamp(commandPalette_.scroll - e.wheel.y * 3, 0, maxScroll);
+                continue;
+            }
+            if (e.type == SDL_MOUSEBUTTONUP && e.button.button == 1) {
+                commandPalette_.scrollbarDragging = false;
+                continue;
+            }
+            if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == 1) {
+                float mx = (float)e.button.x, my = (float)e.button.y;
+                if (maxScroll > 0 && mx >= trackX - 4.f && mx <= ox + ow && my >= listY && my < listY + listH) {
+                    commandPalette_.scrollbarDragging = true;
+                    commandPalette_.scrollbarDragOffset = my >= thumbY && my <= thumbY + thumbH ? my - thumbY : thumbH * 0.5f;
+                    setPaletteScroll(my);
+                } else if (mx >= ox && mx < trackX - 2.f && my >= listY && my < listY + listH) {
+                    int index = commandPalette_.scroll + (int)((my - listY) / rowH);
+                    if (index >= 0 && index < total) commandPalette_.selected = index;
+                }
                 continue;
             }
         }
@@ -3796,7 +3886,8 @@ void Application::handleEvents() {
             float editorLeft = (sidebarVisible_ ? sidebarWidth_ : 0.f) + gutter_->width() + 8.f;
             float editorRight = mmX - (!drawMinimap ? 10.f : 0.f);
             bool overText = e.motion.x >= (int)editorLeft && e.motion.x < (int)editorRight && e.motion.y >= (int)tbH && e.motion.y < wh - (int)(sbH + findPanelH);
-            SDL_SetCursor(overText && textCursor_ ? textCursor_ : SDL_GetDefaultCursor());
+            bool overlayActive = pluginQuickPanel_.active || pluginInputPanel_.active || commandPalette_.active || goto_.active || (acActive_ && !acItems_.empty());
+            SDL_SetCursor(!overlayActive && overText && textCursor_ ? textCursor_ : SDL_GetDefaultCursor());
             float editorW = editorRight - editorLeft;
             computeMaxLineWidth();
             float maxScrollX = (!wordWrap_ && editorW > 0.f) ? std::max(0.f, maxLineWidth_ - editorW) : 0.f;
@@ -5270,8 +5361,19 @@ void Application::render() {
     flushSolid();
     statusbar_->drawText(uiFontAtlas(), fww, fwh, currentLine, currentCol, syntax_->languageName(), useTabs_, tabSize_, branch);
     if (!pluginStatusText_.empty() && SDL_GetTicks() < pluginStatusUntil_) {
-        float statusX = 170.f, statusRight = std::max(statusX, fww - 230.f);
-        uiFontAtlas().drawTextClipped(pluginStatusText_, statusX, fwh - sbH + 3.f, statusX, statusRight, 0.72f, 0.78f, 0.92f, 1.f);
+        char position[64], indent[64];
+        snprintf(position, sizeof(position), "Line %zu, Col %zu", currentLine + 1, currentCol + 1);
+        snprintf(indent, sizeof(indent), useTabs_ ? "Tab Size: %d" : "Spaces: %d", tabSize_);
+        float statusX = 12.f + uiFontAtlas().measureText(position) + 22.f;
+        if (!branch.empty()) statusX += 16.f + uiFontAtlas().measureText(branch) + 24.f;
+        float statusRight = fww - 12.f - uiFontAtlas().measureText(syntax_->languageName()) - uiFontAtlas().measureText(indent) - 48.f;
+        if (statusRight - statusX >= 72.f) {
+            addSolid(statusX - 7.f, fwh - sbH + 2.f, statusRight + 7.f, fwh - 2.f, 0.115f, 0.125f, 0.15f, 1.f);
+            addSolid(statusX - 7.f, fwh - sbH + 2.f, statusX - 6.f, fwh - 2.f, 0.28f, 0.34f, 0.46f, 1.f);
+            addSolid(statusRight + 6.f, fwh - sbH + 2.f, statusRight + 7.f, fwh - 2.f, 0.28f, 0.34f, 0.46f, 1.f);
+            flushSolid();
+            uiFontAtlas().drawTextClipped(pluginStatusText_, statusX, fwh - sbH + 3.f, statusX, statusRight, 0.72f, 0.78f, 0.92f, 1.f);
+        }
     }
     // find bar
     if (find_.active) {
