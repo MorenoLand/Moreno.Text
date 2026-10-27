@@ -392,6 +392,10 @@ private:
     std::vector<SDL_Event> macro_;
     void loadMacro();
     void indexFindResults();
+    bool handleCommandShortcut(SDL_Keycode sym, Uint16 mod);
+    void insertTextMulti(const std::string& text, bool distributeLines);
+    void deleteMulti(bool forward);
+    void moveAllCursors(int key, bool extend);
     void refreshProjectFileList();
     void updateFileResults(const std::string& query);
     void openGotoFile(const std::string& data);

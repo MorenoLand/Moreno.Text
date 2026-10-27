@@ -941,6 +941,7 @@ void Application::ensureLargeFileWindowForLine(size_t line) {
 
 void Application::insertText(const std::string& text) {
     if (binaryView_) return;
+    if (selections_.size() > 1) { insertTextMulti(text, false); return; }
     pushUndo();
     size_t oldPos = selections_[0].cursor;
     if (selections_[0].hasSelection()) deleteSelection();
@@ -975,6 +976,19 @@ void Application::deleteSelection() {
 }
 
 std::string Application::selectedTextOrLine() const {
+    if (selections_.size() > 1) {
+        std::vector<SelRange> ordered = selections_;
+        std::sort(ordered.begin(), ordered.end(), [](const SelRange& a, const SelRange& b) { return a.min() < b.min(); });
+        std::string joined;
+        bool any = false;
+        for (auto& r : ordered) {
+            if (!r.hasSelection()) continue;
+            if (any) joined += '\n';
+            joined += textBuffer.substr(r.min(), r.max() - r.min());
+            any = true;
+        }
+        if (any) return joined;
+    }
     if (!selections_.empty() && selections_[0].hasSelection()) {
         size_t a = selections_[0].min(), b = selections_[0].max();
         return textBuffer.substr(a, b - a);
@@ -992,6 +1006,7 @@ void Application::copySelectionOrLine() {
 void Application::cutSelectionOrLine() {
     if (binaryView_) return;
     copySelectionOrLine();
+    if (selections_.size() > 1) { bool any = false; for (auto& s : selections_) any = any || s.hasSelection(); if (any) { deleteMulti(false); return; } }
     pushUndo();
     if (selections_[0].hasSelection()) deleteSelection();
     else {
@@ -1011,6 +1026,7 @@ void Application::pasteClipboard(bool andIndent) {
     std::string text(clip);
     SDL_free(clip);
     if (text.empty()) return;
+    if (selections_.size() > 1 && !andIndent) { insertTextMulti(text, true); return; }
     if (andIndent) {
         size_t ls = lineStart(selections_[0].cursor);
         std::string indent;
@@ -4672,66 +4688,7 @@ void Application::handleEvents() {
                     if (it->first == ln || (ln > it->first && ln <= it->second)) { foldedRegions_.erase(it); break; }
                 }
             }
-            else if ((mod & KMOD_ALT) && shift && sym == SDLK_w) wrapSelectionWithTag();
-            else if ((mod & KMOD_ALT) && shift && sym == SDLK_p) openRecentProjectPicker();
-            else if ((mod & KMOD_ALT) && shift && sym >= SDLK_1 && sym <= SDLK_4) setLayoutColumns(static_cast<size_t>(sym - SDLK_1 + 1));
-            else if (ctrl && shift && !(mod & KMOD_ALT) && sym >= SDLK_1 && sym <= SDLK_4) moveFileToGroup(static_cast<size_t>(sym - SDLK_1));
-            else if (ctrl && !shift && !(mod & KMOD_ALT) && sym >= SDLK_1 && sym <= SDLK_4) focusGroup(static_cast<size_t>(sym - SDLK_1));
-            else if (sym == SDLK_F7 || (ctrl && !shift && sym == SDLK_b)) runBuild();
-            else if (ctrl && shift && sym == SDLK_b) openBuildPicker();
-            else if (ctrl && sym == SDLK_PAUSE) cancelBuild();
-            else if (sym == SDLK_F12 && shift) gotoReference();
-            else if (sym == SDLK_F12) gotoDefinition();
-            else if (ctrl && shift && sym == SDLK_r) commandGotoSymbolInProject();
-            else if (ctrl && sym == SDLK_F3) findUnder(!shift);
-            else if (ctrl && shift && sym == SDLK_w) closeWindow();
-            else if (ctrl && shift && sym == SDLK_h) replaceNext();
-            else if (sym == SDLK_F6 && ctrl) { if (shift) previousMisspelling(); else nextMisspelling(); }
-            else if (sym == SDLK_F6) toggleSpellCheck();
-            else if (ctrl && !shift && !(mod & KMOD_ALT) && sym == SDLK_u) softUndo();
-            else if (ctrl && shift && sym == SDLK_u) softRedo();
-            else if ((mod & KMOD_ALT) && !ctrl && sym == SDLK_PERIOD) closeTag();
-            else if (ctrl && !shift && !(mod & KMOD_ALT) && sym == SDLK_PERIOD) nextModification();
-            else if (ctrl && !shift && !(mod & KMOD_ALT) && sym == SDLK_COMMA) previousModification();
-            else if ((mod & KMOD_ALT) && !ctrl && !shift && sym == SDLK_o) switchHeaderImplementation();
-            else if (ctrl && !shift && sym == SDLK_e) useSelectionForFind();
-            else if (ctrl && shift && sym == SDLK_e) useSelectionForReplace();
-            else if (ctrl && sym == SDLK_PAGEDOWN) nextTab();
-            else if (ctrl && sym == SDLK_PAGEUP) previousTab();
-            else if (ctrl && sym == SDLK_TAB) { if (shift) previousTab(); else nextTab(); }
-            else if (ctrl && sym == SDLK_F4) closeCurrentTab();
-            else if ((mod & KMOD_ALT) && !ctrl && sym >= SDLK_1 && sym <= SDLK_8) selectTabByIndex(static_cast<size_t>(sym - SDLK_1));
-            else if ((mod & KMOD_ALT) && !ctrl && sym == SDLK_9) selectLastTab();
-            else if ((mod & KMOD_ALT) && !ctrl && sym == SDLK_q) wrapParagraph(80);
-            else if (ctrl && !shift && sym == SDLK_m) jumpToMatchingBracket();
-            else if (ctrl && !shift && sym == SDLK_SPACE) showCompletions();
-            else if (ctrl && sym == SDLK_d) expandSelectionToWord();
-            else if (ctrl && shift && sym == SDLK_l) splitSelectionIntoLines();
-            else if (ctrl && sym == SDLK_l) expandSelectionToLine();
-            else if (ctrl && shift && sym == SDLK_m) expandSelectionToBrackets();
-            else if (ctrl && shift && sym == SDLK_SPACE) expandSelectionToScope();
-            else if (ctrl && shift && sym == SDLK_f) commandFindInFiles();
-            else if (ctrl && shift && sym == SDLK_n) newWindow();
-            else if (ctrl && shift && sym == SDLK_RETURN) insertLineBefore();
-            else if (ctrl && sym == SDLK_RETURN) insertLineAfter();
-            else if (ctrl && sym == SDLK_DELETE) deleteWordForward();
-            else if (ctrl && sym == SDLK_BACKSPACE) deleteWordBackward();
-            else if (ctrl && sym == SDLK_t) transposeCharacters();
-            else if (sym == SDLK_F9) sortLines(ctrl);
-            else if (ctrl && !(mod & KMOD_ALT) && sym == SDLK_EQUALS) changeFontSize(1);
-            else if (ctrl && !(mod & KMOD_ALT) && sym == SDLK_MINUS) changeFontSize(-1);
-            else if (ctrl && sym == SDLK_RIGHTBRACKET) indentSelection();
-            else if (ctrl && sym == SDLK_LEFTBRACKET) unindentSelection();
-            else if (ctrl && sym == SDLK_g) commandGotoLine();
-            else if (ctrl && sym == SDLK_r) commandGotoSymbol();
-            else if (ctrl && sym == SDLK_SEMICOLON) commandGotoWord();
-            else if (sym == SDLK_F4 && shift) previousResult();
-            else if (sym == SDLK_F4 && !ctrl) nextResult();
-            else if (sym == SDLK_F3 && (mod & KMOD_ALT)) findAllUnder();
-            else if (sym == SDLK_F3 && shift) findPrevious();
-            else if (sym == SDLK_F3) findNext();
-            else if (sym == SDLK_F11 && shift) toggleDistractionFree();
-            else if ((mod & KMOD_ALT) && sym == SDLK_MINUS) { if (shift) jumpForward(); else jumpBack(); }
+            else if (handleCommandShortcut(sym, mod)) {}
             else if (sym == SDLK_BACKSPACE) {
                 pushUndo();
                 if (sel.hasSelection()) deleteSelection();

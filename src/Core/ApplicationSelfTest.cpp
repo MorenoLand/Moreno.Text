@@ -243,6 +243,28 @@ int Application::runSelfTest(const std::string& resultPath) {
         fs::remove_all(dir, ec);
     }
 
+    {
+        fresh("a\na\na");
+        selections_.clear();
+        selections_.emplace_back(1); selections_.emplace_back(3); selections_.emplace_back(5);
+        insertText("X");
+        expect("typing inserts at every cursor", "aX\naX\naX");
+        check("each cursor lands after its insertion", selections_.size() == 3 && selections_[0].cursor == 2 && selections_[1].cursor == 5 && selections_[2].cursor == 8);
+        deleteMulti(false);
+        expect("backspace deletes at every cursor", "a\na\na");
+        moveAllCursors(SDLK_HOME, false);
+        check("home moves every cursor", selections_.size() == 3 && selections_[1].cursor == 2 && selections_[2].cursor == 4);
+        fresh("one two one");
+        selections_.clear();
+        selections_.emplace_back(0, 3); selections_.emplace_back(8, 11);
+        insertText("1");
+        expect("typing replaces every selection", "1 two 1");
+        fresh("x y");
+        selections_.clear();
+        selections_.emplace_back(0, 1); selections_.emplace_back(2, 3);
+        check("copy joins every selection", selectedTextOrLine() == "x\ny");
+    }
+
     std::ofstream out(resultPath, std::ios::binary | std::ios::trunc);
     out << report.str() << (failures ? "FAILED " : "ALL PASSED ") << failures << "\n";
     return failures ? 1 : 0;
