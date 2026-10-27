@@ -35,7 +35,7 @@ std::vector<SchemeEntry> findSchemes(const AppPaths& paths) {
             if (ec) break;
             if (!it->is_regular_file(ec)) continue;
             std::string ext = it->path().extension().string();
-            if (ext != ".sublime-color-scheme" && ext != ".moreno-color-scheme") continue;
+            if (ext != ".sublime-color-scheme" && ext != ".moreno-color-scheme" && ext != ".tmTheme") continue;
             std::string name = it->path().stem().string();
             std::ifstream in(it->path(), std::ios::binary);
             std::string head(512, '\0');

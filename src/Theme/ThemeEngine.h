@@ -6,6 +6,8 @@
 #include <vector>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <cctype>
 #include <nlohmann/json.hpp>
 
 struct ThemeColor { float r, g, b, a; };
@@ -24,9 +26,14 @@ public:
         if (!f.is_open()) return;
         std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
         if (text.size() >= 3 && static_cast<unsigned char>(text[0]) == 0xEF && static_cast<unsigned char>(text[1]) == 0xBB) text.erase(0, 3);
-        static const std::regex trailingComma(R"(,(\s*[}\]]))");
-        text = std::regex_replace(text, trailingComma, "$1");
-        auto data = nlohmann::json::parse(text, nullptr, false, true);
+        nlohmann::json data;
+        if (text.find("<plist") != std::string::npos) {
+            data = schemeFromTmTheme(plistToJson(text));
+        } else {
+            static const std::regex trailingComma(R"(,(\s*[}\]]))");
+            text = std::regex_replace(text, trailingComma, "$1");
+            data = nlohmann::json::parse(text, nullptr, false, true);
+        }
         if (data.is_discarded() || !data.is_object()) return;
         path_ = path;
         resetColors();
@@ -113,6 +120,98 @@ public:
 
 private:
     ThemeEngine() = default;
+
+    // Minimal Apple plist reader: dict, array, key, string and the usual scalar tags.
+    static nlohmann::json plistToJson(const std::string& xml) {
+        size_t pos = xml.find("<plist");
+        if (pos == std::string::npos) return nlohmann::json();
+        pos = xml.find('>', pos);
+        if (pos == std::string::npos) return nlohmann::json();
+        ++pos;
+        return parsePlistValue(xml, pos);
+    }
+    static void skipPlistNoise(const std::string& x, size_t& p) {
+        while (p < x.size()) {
+            if (std::isspace(static_cast<unsigned char>(x[p]))) { ++p; continue; }
+            if (x.compare(p, 4, "<!--") == 0) { size_t e = x.find("-->", p); p = e == std::string::npos ? x.size() : e + 3; continue; }
+            if (x.compare(p, 2, "<?") == 0) { size_t e = x.find("?>", p); p = e == std::string::npos ? x.size() : e + 2; continue; }
+            break;
+        }
+    }
+    static std::string unescapeXml(std::string t) {
+        static const std::pair<const char*, const char*> ents[] = {{"&lt;", "<"}, {"&gt;", ">"}, {"&quot;", "\""}, {"&apos;", "'"}, {"&amp;", "&"}};
+        for (auto& [from, to] : ents) {
+            size_t at = 0;
+            while ((at = t.find(from, at)) != std::string::npos) { t.replace(at, std::strlen(from), to); at += std::strlen(to); }
+        }
+        return t;
+    }
+    static std::string readPlistText(const std::string& x, size_t& p, const char* closeTag) {
+        size_t e = x.find(closeTag, p);
+        if (e == std::string::npos) { p = x.size(); return {}; }
+        std::string raw = x.substr(p, e - p);
+        p = e + std::strlen(closeTag);
+        size_t cdata = raw.find("<![CDATA[");
+        if (cdata != std::string::npos) { size_t a = cdata + 9, b = raw.find("]]>", a); return raw.substr(a, b == std::string::npos ? std::string::npos : b - a); }
+        return unescapeXml(raw);
+    }
+    static nlohmann::json parsePlistValue(const std::string& x, size_t& p) {
+        skipPlistNoise(x, p);
+        if (p >= x.size() || x[p] != '<') return nlohmann::json();
+        if (x.compare(p, 7, "<dict/>") == 0) { p += 7; return nlohmann::json::object(); }
+        if (x.compare(p, 8, "<array/>") == 0) { p += 8; return nlohmann::json::array(); }
+        if (x.compare(p, 6, "<dict>") == 0) {
+            p += 6;
+            nlohmann::json obj = nlohmann::json::object();
+            while (true) {
+                skipPlistNoise(x, p);
+                if (p >= x.size() || x.compare(p, 7, "</dict>") == 0) { p += 7; break; }
+                if (x.compare(p, 5, "<key>") != 0) { ++p; continue; }
+                p += 5;
+                std::string key = readPlistText(x, p, "</key>");
+                obj[key] = parsePlistValue(x, p);
+            }
+            return obj;
+        }
+        if (x.compare(p, 7, "<array>") == 0) {
+            p += 7;
+            nlohmann::json arr = nlohmann::json::array();
+            while (true) {
+                skipPlistNoise(x, p);
+                if (p >= x.size() || x.compare(p, 8, "</array>") == 0) { p += 8; break; }
+                arr.push_back(parsePlistValue(x, p));
+            }
+            return arr;
+        }
+        if (x.compare(p, 8, "<string>") == 0) { p += 8; return readPlistText(x, p, "</string>"); }
+        if (x.compare(p, 9, "<string/>") == 0) { p += 9; return std::string(); }
+        if (x.compare(p, 9, "<integer>") == 0) { p += 9; return readPlistText(x, p, "</integer>"); }
+        if (x.compare(p, 6, "<true/") == 0 || x.compare(p, 7, "<false/") == 0) { size_t e = x.find('>', p); p = e == std::string::npos ? x.size() : e + 1; return nlohmann::json(); }
+        size_t e = x.find('>', p);
+        p = e == std::string::npos ? x.size() : e + 1;
+        return nlohmann::json();
+    }
+    // Converts a parsed .tmTheme into the same shape as a .sublime-color-scheme.
+    static nlohmann::json schemeFromTmTheme(const nlohmann::json& plist) {
+        if (!plist.is_object() || !plist.contains("settings") || !plist["settings"].is_array()) return nlohmann::json();
+        nlohmann::json scheme = nlohmann::json::object();
+        scheme["name"] = plist.value("name", std::string());
+        nlohmann::json globals = nlohmann::json::object(), rules = nlohmann::json::array();
+        for (auto& entry : plist["settings"]) {
+            if (!entry.is_object() || !entry.contains("settings") || !entry["settings"].is_object()) continue;
+            auto& st = entry["settings"];
+            if (!entry.contains("scope")) {
+                static const std::pair<const char*, const char*> keys[] = {{"background", "background"}, {"foreground", "foreground"}, {"caret", "caret"},
+                    {"lineHighlight", "line_highlight"}, {"selection", "selection"}, {"gutter", "gutter"}, {"gutterForeground", "gutter_foreground"}};
+                for (auto& [from, to] : keys) if (st.contains(from) && st[from].is_string()) globals[to] = st[from];
+            } else if (entry["scope"].is_string() && st.contains("foreground") && st["foreground"].is_string()) {
+                rules.push_back({{"scope", entry["scope"]}, {"foreground", st["foreground"]}});
+            }
+        }
+        scheme["globals"] = globals;
+        scheme["rules"] = rules;
+        return scheme;
+    }
 
     void writeScheme(const std::string& path, const char* name, const char* bg, const char* fg, const char* caret, const char* lineHl,
                      const char* selection, const char* gutter, const char* gutterFg, const char* minimapBg,
