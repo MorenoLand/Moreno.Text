@@ -370,6 +370,29 @@ int Application::runSelfTest(const std::string& resultPath) {
         fs::remove_all(dir, ec);
     }
 
+    {
+        bool oldEnabled = pluginEventsEnabled_;
+        pluginEventsEnabled_ = true;
+        fs::path bridge = fs::path(paths_.localDir) / "PluginBridge";
+        std::error_code ec;
+        fs::create_directories(bridge, ec);
+        fresh("hello", 5);
+        size_t before = pluginEventSeq_;
+        firePluginEvent("on_modified", "selftest.txt", true);
+        bool found = false;
+        for (auto& e : fs::directory_iterator(bridge, ec)) {
+            std::string name = e.path().filename().string();
+            if (name.find("-" + std::to_string(before) + "-view_event.request.json") == std::string::npos) continue;
+            std::ifstream f(e.path(), std::ios::binary);
+            std::string body((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+            f.close();
+            found = body.find("\"on_modified\"") != std::string::npos && body.find("hello") != std::string::npos;
+            fs::remove(e.path(), ec);
+        }
+        check("plugin events are written for the host", found);
+        pluginEventsEnabled_ = oldEnabled;
+    }
+
     std::ofstream out(resultPath, std::ios::binary | std::ios::trunc);
     out << report.str() << (failures ? "FAILED " : "ALL PASSED ") << failures << "\n";
     return failures ? 1 : 0;

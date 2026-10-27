@@ -1292,12 +1292,14 @@ void Application::saveFile() {
         return;
     }
     if (openFilePath_.empty()) { saveFileAs(); return; }
+    firePluginEvent("on_pre_save");
     applySaveTransforms();
     std::ofstream f(openFilePath_, std::ios::binary);
     if (!f) return;
     f << encodeForSave(openFilePath_, textBuffer);
     f.close();
     noteFileTime(openFilePath_);
+    firePluginEvent("on_post_save", true);
     if (openFilePath_ == SettingsManager::instance().path()) applyLiveSettings();
     dirty_ = false;
     rememberRecentFile(openFilePath_);
@@ -2154,6 +2156,12 @@ void Application::closeTabNow(size_t index) {
             closedPluginViewIds_.insert(id);
             notifyPluginViewClosed(id);
         } catch (...) {}
+    }
+    if (!pluginTab) {
+        std::string eventKey = pluginEventKey(index);
+        if (eventKey == pluginActiveKey_) pluginActiveKey_.clear();
+        pluginSeenKeys_.erase(eventKey);
+        firePluginEvent("on_close", eventKey, false);
     }
     if (!pluginTab && !tabs_[index].filePath.empty()) {
         closedTabStack_.push_back(tabs_[index].filePath);
@@ -5140,6 +5148,7 @@ void Application::update() {
     trackSelectionHistory();
     pollConsoleLog();
     pollPluginBridge();
+    pollPluginEvents();
     if (autoScrollActive_) {
         uint32_t now = SDL_GetTicks();
         float elapsed = std::min(50u, now - autoScrollLastTick_) / 16.667f;

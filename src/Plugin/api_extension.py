@@ -1301,6 +1301,52 @@ def install_plugin(p):
     ns['view_event_listener_excluded_callbacks'] = set()
     ns['text_change_listener_callbacks'] = set()
     ns['pending_on_activated_async_callbacks'] = []
+
+    # Editor tabs are mirrored as views so EventListener / ViewEventListener hooks see real files.
+    class _MirrorView(api.View):
+        _mirror = True
+        def _emit(self, focus=False): pass
+
+    _mirror_views = {}
+
+    def _fire(event, view):
+        for name in (event, event + '_async'):
+            _call(name, view)
+            run_view_callbacks(name, view.id)
+
+    def handle_view_event(data):
+        key = str(data.get('key', ''))
+        event = str(data.get('event', ''))
+        window = api.active_window()
+        view = _mirror_views.get(key)
+        if event == 'on_close':
+            if view is not None:
+                _fire('on_pre_close', view)
+                _fire('on_close', view)
+                detach_view(view)
+                view._valid = False
+                api._view_registry.pop(view.id, None)
+                window._views = [v for v in window._views if v is not view]
+                if getattr(window, '_active_view', None) is view: window._active_view = None
+            _mirror_views.pop(key, None)
+            return
+        created = view is None or not view.is_valid()
+        if created:
+            view = _MirrorView(window)
+            _mirror_views[key] = view
+            window._views.append(view)
+        path = str(data.get('path', ''))
+        if path: view._settings.set('file_name', path)
+        view.title = str(data.get('name', 'untitled'))
+        if 'content' in data: view.text = str(data['content'])
+        view._dirty = bool(data.get('dirty', False))
+        view._sel.clear()
+        for a, b in data.get('sel') or [[0, 0]]: view._sel.add(api.Region(int(a), int(b)))
+        if created: check_view_event_listeners(view)
+        if event == 'on_activated': window._active_view = view
+        _fire(event, view)
+
+    ns['handle_view_event'] = handle_view_event
     ns['pending_on_activated_async_lock'] = threading.Lock()
     class ZipResourceReader:
         def __init__(self, loader, fullname): self.loader = loader; self.fullname = fullname

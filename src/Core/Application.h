@@ -712,6 +712,17 @@ private:
     std::string pendingPluginCommand_;
     uint32_t pendingPluginCommandTicks_ = 0;
     void pollPluginBridge();
+    std::string pluginEventKey(size_t tabIndex) const;
+    void firePluginEvent(const char* event, const std::string& key, bool withContent);
+    void firePluginEvent(const char* event, bool withContent = false);
+    void pollPluginEvents();
+    bool pluginEventsChecked_ = false, pluginEventsEnabled_ = false;
+    std::string pluginActiveKey_;
+    std::set<std::string> pluginSeenKeys_;
+    size_t pluginTextHash_ = 0;
+    std::vector<SelRange> pluginSelections_;
+    uint32_t lastPluginEventPoll_ = 0;
+    unsigned pluginEventSeq_ = 0;
     void finishPluginQuickPanel(int index);
     void finishPluginInputPanel(bool accepted);
     bool sendPluginViewTextCommand(const std::string& commandName, const std::string& characters);
