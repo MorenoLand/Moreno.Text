@@ -4723,7 +4723,7 @@ void Application::handleEvents() {
                 if (acActive_) acceptAutocomplete();
                 else if (openFindResultAtCursor()) {}
                 else if (sendPluginViewTextCommand("insert", "\n")) {}
-                else insertText("\n");
+                else insertNewline();
             }
             else if (sym == SDLK_TAB) {
                 if (acActive_) { acceptAutocomplete(); }

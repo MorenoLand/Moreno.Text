@@ -265,6 +265,23 @@ int Application::runSelfTest(const std::string& resultPath) {
         check("copy joins every selection", selectedTextOrLine() == "x\ny");
     }
 
+    {
+        fresh("    foo", 7);
+        insertNewline();
+        expect("enter keeps the indentation", "    foo\n    ");
+        fresh("if (x) {", 8);
+        insertNewline();
+        check("enter after a brace indents one level", textBuffer == "if (x) {\n  " || textBuffer == "if (x) {\n" + std::string("\t"), textBuffer);
+        fresh("{}", 1);
+        insertNewline();
+        check("enter between braces opens a blank line", textBuffer == "{\n  \n}" || textBuffer == "{\n" + std::string("\t") + "\n}", textBuffer);
+        check("cursor lands on the blank line", selections_.size() == 1 && selections_[0].cursor == 4 || selections_[0].cursor == 3);
+        fresh("a b", 1);
+        selections_.clear(); selections_.emplace_back(1); selections_.emplace_back(3);
+        insertNewline();
+        expect("enter works at every cursor and the second line keeps its indent", "a\n b\n ");
+    }
+
     std::ofstream out(resultPath, std::ios::binary | std::ios::trunc);
     out << report.str() << (failures ? "FAILED " : "ALL PASSED ") << failures << "\n";
     return failures ? 1 : 0;

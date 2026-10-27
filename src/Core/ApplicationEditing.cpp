@@ -287,3 +287,41 @@ void Application::convertLineEndings(bool crlf) {
     selections_.clear(); selections_.emplace_back(std::min(newPos, textBuffer.size()));
     invalidateLineIndex(); dirty_ = true;
 }
+
+// Enter: keep the current line's indentation, indent after an opening bracket (or a trailing colon in
+// Python) and open a blank line between a bracket pair.
+void Application::insertNewline() {
+    if (binaryView_ || largeFileGuarded_ || selections_.empty()) return;
+    std::string lang = syntax_->languageName();
+    for (auto& c : lang) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    bool colonOpens = lang == "python" || lang == "yaml";
+    std::string unit = useTabs_ ? "\t" : std::string(static_cast<size_t>(tabSize_), ' ');
+    std::vector<SelRange> sels = selections_;
+    std::sort(sels.begin(), sels.end(), [](const SelRange& a, const SelRange& b) { return a.min() < b.min(); });
+    pushUndo();
+    std::vector<SelRange> updated;
+    long shift = 0;
+    for (const SelRange& sel : sels) {
+        size_t a = static_cast<size_t>(static_cast<long>(sel.min()) + shift), b = static_cast<size_t>(static_cast<long>(sel.max()) + shift);
+        size_t ls = lineStart(a);
+        size_t indentEnd = ls;
+        while (indentEnd < a && (textBuffer[indentEnd] == ' ' || textBuffer[indentEnd] == '\t')) ++indentEnd;
+        std::string indent = textBuffer.substr(ls, indentEnd - ls);
+        char prev = 0;
+        for (size_t i = a; i-- > ls;) { if (textBuffer[i] != ' ' && textBuffer[i] != '\t') { prev = textBuffer[i]; break; } }
+        char next = b < textBuffer.size() ? textBuffer[b] : 0;
+        bool opener = prev == '{' || prev == '(' || prev == '[' || (colonOpens && prev == ':');
+        bool pair = (prev == '{' && next == '}') || (prev == '(' && next == ')') || (prev == '[' && next == ']');
+        std::string text;
+        size_t cursorOffset;
+        if (opener && pair) { text = "\n" + indent + unit + "\n" + indent; cursorOffset = 1 + indent.size() + unit.size(); }
+        else { text = "\n" + indent + (opener ? unit : std::string()); cursorOffset = text.size(); }
+        textBuffer.replace(a, b - a, text);
+        shift += static_cast<long>(text.size()) - static_cast<long>(b - a) - (static_cast<long>(sel.max()) - static_cast<long>(sel.min())) + (static_cast<long>(sel.max()) - static_cast<long>(sel.min()));
+        updated.emplace_back(a + cursorOffset);
+    }
+    selections_ = updated;
+    invalidateLineIndex(); dirty_ = true; syntaxDirty_ = true; indentsDirty_ = true; maxLineWidthDirty_ = true;
+    desiredCursorX_ = -1.f;
+    ensureCursorVisible();
+}
