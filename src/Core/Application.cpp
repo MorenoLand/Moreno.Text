@@ -493,6 +493,7 @@ bool Application::init(int argc, char** argv) {
         minimapVisible_ = settings.get<bool>("minimap_visible", true);
         rulers_ = settings.get<std::vector<int>>("rulers", std::vector<int>());
         wrapColumn_ = std::clamp(settings.get<int>("wrap_width", 0), 0, 400);
+        loadSpellSetting();
     }
     // load color scheme
     {
@@ -2847,6 +2848,12 @@ void Application::updateGotoResults() {
     if (q.rfind("@@", 0) == 0) {
         gotoMode_ = ProjectSymbols;
         updateProjectSymbolResults(q.substr(2));
+    } else if (q[0] == '?') {
+        gotoMode_ = SpellSuggest;
+        updateSpellSuggestionResults();
+    } else if (q[0] == '+') {
+        gotoMode_ = Dictionaries;
+        updateDictionaryResults(q.substr(1));
     } else if (q[0] == '~') {
         gotoMode_ = PackageFiles;
         updatePackageFileResults(q.substr(1));
@@ -3507,6 +3514,18 @@ void Application::handleEvents() {
                         size_t bar = entry.rfind('|');
                         goto_.active = false;
                         if (bar != std::string::npos) openLocation(entry.substr(0, bar), static_cast<size_t>(std::strtoull(entry.c_str() + bar + 1, nullptr, 10)));
+                        continue;
+                    }
+                    if (gotoMode_ == SpellSuggest && goto_.selected < (int)goto_.data.size()) {
+                        std::string choice = goto_.data[goto_.selected];
+                        goto_.active = false;
+                        applySpellSuggestion(choice);
+                        continue;
+                    }
+                    if (gotoMode_ == Dictionaries && goto_.selected < (int)goto_.data.size()) {
+                        std::string dictionary = goto_.data[goto_.selected];
+                        goto_.active = false;
+                        chooseDictionary(dictionary);
                         continue;
                     }
                     if (gotoMode_ == PackageFiles && goto_.selected < (int)goto_.data.size()) {
@@ -4523,6 +4542,8 @@ void Application::handleEvents() {
             else if (ctrl && sym == SDLK_F3) findUnder(!shift);
             else if (ctrl && shift && sym == SDLK_w) closeWindow();
             else if (ctrl && shift && sym == SDLK_h) replaceNext();
+            else if (sym == SDLK_F6 && ctrl) { if (shift) previousMisspelling(); else nextMisspelling(); }
+            else if (sym == SDLK_F6) toggleSpellCheck();
             else if (ctrl && !shift && !(mod & KMOD_ALT) && sym == SDLK_u) softUndo();
             else if (ctrl && shift && sym == SDLK_u) softRedo();
             else if ((mod & KMOD_ALT) && !ctrl && sym == SDLK_PERIOD) closeTag();
@@ -5210,6 +5231,19 @@ void Application::render() {
             addSolid(gutterRight, cy, editorRight, cy + lineStep, lineBg.r, lineBg.g, lineBg.b, 1.f);
         }
     }
+    if (spellCheck_ && spell_.loaded() && !wordWrap_) {
+        for (size_t ln = firstRenderLine; ln <= lastRenderLine && ln < totalLines(); ++ln) {
+            if (isFolded(ln)) continue;
+            float uy = textOriginY + ln * lineStep - scrollY_ + lineStep - 2.f;
+            if (uy < tbH || uy > editorBottom) continue;
+            size_t lineStartPos = lineStartForLine(ln);
+            for (auto& [ws, we] : misspelledInLine(ln)) {
+                float ux0 = drawTextX + fontAtlas().measureText(std::string_view(textBuffer.data() + lineStartPos, ws));
+                float ux1 = drawTextX + fontAtlas().measureText(std::string_view(textBuffer.data() + lineStartPos, we));
+                for (float ux = ux0; ux < ux1; ux += 4.f) addSolid(ux, uy + ((static_cast<int>((ux - ux0) / 4.f) & 1) ? 1.f : 0.f), std::min(ux + 3.f, ux1), uy + 1.5f + ((static_cast<int>((ux - ux0) / 4.f) & 1) ? 1.f : 0.f), 0.92f, 0.32f, 0.32f, 1.f);
+            }
+        }
+    }
     for (int ruler : rulers_) {
         if (ruler <= 0) continue;
         float rx = drawTextX + fontAtlas().measureText(std::string(static_cast<size_t>(ruler), '0'));
@@ -5674,7 +5708,7 @@ void Application::render() {
             ar(ox, oy + 28 + goto_.selected * 22, ox + ow, oy + 28 + (goto_.selected + 1) * 22, 0.22f, 0.28f, 0.42f, 1.f);
         flushSolid();
         fontAtlas().drawText("Goto: " + goto_.query + "|", ox + 8, oy + 6, 0.8f, 0.8f, 0.8f, 1.f);
-        const char* modeLabel = gotoMode_ == Symbols ? "Symbols" : gotoMode_ == Lines ? "Go to Line" : gotoMode_ == Words ? "Words" : gotoMode_ == ProjectSymbols ? "Project Symbols" : gotoMode_ == Builds ? "Build" : gotoMode_ == ColorSchemes ? "Color Scheme" : gotoMode_ == Snippets ? "Snippets" : gotoMode_ == PasteHistory ? "Paste History" : gotoMode_ == Encodings ? "Encoding" : gotoMode_ == Projects ? "Projects" : gotoMode_ == PackageFiles ? "Package Files" : "Files";
+        const char* modeLabel = gotoMode_ == Symbols ? "Symbols" : gotoMode_ == Lines ? "Go to Line" : gotoMode_ == Words ? "Words" : gotoMode_ == ProjectSymbols ? "Project Symbols" : gotoMode_ == Builds ? "Build" : gotoMode_ == ColorSchemes ? "Color Scheme" : gotoMode_ == Snippets ? "Snippets" : gotoMode_ == PasteHistory ? "Paste History" : gotoMode_ == Encodings ? "Encoding" : gotoMode_ == Projects ? "Projects" : gotoMode_ == PackageFiles ? "Package Files" : gotoMode_ == SpellSuggest ? "Spelling" : gotoMode_ == Dictionaries ? "Dictionary" : "Files";
         float mlW = fontAtlas().measureText(modeLabel);
         fontAtlas().drawText(modeLabel, ox + ow - mlW - 12, oy + 6, 0.45f, 0.45f, 0.5f, 1.f);
         for (int i = 0; i < (int)goto_.items.size() && i < 10; ++i) {

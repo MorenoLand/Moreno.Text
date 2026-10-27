@@ -175,6 +175,21 @@ int Application::runSelfTest(const std::string& resultPath) {
         check("html export escapes text", html.find("&lt;") != std::string::npos && html.find("<div") == 0, html);
     }
 
+    {
+        fs::path dir = fs::temp_directory_path() / "moreno_selftest_spell";
+        std::error_code ec;
+        fs::create_directories(dir, ec);
+        { std::ofstream f(dir / "s.dic", std::ios::binary); f << "2\nhello\nworld\n"; }
+        bool hadSpell = spellCheck_;
+        spell_.load((dir / "s.dic").string());
+        spellCheck_ = true;
+        fresh("hello wrld world");
+        auto marks = misspelledInLine(0);
+        check("spell check flags only the misspelled word", marks.size() == 1 && marks[0].first == 6 && marks[0].second == 10, std::to_string(marks.size()));
+        spellCheck_ = hadSpell;
+        fs::remove_all(dir, ec);
+    }
+
     std::ofstream out(resultPath, std::ios::binary | std::ios::trunc);
     out << report.str() << (failures ? "FAILED " : "ALL PASSED ") << failures << "\n";
     return failures ? 1 : 0;

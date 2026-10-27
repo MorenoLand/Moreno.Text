@@ -1,4 +1,5 @@
 #pragma once
+#include "Core/SpellChecker.h"
 #include <map>
 #include <nlohmann/json_fwd.hpp>
 #include <SDL2/SDL.h>
@@ -296,6 +297,13 @@ public:
     void saveMacro();
     bool macroRecording() const { return macroRecording_; }
     void nextResult();
+    void toggleSpellCheck();
+    void nextMisspelling();
+    void previousMisspelling();
+    void addWordToDictionary();
+    void openSpellSuggestions();
+    void openDictionaryPicker();
+    void chooseDictionary(const std::string& path);
     void newPlugin();
     void newSnippet();
     void newSyntax();
@@ -373,6 +381,15 @@ private:
     std::vector<SDL_Event> macro_;
     void loadMacro();
     void indexFindResults();
+    bool ensureSpellDictionary();
+    void loadSpellSetting();
+    std::vector<std::pair<size_t, size_t>> misspelledInLine(size_t line) const;
+    void updateSpellSuggestionResults();
+    void applySpellSuggestion(const std::string& choice);
+    void updateDictionaryResults(const std::string& pattern);
+    SpellChecker spell_;
+    bool spellCheck_ = false;
+    size_t spellWordStart_ = 0, spellWordEnd_ = 0;
     void createFromTemplate(const std::string& stem, const std::string& extension, const std::string& contents);
     void updatePackageFileResults(const std::string& pattern);
     void refreshDiffHunks(bool force);
@@ -573,7 +590,7 @@ private:
     FindState find_;
     int findFocus_ = 0;
     GotoState goto_;
-    enum GotoMode { Files, Symbols, Lines, Words, ProjectSymbols, Builds, ColorSchemes, Snippets, PasteHistory, Encodings, Projects, PackageFiles } gotoMode_ = Files;
+    enum GotoMode { Files, Symbols, Lines, Words, ProjectSymbols, Builds, ColorSchemes, Snippets, PasteHistory, Encodings, Projects, PackageFiles, SpellSuggest, Dictionaries } gotoMode_ = Files;
     void updateGotoResults();
     CommandPaletteState commandPalette_;
     std::string pluginStatusText_;
