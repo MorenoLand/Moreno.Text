@@ -282,6 +282,18 @@ int Application::runSelfTest(const std::string& resultPath) {
         expect("enter works at every cursor and the second line keeps its indent", "a\n b\n ");
     }
 
+    {
+        fresh("ab", 2);
+        pressTab(false);
+        check("tab inserts spaces up to the next tab stop", textBuffer.size() >= 3 && (useTabs_ ? textBuffer == "ab\t" : textBuffer.size() == 2 + (static_cast<size_t>(tabSize_) - 2 % static_cast<size_t>(tabSize_))), textBuffer);
+        fresh("one\ntwo", 0);
+        selections_[0] = SelRange(0, 7);
+        pressTab(false);
+        check("tab with a multi-line selection indents every line", textBuffer.find("\n") != std::string::npos && textBuffer[0] == (useTabs_ ? '\t' : ' ') && textBuffer[textBuffer.find("\n") + 1] == (useTabs_ ? '\t' : ' '), textBuffer);
+        pressTab(true);
+        expect("shift+tab unindents every line", "one\ntwo");
+    }
+
     std::ofstream out(resultPath, std::ios::binary | std::ios::trunc);
     out << report.str() << (failures ? "FAILED " : "ALL PASSED ") << failures << "\n";
     return failures ? 1 : 0;

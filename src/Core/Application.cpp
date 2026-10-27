@@ -4729,11 +4729,7 @@ void Application::handleEvents() {
                 if (acActive_) { acceptAutocomplete(); }
                 else if (snippetActive_ && advanceSnippet(!shift)) {}
                 else if (!shift && expandSnippetTrigger()) {}
-                else if (shift) {
-                    pushUndo(); size_t ls = lineStart(sel.cursor); int rm = 0;
-                    while (rm < tabSize_ && ls + rm < textBuffer.size() && textBuffer[ls + rm] == ' ') ++rm;
-                    if (rm > 0) { textBuffer.erase(ls, rm); invalidateLineIndex(); sel.anchor = sel.cursor = (sel.cursor > ls + rm) ? sel.cursor - rm : ls; dirty_ = true; }
-                } else insertText(useTabs_ ? "\t" : std::string(tabSize_, ' '));
+                else pressTab(shift);
             }
             else if (sym == SDLK_LEFT) {
                 if (ctrl) {
@@ -4785,7 +4781,13 @@ void Application::handleEvents() {
             }
             else if (sym == SDLK_HOME) {
                 if (ctrl) { if (shift) sel.cursor = 0; else sel.anchor = sel.cursor = 0; }
-                else { size_t ls = lineStart(sel.cursor); if (shift) sel.cursor = ls; else sel.anchor = sel.cursor = ls; }
+                else {
+                    size_t ls = lineStart(sel.cursor), firstText = ls;
+                    while (firstText < textBuffer.size() && (textBuffer[firstText] == ' ' || textBuffer[firstText] == '\t')) ++firstText;
+                    if (firstText > lineEnd(ls)) firstText = lineEnd(ls);
+                    size_t target = sel.cursor == firstText ? ls : firstText;
+                    if (shift) sel.cursor = target; else sel.anchor = sel.cursor = target;
+                }
                 desiredCursorX_ = -1.f;
             }
             else if (sym == SDLK_END) {

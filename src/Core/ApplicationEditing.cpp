@@ -325,3 +325,15 @@ void Application::insertNewline() {
     desiredCursorX_ = -1.f;
     ensureCursorVisible();
 }
+
+// Tab key: indent every selected line, or insert spaces up to the next tab stop (or a tab character).
+void Application::pressTab(bool shift) {
+    if (binaryView_ || selections_.empty()) return;
+    const SelRange& sel = selections_.front();
+    if (shift) { unindentSelection(); return; }
+    if (sel.hasSelection() && lineOfPos(sel.min()) != lineOfPos(sel.max())) { indentSelection(); return; }
+    if (useTabs_) { insertText("\t"); return; }
+    size_t column = sel.min() - lineStart(sel.min());
+    size_t spaces = static_cast<size_t>(tabSize_) - column % static_cast<size_t>(tabSize_);
+    insertText(std::string(spaces, ' '));
+}

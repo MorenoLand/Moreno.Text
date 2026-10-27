@@ -299,6 +299,7 @@ public:
     bool macroRecording() const { return macroRecording_; }
     void nextResult();
     void insertNewline();
+    void pressTab(bool shift);
     void switchHeaderImplementation();
     void cloneTab(size_t index);
     void diffWithTab(size_t otherIndex);

@@ -1,7 +1,9 @@
 // Keyboard shortcuts for the commands in ApplicationCommands/Editing/Nav/etc. Kept out of the big
 // handleEvents else-if chain, which hit the compiler's nesting limit.
 #include "Core/Application.h"
+#include "Renderer/FontAtlas.h"
 #include <SDL2/SDL.h>
+#include <algorithm>
 
 #ifdef None
 #undef None
@@ -72,5 +74,7 @@ bool Application::handleCommandShortcut(SDL_Keycode sym, Uint16 mod) {
     if (sym == SDLK_F3) { findNext(); return true; }
     if (sym == SDLK_F11 && shift) { toggleDistractionFree(); return true; }
     if ((mod & KMOD_ALT) && sym == SDLK_MINUS) { { if (shift) jumpForward(); else jumpBack(); } return true; }
+    if (ctrl && !shift && !(mod & KMOD_ALT) && sym == SDLK_UP) { scrollY_ = std::max(0.f, scrollY_ - fontAtlas().lineHeight()); return true; }
+    if (ctrl && !shift && !(mod & KMOD_ALT) && sym == SDLK_DOWN) { scrollY_ += fontAtlas().lineHeight(); return true; }
     return false;
 }
