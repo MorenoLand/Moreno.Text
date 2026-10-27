@@ -2739,6 +2739,146 @@ static const PaletteCommandDef paletteCommands[] = {
     {"Toggle Bookmark","Ctrl+F2"},{"Next Bookmark","F2"},{"Previous Bookmark","Shift+F2"},{"Clear All Bookmarks","Ctrl+Shift+F2"}
 };
 
+struct ExtraPaletteCommand {
+    const char* label;
+    const char* shortcut;
+    void (*run)(Application&);
+};
+
+static const ExtraPaletteCommand extraPaletteCommands[] = {
+    {"Indent Line","Ctrl+]",[](Application& a){ a.indentSelection(); }},
+    {"Unindent Line","Ctrl+[",[](Application& a){ a.unindentSelection(); }},
+    {"Reindent Lines","Ctrl+K Ctrl+]",[](Application& a){ a.reindent(); }},
+    {"Insert Line Before","Ctrl+Shift+Enter",[](Application& a){ a.insertLineBefore(); }},
+    {"Insert Line After","Ctrl+Enter",[](Application& a){ a.insertLineAfter(); }},
+    {"Delete Word Forward","Ctrl+Delete",[](Application& a){ a.deleteWordForward(); }},
+    {"Delete Word Backward","Ctrl+Backspace",[](Application& a){ a.deleteWordBackward(); }},
+    {"Delete to End","Ctrl+K Ctrl+K",[](Application& a){ a.deleteToLineEnd(); }},
+    {"Delete to Beginning","Ctrl+K Ctrl+Backspace",[](Application& a){ a.deleteToLineStart(); }},
+    {"Transpose","Ctrl+T",[](Application& a){ a.transposeCharacters(); }},
+    {"Sort Lines","F9",[](Application& a){ a.sortLines(false); }},
+    {"Sort Lines (Case Sensitive)","Ctrl+F9",[](Application& a){ a.sortLines(true); }},
+    {"Reverse Lines","",[](Application& a){ a.reverseLines(); }},
+    {"Unique Lines","",[](Application& a){ a.uniqueLines(); }},
+    {"Shuffle Lines","",[](Application& a){ a.shuffleLines(); }},
+    {"Wrap Paragraph","Alt+Q",[](Application& a){ a.wrapParagraph(80); }},
+    {"Convert Case: lowerCamelCase","",[](Application& a){ a.convertIdentifierCase(0); }},
+    {"Convert Case: UpperCamelCase","",[](Application& a){ a.convertIdentifierCase(1); }},
+    {"Convert Case: snake_case","",[](Application& a){ a.convertIdentifierCase(2); }},
+    {"Convert Case: kebab-case","",[](Application& a){ a.convertIdentifierCase(3); }},
+    {"Close Tag","Alt+.",[](Application& a){ a.closeTag(); }},
+    {"Wrap Selection With Tag","Alt+Shift+W",[](Application& a){ a.wrapSelectionWithTag(); }},
+    {"Set Mark","Ctrl+K Ctrl+Space",[](Application& a){ a.setMark(); }},
+    {"Select to Mark","Ctrl+K Ctrl+A",[](Application& a){ a.selectToMark(); }},
+    {"Delete to Mark","Ctrl+K Ctrl+W",[](Application& a){ a.deleteToMark(); }},
+    {"Swap with Mark","Ctrl+K Ctrl+X",[](Application& a){ a.swapWithMark(); }},
+    {"Yank","Ctrl+K Ctrl+Y",[](Application& a){ a.yank(); }},
+    {"Fold","Ctrl+Shift+[",[](Application& a){ a.foldCurrent(); }},
+    {"Unfold","Ctrl+Shift+]",[](Application& a){ a.unfoldCurrent(); }},
+    {"Fold All","Ctrl+K Ctrl+1",[](Application& a){ a.commandFoldAll(); }},
+    {"Unfold All","Ctrl+K Ctrl+J",[](Application& a){ a.commandUnfoldAll(); }},
+    {"Find Next","F3",[](Application& a){ a.findNext(); }},
+    {"Find Previous","Shift+F3",[](Application& a){ a.findPrevious(); }},
+    {"Find All","Alt+F3",[](Application& a){ a.findAllUnder(); }},
+    {"Quick Find","Ctrl+F3",[](Application& a){ a.findUnder(true); }},
+    {"Quick Add Next","Ctrl+D",[](Application& a){ a.expandSelectionToWord(); }},
+    {"Quick Skip Next","Ctrl+K Ctrl+D",[](Application& a){ a.quickSkipNext(); }},
+    {"Use Selection for Find","Ctrl+E",[](Application& a){ a.useSelectionForFind(); }},
+    {"Use Selection for Replace","Ctrl+Shift+E",[](Application& a){ a.useSelectionForReplace(); }},
+    {"Replace Next","Ctrl+Shift+H",[](Application& a){ a.replaceNext(); }},
+    {"Find in Files","Ctrl+Shift+F",[](Application& a){ a.commandFindInFiles(); }},
+    {"Next Result","F4",[](Application& a){ a.nextResult(); }},
+    {"Previous Result","Shift+F4",[](Application& a){ a.previousResult(); }},
+    {"Expand Selection to Line","Ctrl+L",[](Application& a){ a.expandSelectionToLine(); }},
+    {"Expand Selection to Brackets","Ctrl+Shift+M",[](Application& a){ a.expandSelectionToBrackets(); }},
+    {"Expand Selection to Indentation","",[](Application& a){ a.expandSelectionToIndentation(); }},
+    {"Expand Selection to Scope","Ctrl+Shift+Space",[](Application& a){ a.expandSelectionToScope(); }},
+    {"Split Selection into Lines","Ctrl+Shift+L",[](Application& a){ a.splitSelectionIntoLines(); }},
+    {"Single Selection","Escape",[](Application& a){ a.singleSelection(); }},
+    {"Add Previous Line","Ctrl+Alt+Up",[](Application& a){ a.addPreviousLine(); }},
+    {"Add Next Line","Ctrl+Alt+Down",[](Application& a){ a.addNextLine(); }},
+    {"Undo Selection","Ctrl+U",[](Application& a){ a.softUndo(); }},
+    {"Redo Selection","Ctrl+Shift+U",[](Application& a){ a.softRedo(); }},
+    {"Goto Symbol","Ctrl+R",[](Application& a){ a.commandGotoSymbol(); }},
+    {"Goto Line","Ctrl+G",[](Application& a){ a.commandGotoLine(); }},
+    {"Goto Word","Ctrl+;",[](Application& a){ a.commandGotoWord(); }},
+    {"Goto Symbol in Project","Ctrl+Shift+R",[](Application& a){ a.commandGotoSymbolInProject(); }},
+    {"Goto Definition","F12",[](Application& a){ a.gotoDefinition(); }},
+    {"Goto Reference","Shift+F12",[](Application& a){ a.gotoReference(); }},
+    {"Jump Back","Alt+-",[](Application& a){ a.jumpBack(); }},
+    {"Jump Forward","Alt+Shift+-",[](Application& a){ a.jumpForward(); }},
+    {"Jump to Matching Bracket","Ctrl+M",[](Application& a){ a.jumpToMatchingBracket(); }},
+    {"Next Modification","Ctrl+.",[](Application& a){ a.nextModification(); }},
+    {"Previous Modification","Ctrl+,",[](Application& a){ a.previousModification(); }},
+    {"Revert Hunk","Ctrl+K Ctrl+Z",[](Application& a){ a.revertHunk(); }},
+    {"Next File","Ctrl+PageDown",[](Application& a){ a.nextTab(); }},
+    {"Previous File","Ctrl+PageUp",[](Application& a){ a.previousTab(); }},
+    {"View: Toggle Tabs","",[](Application& a){ a.toggleTabs(); }},
+    {"View: Toggle Status Bar","",[](Application& a){ a.toggleStatusBar(); }},
+    {"View: Toggle Distraction Free Mode","Shift+F11",[](Application& a){ a.toggleDistractionFree(); }},
+    {"Layout: Single","Alt+Shift+1",[](Application& a){ a.setLayoutColumns(1); }},
+    {"Layout: Columns 2","Alt+Shift+2",[](Application& a){ a.setLayoutColumns(2); }},
+    {"Layout: Columns 3","Alt+Shift+3",[](Application& a){ a.setLayoutColumns(3); }},
+    {"Layout: Columns 4","Alt+Shift+4",[](Application& a){ a.setLayoutColumns(4); }},
+    {"Group: New","Ctrl+K Ctrl+Up",[](Application& a){ a.newGroup(); }},
+    {"Group: Close","Ctrl+K Ctrl+Down",[](Application& a){ a.closeGroup(); }},
+    {"Group: Focus Next","Ctrl+K Ctrl+Right",[](Application& a){ a.focusNeighboringGroup(true); }},
+    {"Group: Focus Previous","Ctrl+K Ctrl+Left",[](Application& a){ a.focusNeighboringGroup(false); }},
+    {"Build","Ctrl+B",[](Application& a){ a.runBuild(); }},
+    {"Build With...","Ctrl+Shift+B",[](Application& a){ a.openBuildPicker(); }},
+    {"Cancel Build","Ctrl+Break",[](Application& a){ a.cancelBuild(); }},
+    {"Snippet: Insert Snippet...","",[](Application& a){ a.openSnippetPicker(); }},
+    {"Paste from History","Ctrl+K Ctrl+V",[](Application& a){ a.openPasteHistory(); }},
+    {"Spell Check: Toggle","F6",[](Application& a){ a.toggleSpellCheck(); }},
+    {"Spell Check: Next Misspelling","Ctrl+F6",[](Application& a){ a.nextMisspelling(); }},
+    {"Spell Check: Previous Misspelling","Ctrl+Shift+F6",[](Application& a){ a.previousMisspelling(); }},
+    {"Spell Check: Suggestions","",[](Application& a){ a.openSpellSuggestions(); }},
+    {"Spell Check: Add Word to Dictionary","",[](Application& a){ a.addWordToDictionary(); }},
+    {"Spell Check: Choose Dictionary","",[](Application& a){ a.openDictionaryPicker(); }},
+    {"UI: Select Color Scheme","",[](Application& a){ a.openColorSchemePicker(); }},
+    {"UI: Customize Color Scheme","",[](Application& a){ a.customizeColorScheme(); }},
+    {"View: Increase Font Size","Ctrl+=",[](Application& a){ a.changeFontSize(1); }},
+    {"View: Decrease Font Size","Ctrl+-",[](Application& a){ a.changeFontSize(-1); }},
+    {"View: Reset Font Size","",[](Application& a){ a.resetFontSize(); }},
+    {"View: Ruler None","",[](Application& a){ a.setRuler(0); }},
+    {"View: Ruler 80","",[](Application& a){ a.setRuler(80); }},
+    {"View: Ruler 100","",[](Application& a){ a.setRuler(100); }},
+    {"View: Word Wrap Column Automatic","",[](Application& a){ a.setWrapColumn(0); }},
+    {"View: Word Wrap Column 80","",[](Application& a){ a.setWrapColumn(80); }},
+    {"Project: Open Project","",[](Application& a){ a.openProject(); }},
+    {"Project: Switch Project","Alt+Shift+P",[](Application& a){ a.openRecentProjectPicker(); }},
+    {"Project: Save Project As","",[](Application& a){ a.saveProjectAs(); }},
+    {"Project: Close Project","",[](Application& a){ a.closeProject(); }},
+    {"Project: Edit Project","",[](Application& a){ a.editProject(); }},
+    {"File: New Window","Ctrl+Shift+N",[](Application& a){ a.newWindow(); }},
+    {"File: Close All Files","",[](Application& a){ a.closeAllFiles(); }},
+    {"File: Close Window","Ctrl+Shift+W",[](Application& a){ a.closeWindow(); }},
+    {"File: Reopen with Encoding","",[](Application& a){ a.openReopenEncodingPicker(); }},
+    {"File: Save with Encoding","",[](Application& a){ a.openSaveEncodingPicker(); }},
+    {"File: Line Endings Windows","",[](Application& a){ a.convertLineEndings(true); }},
+    {"File: Line Endings Unix","",[](Application& a){ a.convertLineEndings(false); }},
+    {"File: Print","",[](Application& a){ a.printDocument(); }},
+    {"Copy as HTML","",[](Application& a){ a.copyAsHtml(); }},
+    {"Macro: Record/Stop","Ctrl+Q",[](Application& a){ a.toggleMacroRecording(); }},
+    {"Macro: Playback","Ctrl+Shift+Q",[](Application& a){ a.playMacro(); }},
+    {"Macro: Save","",[](Application& a){ a.saveMacro(); }},
+    {"Developer: New Plugin","",[](Application& a){ a.newPlugin(); }},
+    {"Developer: New Snippet","",[](Application& a){ a.newSnippet(); }},
+    {"Developer: New Syntax","",[](Application& a){ a.newSyntax(); }},
+    {"Developer: New Build System","",[](Application& a){ a.newBuildSystem(); }},
+    {"Developer: View Package File","",[](Application& a){ a.openPackageFilePicker(); }},
+    {"Preferences: Mouse Bindings","",[](Application& a){ a.openMouseBindings(); }},
+    {"Preferences: Browse Packages","",[](Application& a){ a.browsePackages(); }},
+    {"Help: Documentation","",[](Application& a){ a.openDocumentation(); }},
+    {"Help: Report a Bug","",[](Application& a){ a.reportBug(); }},
+    {"Help: About Moreno Text","",[](Application& a){ a.showAbout(); }},
+};
+
+static constexpr int kBuiltinPaletteCount = 38;
+static int paletteBuiltinTotal() { return kBuiltinPaletteCount + (int)(sizeof(extraPaletteCommands) / sizeof(extraPaletteCommands[0])); }
+static const char* paletteLabelFor(int index) { return index < kBuiltinPaletteCount ? paletteCommands[index].label : extraPaletteCommands[index - kBuiltinPaletteCount].label; }
+static const char* paletteShortcutFor(int index) { return index < kBuiltinPaletteCount ? paletteCommands[index].shortcut : extraPaletteCommands[index - kBuiltinPaletteCount].shortcut; }
+
 static std::string lowerCopy(std::string s) {
     std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return (char)std::tolower(c); });
     return s;
@@ -2756,9 +2896,9 @@ static float tabContextMenuWidth(FontAtlas& font) {
 void Application::updateCommandPalette() {
     commandPalette_.results.clear();
     std::string q = lowerCopy(commandPalette_.query);
-    int count = (int)(sizeof(paletteCommands) / sizeof(paletteCommands[0]));
+    int count = paletteBuiltinTotal();
     for (int i = 0; i < count; ++i) {
-        std::string label = lowerCopy(paletteCommands[i].label);
+        std::string label = lowerCopy(paletteLabelFor(i));
         if (q.empty() || label.find(q) != std::string::npos) commandPalette_.results.push_back(i);
     }
     for (int i = 0; i < (int)pluginCommands_.size(); ++i) {
@@ -2797,8 +2937,9 @@ void Application::executePluginCommand(int index) {
 }
 
 void Application::executePaletteCommand(int commandIndex) {
-    int builtinCount = (int)(sizeof(paletteCommands) / sizeof(paletteCommands[0]));
+    int builtinCount = paletteBuiltinTotal();
     if (commandIndex >= builtinCount) { executePluginCommand(commandIndex - builtinCount); return; }
+    if (commandIndex >= kBuiltinPaletteCount) { extraPaletteCommands[commandIndex - kBuiltinPaletteCount].run(*this); return; }
     switch (commandIndex) {
         case 0: newBuffer(); break;
         case 1: openFileDialog(); break;
@@ -5756,13 +5897,13 @@ void Application::render() {
         std::string count = std::to_string(total) + " commands";
         float countW = fontAtlas().measureText(count);
         fontAtlas().drawText(count, ox + ow - countW - 14.f, oy + 8.f, 0.46f, 0.46f, 0.50f, 1.f);
-        int builtinCount = (int)(sizeof(paletteCommands) / sizeof(paletteCommands[0]));
+        int builtinCount = paletteBuiltinTotal();
         for (int row = 0; row < visible; ++row) {
             int resultIndex = commandPalette_.scroll + row;
             int idx = commandPalette_.results[resultIndex];
             float b = resultIndex == commandPalette_.selected ? 0.98f : 0.72f;
-            const char* shortcut = idx < builtinCount ? paletteCommands[idx].shortcut : "";
-            std::string label = idx < builtinCount ? paletteCommands[idx].label : pluginCommands_[idx - builtinCount].caption;
+            const char* shortcut = idx < builtinCount ? paletteShortcutFor(idx) : "";
+            std::string label = idx < builtinCount ? std::string(paletteLabelFor(idx)) : pluginCommands_[idx - builtinCount].caption;
             fontAtlas().drawText(label, ox + 12.f, oy + headerH + 4.f + row * rowH, b, b, b + 0.03f, 1.f);
             if (shortcut[0]) {
                 float sw = fontAtlas().measureText(shortcut);
