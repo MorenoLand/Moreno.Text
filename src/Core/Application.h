@@ -299,6 +299,8 @@ public:
     bool macroRecording() const { return macroRecording_; }
     void nextResult();
     void insertNewline();
+    void applyLiveSettings();
+    bool matchBracketsEnabled() const { return matchBrackets_; }
     void applySaveTransforms();
     void noteFileTime(const std::string& path);
     void pollExternalChanges();
@@ -397,6 +399,7 @@ private:
     std::vector<SDL_Event> macro_;
     void loadMacro();
     void indexFindResults();
+    bool autoIndent_ = true, matchBrackets_ = true, matchSelection_ = true;
     std::map<std::string, std::filesystem::file_time_type> knownFileTimes_;
     uint32_t lastExternalPoll_ = 0;
     size_t matchingBracketOf(size_t at) const;

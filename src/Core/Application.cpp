@@ -494,6 +494,9 @@ bool Application::init(int argc, char** argv) {
         rulers_ = settings.get<std::vector<int>>("rulers", std::vector<int>());
         wrapColumn_ = std::clamp(settings.get<int>("wrap_width", 0), 0, 400);
         loadSpellSetting();
+        autoIndent_ = settings.get<bool>("auto_indent", true);
+        matchBrackets_ = settings.get<bool>("match_brackets", true);
+        matchSelection_ = settings.get<bool>("match_selection", true);
     }
     // load color scheme
     {
@@ -1293,6 +1296,7 @@ void Application::saveFile() {
     f << encodeForSave(openFilePath_, textBuffer);
     f.close();
     noteFileTime(openFilePath_);
+    if (openFilePath_ == SettingsManager::instance().path()) applyLiveSettings();
     dirty_ = false;
     rememberRecentFile(openFilePath_);
     saveSession();

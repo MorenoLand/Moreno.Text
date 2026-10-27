@@ -332,6 +332,25 @@ int Application::runSelfTest(const std::string& resultPath) {
         fs::remove_all(dir, ec);
     }
 
+    {
+        fs::path dir = fs::temp_directory_path() / "moreno_selftest_settings";
+        std::error_code ec;
+        fs::create_directories(dir, ec);
+        fs::path file = dir / "s.sublime-settings";
+        { std::ofstream f(file, std::ios::binary); f << "{\n  // comment\n  \"tab_size\": 7,\n  \"rulers\": [60, 90],\n}\n"; }
+        auto& st = SettingsManager::instance();
+        std::string oldPath = st.path();
+        int oldTab = tabSize_;
+        std::vector<int> oldRulers = rulers_;
+        st.load(file.string());
+        check("settings files with comments and trailing commas parse", st.get<int>("tab_size", 0) == 7);
+        applyLiveSettings();
+        check("live settings apply tab size and rulers", tabSize_ == 7 && rulers_.size() == 2 && rulers_[1] == 90);
+        tabSize_ = oldTab; rulers_ = oldRulers;
+        st.load(oldPath);
+        fs::remove_all(dir, ec);
+    }
+
     std::ofstream out(resultPath, std::ios::binary | std::ios::trunc);
     out << report.str() << (failures ? "FAILED " : "ALL PASSED ") << failures << "\n";
     return failures ? 1 : 0;

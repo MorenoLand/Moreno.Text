@@ -2,6 +2,7 @@
 #include <string>
 #include <unordered_map>
 #include <fstream>
+#include <regex>
 #include <nlohmann/json.hpp>
 
 class SettingsManager {
@@ -12,10 +13,14 @@ public:
     }
     void load(const std::string& path) {
         path_ = path;
-        std::ifstream f(path);
+        std::ifstream f(path, std::ios::binary);
         if (f.is_open()) {
-            try { data_ = nlohmann::json::parse(f); }
-            catch (...) {}
+            std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+            if (text.size() >= 3 && static_cast<unsigned char>(text[0]) == 0xEF && static_cast<unsigned char>(text[1]) == 0xBB) text.erase(0, 3);
+            static const std::regex trailingComma(R"(,(\s*[}\]]))");
+            text = std::regex_replace(text, trailingComma, "$1");
+            auto parsed = nlohmann::json::parse(text, nullptr, false, true);
+            if (parsed.is_object()) data_ = std::move(parsed);
         }
     }
     void save() {

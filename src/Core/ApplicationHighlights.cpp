@@ -69,7 +69,7 @@ void Application::drawEditorHighlights(float drawTextX, float textOriginY, float
 
     const SelRange& primary = selections_.front();
     // Other occurrences of the selected text
-    if (selections_.size() == 1 && primary.hasSelection()) {
+    if (matchSelection_ && selections_.size() == 1 && primary.hasSelection()) {
         size_t a = primary.min(), b = primary.max();
         if (b - a >= 2 && b - a <= 100 && textBuffer.find('\n', a) >= b) {
             std::string needle = textBuffer.substr(a, b - a);
@@ -82,7 +82,7 @@ void Application::drawEditorHighlights(float drawTextX, float textOriginY, float
     }
 
     // Matching bracket
-    if (selections_.size() == 1 && !primary.hasSelection()) {
+    if (matchBrackets_ && selections_.size() == 1 && !primary.hasSelection()) {
         size_t c = primary.cursor;
         size_t at = std::string::npos;
         if (c < textBuffer.size() && matchingBracketOf(c) != std::string::npos) at = c;

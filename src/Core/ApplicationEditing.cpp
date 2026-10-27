@@ -292,6 +292,7 @@ void Application::convertLineEndings(bool crlf) {
 // Python) and open a blank line between a bracket pair.
 void Application::insertNewline() {
     if (binaryView_ || largeFileGuarded_ || selections_.empty()) return;
+    if (!autoIndent_) { insertText("\n"); return; }
     std::string lang = syntax_->languageName();
     for (auto& c : lang) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     bool colonOpens = lang == "python" || lang == "yaml";
