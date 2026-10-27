@@ -5355,6 +5355,8 @@ void Application::render() {
         }
     }
 
+    drawEditorHighlights(drawTextX, textOriginY, lineStep, tbH, editorBottom, firstRenderLine, lastRenderLine, gutterRight, editorRight);
+
     for (auto& s : selections_) {
         if (!s.hasSelection()) continue;
         size_t a = s.min(), b = s.max();

@@ -205,26 +205,13 @@ void Application::wrapParagraph(size_t width) {
 void Application::jumpToMatchingBracket() {
     if (selections_.empty()) return;
     size_t pos = selections_[0].cursor;
-    auto isOpen = [](char c) { return c == '(' || c == '[' || c == '{'; };
-    auto isClose = [](char c) { return c == ')' || c == ']' || c == '}'; };
-    size_t at = textBuffer.size();
-    if (pos < textBuffer.size() && (isOpen(textBuffer[pos]) || isClose(textBuffer[pos]))) at = pos;
-    else if (pos > 0 && (isOpen(textBuffer[pos - 1]) || isClose(textBuffer[pos - 1]))) at = pos - 1;
-    if (at == textBuffer.size()) return;
-    char c = textBuffer[at];
-    char pair = c == '(' ? ')' : c == '[' ? ']' : c == '{' ? '}' : c == ')' ? '(' : c == ']' ? '[' : '{';
-    int depth = 0;
-    if (isOpen(c)) {
-        for (size_t i = at; i < textBuffer.size(); ++i) {
-            if (textBuffer[i] == c) ++depth;
-            else if (textBuffer[i] == pair && --depth == 0) { selections_.clear(); selections_.emplace_back(i); ensureCursorVisible(); return; }
-        }
-    } else {
-        for (size_t i = at + 1; i-- > 0;) {
-            if (textBuffer[i] == c) ++depth;
-            else if (textBuffer[i] == pair && --depth == 0) { selections_.clear(); selections_.emplace_back(i); ensureCursorVisible(); return; }
-        }
-    }
+    size_t at = std::string::npos;
+    if (pos < textBuffer.size() && matchingBracketOf(pos) != std::string::npos) at = pos;
+    else if (pos > 0 && matchingBracketOf(pos - 1) != std::string::npos) at = pos - 1;
+    if (at == std::string::npos) return;
+    size_t other = matchingBracketOf(at);
+    selections_.clear(); selections_.emplace_back(other);
+    ensureCursorVisible();
 }
 
 void Application::foldByLevel(int level) {

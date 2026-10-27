@@ -392,6 +392,8 @@ private:
     std::vector<SDL_Event> macro_;
     void loadMacro();
     void indexFindResults();
+    size_t matchingBracketOf(size_t at) const;
+    void drawEditorHighlights(float drawTextX, float textOriginY, float lineStep, float top, float bottom, size_t firstLine, size_t lastLine, float gutterRight, float editorRight);
     bool handleCommandShortcut(SDL_Keycode sym, Uint16 mod);
     void insertTextMulti(const std::string& text, bool distributeLines);
     void deleteMulti(bool forward);
