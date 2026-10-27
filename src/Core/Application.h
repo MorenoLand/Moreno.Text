@@ -161,6 +161,7 @@ class Application {
 public:
     static Application& instance();
     int run(int argc, char** argv);
+    int runSelfTest(const std::string& resultPath);
     bool isBorderlessMaximized() const { return borderlessMaximized_; }
     const AppPaths& paths() const { return paths_; }
     void quit() { running_ = false; }

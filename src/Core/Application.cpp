@@ -376,6 +376,13 @@ int Application::run(int argc, char** argv) {
         PluginHost::stop(pluginPaths);
         return 1;
     }
+    for (int i = 1; i + 1 < argc; ++i) {
+        if (std::string(argv[i]) == "--selftest") {
+            int code = runSelfTest(argv[i + 1]);
+            shutdown();
+            return code;
+        }
+    }
     while (running_) {
         handleEvents(); update(); render();
         if (pluginHostStartPending_) {
