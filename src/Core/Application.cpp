@@ -1811,7 +1811,8 @@ bool Application::handleSidebarEvent(const SDL_Event& e, float windowH, float ti
 
 void Application::pushUndo() {
     auto now = std::chrono::steady_clock::now();
-    if (!undoStack_.empty() && (now - undoStack_.back().time) < undoWindow_) { undoStack_.back().text = textBuffer; undoStack_.back().cursorPos = selections_[0].cursor; return; }
+    // Edits made in quick succession share one undo step: keep the snapshot taken before the first of them.
+    if (!undoStack_.empty() && (now - undoStack_.back().time) < undoWindow_) { undoStack_.back().time = now; redoStack_.clear(); return; }
     undoStack_.push_back({textBuffer, selections_[0].cursor, now});
     if (undoStack_.size() > 10000) undoStack_.erase(undoStack_.begin());
     redoStack_.clear();
@@ -3313,6 +3314,10 @@ void Application::handleAutoPair(const char* text) {
     static const struct { char open, close; } pairs[] = {{'(',')'},{'[',']'},{'{','}'},{'"','"'},{'\'','\''}};
     char close = 0;
     for (auto& p : pairs) if (p.open == c) { close = p.close; break; }
+    if (!close && (c == ')' || c == ']' || c == '}') && !sel.hasSelection() && sel.cursor < textBuffer.size() && textBuffer[sel.cursor] == c) {
+        sel.anchor = sel.cursor = sel.cursor + 1;
+        return;
+    }
     if (!close) { insertText(text); return; }
     if (sel.hasSelection()) {
         pushUndo();

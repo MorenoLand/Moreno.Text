@@ -294,6 +294,18 @@ int Application::runSelfTest(const std::string& resultPath) {
         expect("shift+tab unindents every line", "one\ntwo");
     }
 
+    {
+        fresh("()", 1); handleAutoPair(")");
+        check("typing a closing bracket skips over the existing one", textBuffer == "()" && selections_[0].cursor == 2, textBuffer);
+        fresh("", 0); handleAutoPair("(");
+        expect("typing an opening bracket adds its partner", "()");
+        fresh("", 0); insertText("a"); insertText("b"); insertText("c");
+        doUndo();
+        expect("one undo reverts a quick run of typing", "");
+        doRedo();
+        expect("redo restores it", "abc");
+    }
+
     std::ofstream out(resultPath, std::ios::binary | std::ios::trunc);
     out << report.str() << (failures ? "FAILED " : "ALL PASSED ") << failures << "\n";
     return failures ? 1 : 0;
