@@ -2847,6 +2847,9 @@ void Application::updateGotoResults() {
     if (q.rfind("@@", 0) == 0) {
         gotoMode_ = ProjectSymbols;
         updateProjectSymbolResults(q.substr(2));
+    } else if (q[0] == '~') {
+        gotoMode_ = PackageFiles;
+        updatePackageFileResults(q.substr(1));
     } else if (q[0] == '*') {
         gotoMode_ = Encodings;
         updateEncodingResults(q.substr(1));
@@ -3504,6 +3507,12 @@ void Application::handleEvents() {
                         size_t bar = entry.rfind('|');
                         goto_.active = false;
                         if (bar != std::string::npos) openLocation(entry.substr(0, bar), static_cast<size_t>(std::strtoull(entry.c_str() + bar + 1, nullptr, 10)));
+                        continue;
+                    }
+                    if (gotoMode_ == PackageFiles && goto_.selected < (int)goto_.data.size()) {
+                        std::string packageFile = goto_.data[goto_.selected];
+                        goto_.active = false;
+                        openFile(packageFile);
                         continue;
                     }
                     if (gotoMode_ == Encodings && goto_.selected < (int)goto_.data.size()) {
@@ -5665,7 +5674,7 @@ void Application::render() {
             ar(ox, oy + 28 + goto_.selected * 22, ox + ow, oy + 28 + (goto_.selected + 1) * 22, 0.22f, 0.28f, 0.42f, 1.f);
         flushSolid();
         fontAtlas().drawText("Goto: " + goto_.query + "|", ox + 8, oy + 6, 0.8f, 0.8f, 0.8f, 1.f);
-        const char* modeLabel = gotoMode_ == Symbols ? "Symbols" : gotoMode_ == Lines ? "Go to Line" : gotoMode_ == Words ? "Words" : gotoMode_ == ProjectSymbols ? "Project Symbols" : gotoMode_ == Builds ? "Build" : gotoMode_ == ColorSchemes ? "Color Scheme" : gotoMode_ == Snippets ? "Snippets" : gotoMode_ == PasteHistory ? "Paste History" : gotoMode_ == Encodings ? "Encoding" : gotoMode_ == Projects ? "Projects" : "Files";
+        const char* modeLabel = gotoMode_ == Symbols ? "Symbols" : gotoMode_ == Lines ? "Go to Line" : gotoMode_ == Words ? "Words" : gotoMode_ == ProjectSymbols ? "Project Symbols" : gotoMode_ == Builds ? "Build" : gotoMode_ == ColorSchemes ? "Color Scheme" : gotoMode_ == Snippets ? "Snippets" : gotoMode_ == PasteHistory ? "Paste History" : gotoMode_ == Encodings ? "Encoding" : gotoMode_ == Projects ? "Projects" : gotoMode_ == PackageFiles ? "Package Files" : "Files";
         float mlW = fontAtlas().measureText(modeLabel);
         fontAtlas().drawText(modeLabel, ox + ow - mlW - 12, oy + 6, 0.45f, 0.45f, 0.5f, 1.f);
         for (int i = 0; i < (int)goto_.items.size() && i < 10; ++i) {

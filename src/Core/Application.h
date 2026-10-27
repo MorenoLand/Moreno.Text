@@ -296,6 +296,16 @@ public:
     void saveMacro();
     bool macroRecording() const { return macroRecording_; }
     void nextResult();
+    void newPlugin();
+    void newSnippet();
+    void newSyntax();
+    void newBuildSystem();
+    void openMouseBindings();
+    void browsePackages();
+    void openPackageFilePicker();
+    void copyAsHtml();
+    void printDocument();
+    std::string exportToHtml(bool wholeDocument);
     void nextModification();
     void previousModification();
     void revertHunk();
@@ -363,6 +373,8 @@ private:
     std::vector<SDL_Event> macro_;
     void loadMacro();
     void indexFindResults();
+    void createFromTemplate(const std::string& stem, const std::string& extension, const std::string& contents);
+    void updatePackageFileResults(const std::string& pattern);
     void refreshDiffHunks(bool force);
     void drawModificationMarkers(float gutterRight, float textOriginY, float lineStep, float top, float bottom);
     std::vector<DiffHunk> diffHunks_;
@@ -561,7 +573,7 @@ private:
     FindState find_;
     int findFocus_ = 0;
     GotoState goto_;
-    enum GotoMode { Files, Symbols, Lines, Words, ProjectSymbols, Builds, ColorSchemes, Snippets, PasteHistory, Encodings, Projects } gotoMode_ = Files;
+    enum GotoMode { Files, Symbols, Lines, Words, ProjectSymbols, Builds, ColorSchemes, Snippets, PasteHistory, Encodings, Projects, PackageFiles } gotoMode_ = Files;
     void updateGotoResults();
     CommandPaletteState commandPalette_;
     std::string pluginStatusText_;

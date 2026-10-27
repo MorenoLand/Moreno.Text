@@ -168,6 +168,13 @@ int Application::runSelfTest(const std::string& resultPath) {
         fs::remove_all(dir, ec);
     }
 
+    fresh("a < b");
+    selections_[0] = SelRange(0, 5);
+    {
+        std::string html = exportToHtml(false);
+        check("html export escapes text", html.find("&lt;") != std::string::npos && html.find("<div") == 0, html);
+    }
+
     std::ofstream out(resultPath, std::ios::binary | std::ios::trunc);
     out << report.str() << (failures ? "FAILED " : "ALL PASSED ") << failures << "\n";
     return failures ? 1 : 0;
