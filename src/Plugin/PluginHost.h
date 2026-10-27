@@ -28,6 +28,7 @@ public:
     static std::string hostExecutablePath(const PluginHostPaths& paths);
     static bool writeBootstrapFiles(const PluginHostPaths& paths);
     static void start(const PluginHostPaths& paths);
+    static void stop(const PluginHostPaths& paths);
     static void runCommand(const PluginHostPaths& paths, const std::string& commandName);
 private:
     static std::string legacyApiName();

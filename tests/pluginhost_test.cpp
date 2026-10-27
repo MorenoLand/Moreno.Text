@@ -64,16 +64,16 @@ int main() {
     if (scripts.size() != 1) return 1;
     if (scripts[0].package != "Example") return 2;
     if (PluginHost::commandNameFromClass("RcRefreshServersCommand") != "rc_refresh_servers") return 3;
-    auto commands = PluginHost::discoverCommands(scripts);
+    auto commands = PluginHost::discoverCommands(scripts, (base / "Packages").string());
     if (!commands.empty()) return 4;
     std::string api = std::string("sub") + "lime_plugin";
     { std::ofstream(base / "Packages" / "Example" / "commands.py") << "import " << api << "\nclass RcRefreshServersCommand(" << api << ".WindowCommand):\n    def run(self): pass\n"; }
     scripts = PluginHost::discoverScripts((base / "Packages").string());
-    commands = PluginHost::discoverCommands(scripts);
+    commands = PluginHost::discoverCommands(scripts, (base / "Packages").string());
     if (commands.size() != 1 || commands[0].name != "rc_refresh_servers") return 5;
     std::string commandFileName = std::string("Default.") + std::string("sub") + "lime-commands";
     { std::ofstream(base / "Packages" / "Example" / commandFileName) << "[{\"caption\":\"RC: Connect to GServer\",\"command\":\"rc_connect_server\"},{\"caption\":\"RC: Refresh Servers\",\"command\":\"rc_refresh_servers\"}]"; }
-    commands = PluginHost::discoverCommands(scripts);
+    commands = PluginHost::discoverCommands(scripts, (base / "Packages").string());
     if (commands.size() != 2 || commands[0].caption != "RC: Connect to GServer" || commands[0].name != "rc_connect_server") return 6;
     if (commands[1].caption != "RC: Refresh Servers" || commands[1].name != "rc_refresh_servers") return 7;
     fs::remove_all(base / "Packages" / "Example");
@@ -85,7 +85,7 @@ int main() {
     bool foundZipScript = false;
     for (const auto& script : scripts) if (script.package == "ZipPkg" && fs::path(script.path).filename() == "plugin.py") foundZipScript = true;
     if (!foundZipScript) return 17;
-    commands = PluginHost::discoverCommands(scripts);
+    commands = PluginHost::discoverCommands(scripts, (base / "Packages").string());
     bool foundZipCommand = false;
     for (const auto& command : commands) if (command.caption == "Package Control: Install Package" && command.name == "install_package") foundZipCommand = true;
     if (!foundZipCommand) return 18;
@@ -112,6 +112,13 @@ int main() {
         if (text.find("def _dispatch_window_command") == std::string::npos) return 14;
         if (text.find("view_window_command") == std::string::npos) return 15;
         if (text.find("def _dispatch_post_save") == std::string::npos) return 16;
+        if (text.find("_moreno_install(") == std::string::npos) return 17;
+    }
+    {
+        std::ifstream f(fs::path(paths.libDir) / "python38" / "moreno_api_ext.py", std::ios::binary);
+        std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        if (text.find("def install_plugin(") == std::string::npos) return 18;
+        if (text.find("class Region") == std::string::npos) return 19;
     }
     fs::remove_all(base);
     return 0;

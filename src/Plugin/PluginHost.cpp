@@ -1,9 +1,11 @@
 #include "Plugin/PluginHost.h"
+#include "Plugin/ApiExtension.h"
 #include <nlohmann/json.hpp>
 #include <filesystem>
 #include <fstream>
 #include <cctype>
 #include <chrono>
+#include <cstdint>
 #include <functional>
 #include <regex>
 #include <sstream>
@@ -303,8 +305,98 @@ std::string PluginHost::hostExecutablePath(const PluginHostPaths& paths) {
 }
 
 #ifdef _WIN32
+static HANDLE pluginHostJob = nullptr;
+
 static fs::path pluginHostPidPath(const PluginHostPaths& paths) {
     return fs::path(paths.dataDir) / "Local" / "plugin_host.pid";
+}
+
+static std::string pluginHostJobName(const PluginHostPaths& paths) {
+    std::string key = paths.exeDir + "\n" + paths.dataDir;
+    std::uint64_t hash = 1469598103934665603ull;
+    for (unsigned char c : key) {
+        hash ^= static_cast<std::uint64_t>(std::tolower(c));
+        hash *= 1099511628211ull;
+    }
+    std::ostringstream name;
+    name << "Local\\MorenoTextPluginHost-" << std::hex << hash;
+    return name.str();
+}
+
+static bool sameHostProcess(HANDLE process, const fs::path& hostPath) {
+    std::vector<char> path(32768);
+    DWORD pathLen = static_cast<DWORD>(path.size());
+    if (!QueryFullProcessImageNameA(process, 0, path.data(), &pathLen)) return false;
+    std::error_code error;
+    return fs::equivalent(fs::path(std::string(path.data(), pathLen)), hostPath, error) && !error;
+}
+
+static HANDLE openPluginHostProcess(DWORD pid, const fs::path& hostPath) {
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SET_QUOTA | PROCESS_TERMINATE | SYNCHRONIZE, FALSE, pid);
+    if (!process) return nullptr;
+    DWORD exitCode = 0;
+    if (!GetExitCodeProcess(process, &exitCode) || exitCode != STILL_ACTIVE || !sameHostProcess(process, hostPath)) {
+        CloseHandle(process);
+        return nullptr;
+    }
+    return process;
+}
+
+static HANDLE findPluginHostProcess(const PluginHostPaths& paths, const fs::path& hostPath, DWORD& pid) {
+    try {
+        std::ifstream f(pluginHostPidPath(paths), std::ios::binary);
+        unsigned long savedPid = 0;
+        if (f >> savedPid) {
+            HANDLE process = openPluginHostProcess(static_cast<DWORD>(savedPid), hostPath);
+            if (process) {
+                pid = static_cast<DWORD>(savedPid);
+                return process;
+            }
+        }
+        HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if (snapshot == INVALID_HANDLE_VALUE) return nullptr;
+        PROCESSENTRY32W entry = {};
+        entry.dwSize = sizeof(entry);
+        if (Process32FirstW(snapshot, &entry)) {
+            do {
+                if (_wcsicmp(entry.szExeFile, L"moreno_plugin_host.exe") == 0) {
+                    HANDLE process = openPluginHostProcess(entry.th32ProcessID, hostPath);
+                    if (process) {
+                        pid = entry.th32ProcessID;
+                        CloseHandle(snapshot);
+                        return process;
+                    }
+                }
+            } while (Process32NextW(snapshot, &entry));
+        }
+        CloseHandle(snapshot);
+    } catch (...) {
+    }
+    return nullptr;
+}
+
+static bool ensurePluginHostJob(const PluginHostPaths& paths, const std::function<void(const std::string&)>& appendLog) {
+    if (pluginHostJob) return true;
+    pluginHostJob = CreateJobObjectA(nullptr, pluginHostJobName(paths).c_str());
+    if (!pluginHostJob) {
+        appendLog("[plugin-host] failed to create lifetime job: " + std::to_string(GetLastError()));
+        return false;
+    }
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = {};
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if (!SetInformationJobObject(pluginHostJob, JobObjectExtendedLimitInformation, &limits, sizeof(limits))) {
+        appendLog("[plugin-host] failed to configure lifetime job: " + std::to_string(GetLastError()));
+        CloseHandle(pluginHostJob);
+        pluginHostJob = nullptr;
+        return false;
+    }
+    return true;
+}
+
+static bool attachPluginHostToJob(HANDLE process) {
+    BOOL inJob = FALSE;
+    if (!IsProcessInJob(process, pluginHostJob, &inJob)) return false;
+    return inJob || AssignProcessToJobObject(pluginHostJob, process) == TRUE;
 }
 
 static bool terminateProcessIfSameHost(DWORD pid, const fs::path& hostPath, const std::function<void(const std::string&)>& appendLog) {
@@ -328,7 +420,7 @@ static bool terminateProcessIfSameHost(DWORD pid, const fs::path& hostPath, cons
     return terminated;
 }
 
-static void stopPreviousPluginHost(const PluginHostPaths& paths, const fs::path& hostPath, const std::function<void(const std::string&)>& appendLog) {
+[[maybe_unused]] static void stopPreviousPluginHost(const PluginHostPaths& paths, const fs::path& hostPath, const std::function<void(const std::string&)>& appendLog) {
     fs::path pidPath = pluginHostPidPath(paths);
         try {
         if (!fs::exists(hostPath)) return;
@@ -852,7 +944,14 @@ bool PluginHost::writeBootstrapFiles(const PluginHostPaths& paths) {
               << "    def empty(self): return self.a==self.b\n"
               << "    def contains(self, point):\n"
               << "        if hasattr(point, 'begin'): return self.begin() <= point.begin() and point.end() <= self.end()\n"
-              << "        return self.begin() <= int(point) <= self.end()\n";
+              << "        return self.begin() <= int(point) <= self.end()\n"
+              << "from moreno_api_ext import install as _moreno_install\n"
+              << "_moreno_install(sys.modules[__name__])\n";
+        }
+        {
+            std::ofstream f(lib / "moreno_api_ext.py", std::ios::binary);
+            if (!f) return false;
+            f.write(reinterpret_cast<const char*>(kApiExtensionSource), static_cast<std::streamsize>(sizeof(kApiExtensionSource) - 1));
         }
         {
             std::ofstream f(lib / (api + "_plugin.py"), std::ios::binary);
@@ -864,7 +963,9 @@ bool PluginHost::writeBootstrapFiles(const PluginHostPaths& paths) {
               << "    def __init__(self, view=None): self.view=view\n"
               << "class EventListener: pass\n"
               << "class ViewEventListener:\n"
-              << "    def __init__(self, view=None): self.view=view\n";
+              << "    def __init__(self, view=None): self.view=view\n"
+              << "from moreno_api_ext import install_plugin as _moreno_install_plugin\n"
+              << "_moreno_install_plugin(__import__('sys').modules[__name__])\n";
         }
         {
             std::ofstream f(lib / "moreno_plugin_bootstrap.py", std::ios::binary);
@@ -1041,7 +1142,22 @@ void PluginHost::launchHost(const PluginHostPaths& paths, const std::string& com
     for (const auto& script : scripts) {
         if (script.package == "Package Control") appendLog("[plugin-host] found Package Control: " + script.path);
     }
-    if (persistent) stopPreviousPluginHost(paths, host, appendLog);
+    if (persistent) {
+        if (!ensurePluginHostJob(paths, appendLog)) return;
+        DWORD existingPid = 0;
+        HANDLE existingHost = findPluginHostProcess(paths, host, existingPid);
+        if (existingHost) {
+            if (attachPluginHostToJob(existingHost)) {
+                writePluginHostPid(paths, existingPid);
+                CloseHandle(existingHost);
+                return;
+            }
+            TerminateProcess(existingHost, 0);
+            WaitForSingleObject(existingHost, 1500);
+            appendLog("[plugin-host] replaced host that was outside the lifetime job");
+            CloseHandle(existingHost);
+        }
+    }
     SetEnvironmentVariableA("MORENO_EXE_PATH", (fs::path(paths.exeDir) / "moreno_text.exe").string().c_str());
     SetEnvironmentVariableA("MORENO_API_PATH", (fs::path(paths.libDir) / "python38").string().c_str());
     SetEnvironmentVariableA("MORENO_PACKAGES_DIR", paths.packagesDir.c_str());
@@ -1057,8 +1173,25 @@ void PluginHost::launchHost(const PluginHostPaths& paths, const std::string& com
     std::string command = "\"" + host.string() + "\" \"" + boot.string() + "\"";
     STARTUPINFOA si = {}; si.cb = sizeof(si); si.dwFlags = STARTF_USESHOWWINDOW; si.wShowWindow = SW_HIDE;
     PROCESS_INFORMATION pi = {};
-    if (CreateProcessA(nullptr, command.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, paths.dataDir.c_str(), &si, &pi)) {
-        if (persistent) writePluginHostPid(paths, pi.dwProcessId);
+    DWORD creationFlags = CREATE_NO_WINDOW | (persistent ? CREATE_SUSPENDED : 0);
+    if (CreateProcessA(nullptr, command.data(), nullptr, nullptr, TRUE, creationFlags, nullptr, paths.dataDir.c_str(), &si, &pi)) {
+        if (persistent && !attachPluginHostToJob(pi.hProcess)) {
+            TerminateProcess(pi.hProcess, 0);
+            WaitForSingleObject(pi.hProcess, 1500);
+            appendLog("[plugin-host] failed to attach host to lifetime job");
+            CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
+            return;
+        }
+        if (persistent) {
+            writePluginHostPid(paths, pi.dwProcessId);
+            if (ResumeThread(pi.hThread) == static_cast<DWORD>(-1)) {
+                TerminateProcess(pi.hProcess, 0);
+                WaitForSingleObject(pi.hProcess, 1500);
+                appendLog("[plugin-host] failed to resume host");
+                CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
+                return;
+            }
+        }
         CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
         return;
     } else {
@@ -1068,6 +1201,14 @@ void PluginHost::launchHost(const PluginHostPaths& paths, const std::string& com
 }
 
 void PluginHost::start(const PluginHostPaths& paths) { launchHost(paths, "", true); }
+void PluginHost::stop(const PluginHostPaths&) {
+#ifdef _WIN32
+    if (pluginHostJob) {
+        CloseHandle(pluginHostJob);
+        pluginHostJob = nullptr;
+    }
+#endif
+}
 void PluginHost::runCommand(const PluginHostPaths& paths, const std::string& commandName) {
     if (!writeCommandRequest(paths, commandName)) launchHost(paths, commandName, false);
 }
