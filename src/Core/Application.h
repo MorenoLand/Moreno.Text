@@ -459,6 +459,8 @@ private:
     uint32_t snippetsLoadedAt_ = 0;
     bool snippetActive_ = false;
     std::vector<std::vector<std::pair<size_t, size_t>>> snippetStops_;
+    struct SnippetTransform { bool active = false; std::string regex, format, flags; };
+    std::vector<std::vector<SnippetTransform>> snippetTransforms_;  // same shape as snippetStops_
     size_t snippetCurrent_ = 0, snippetFinal_ = 0, snippetBufSize_ = 0;
     void updateColorSchemeResults(const std::string& pattern);
     void loadSavedColorScheme();

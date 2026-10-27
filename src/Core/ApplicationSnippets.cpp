@@ -46,6 +46,94 @@ std::string xmlText(const std::string& body, const char* tag) {
     return first == std::string::npos ? std::string() : text.substr(first, last - first + 1);
 }
 
+std::string caseFormat(const std::string& text, const std::string& mode) {
+    std::string r = text;
+    if (mode == "upcase") for (auto& c : r) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    else if (mode == "downcase") r = lowered(r);
+    else if (mode == "capitalize" && !r.empty()) r[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(r[0])));
+    return r;
+}
+
+// Expands a snippet format string for one regex match: $N, ${N:/upcase}, ${N:+if}, ${N:-else}, ${N:?if:else}.
+std::string expandFormat(const std::string& format, const std::smatch& m) {
+    std::string out;
+    auto group = [&](size_t n) { return n < m.size() && m[n].matched ? m[n].str() : std::string(); };
+    for (size_t i = 0; i < format.size();) {
+        char c = format[i];
+        if (c == '\\' && i + 1 < format.size()) {
+            char n = format[i + 1];
+            out += n == 'n' ? '\n' : n == 't' ? '\t' : n;
+            i += 2; continue;
+        }
+        if (c != '$' || i + 1 >= format.size()) { out += c; ++i; continue; }
+        if (std::isdigit(static_cast<unsigned char>(format[i + 1]))) { out += group(static_cast<size_t>(format[i + 1] - '0')); i += 2; continue; }
+        if (format[i + 1] == '&') { out += m.str(); i += 2; continue; }
+        if (format[i + 1] != '{') { out += c; ++i; continue; }
+        size_t close = format.find('}', i);
+        if (close == std::string::npos) { out += c; ++i; continue; }
+        std::string inner = format.substr(i + 2, close - i - 2);
+        size_t d = 0;
+        while (d < inner.size() && std::isdigit(static_cast<unsigned char>(inner[d]))) ++d;
+        if (d == 0) { i = close + 1; continue; }
+        std::string value = group(static_cast<size_t>(std::atoi(inner.substr(0, d).c_str())));
+        std::string rest = inner.substr(d);
+        if (rest.empty()) out += value;
+        else if (rest.rfind(":/", 0) == 0) out += caseFormat(value, rest.substr(2));
+        else if (rest.rfind(":+", 0) == 0) { if (!value.empty()) out += rest.substr(2); }
+        else if (rest.rfind(":-", 0) == 0) out += value.empty() ? rest.substr(2) : value;
+        else if (rest.rfind(":?", 0) == 0) {
+            std::string alt = rest.substr(2);
+            size_t colon = alt.find(':');
+            out += !value.empty() ? alt.substr(0, colon) : (colon == std::string::npos ? std::string() : alt.substr(colon + 1));
+        } else out += value;
+        i = close + 1;
+    }
+    return out;
+}
+
+std::string applyTransform(const std::string& input, const std::string& pattern, const std::string& format, const std::string& flags) {
+    try {
+        auto opts = std::regex::ECMAScript;
+        if (flags.find('i') != std::string::npos) opts |= std::regex::icase;
+        std::regex re(pattern, opts);
+        bool global = flags.find('g') != std::string::npos;
+        std::string out;
+        auto pos = input.cbegin();
+        std::smatch m;
+        while (pos != input.cend() && std::regex_search(pos, input.cend(), m, re)) {
+            out.append(pos, m[0].first);
+            out += expandFormat(format, m);
+            if (m[0].length() == 0) {
+                if (m[0].second == input.cend()) { pos = input.cend(); break; }
+                out += *m[0].second;
+                pos = m[0].second + 1;
+            } else pos = m[0].second;
+            if (!global) break;
+        }
+        out.append(pos, input.cend());
+        return out;
+    } catch (...) { return input; }
+}
+
+// Splits "regex/format/flags" on unescaped slashes.
+bool splitTransform(const std::string& body, std::string& re, std::string& fmt, std::string& flags) {
+    std::string parts[3];
+    int p = 0, braces = 0;
+    for (size_t i = 0; i < body.size(); ++i) {
+        if (body[i] == '\\' && i + 1 < body.size()) {
+            if (body[i + 1] == '/') { parts[p] += '/'; ++i; continue; }
+            parts[p] += body[i]; parts[p] += body[i + 1]; ++i; continue;
+        }
+        if (p == 1 && body[i] == '$' && i + 1 < body.size() && body[i + 1] == '{') ++braces;
+        else if (p == 1 && body[i] == '}' && braces > 0) --braces;
+        if (body[i] == '/' && p < 2 && braces == 0) { ++p; continue; }
+        parts[p] += body[i];
+    }
+    if (p < 1) return false;
+    re = parts[0]; fmt = parts[1]; flags = parts[2];
+    return true;
+}
+
 }  // namespace
 
 void Application::loadSnippets() {
@@ -148,7 +236,7 @@ void Application::insertSnippet(const std::string& content) {
         {"TM_FULLNAME", std::getenv("USERNAME") ? std::getenv("USERNAME") : (std::getenv("USER") ? std::getenv("USER") : "")}};
 
     std::string out;
-    struct Stop { size_t start = 0, len = 0; bool placeholder = false; };
+    struct Stop { size_t start = 0, len = 0; bool placeholder = false; bool transform = false; std::string re, fmt, flags; };
     std::map<int, std::vector<Stop>> stops;
     auto emit = [&](char c) { out += c; if (c == '\n') out += indent; };
     auto emitText = [&](const std::string& text) { for (char c : text) emit(c); };
@@ -163,8 +251,8 @@ void Application::insertSnippet(const std::string& content) {
         while (j < content.size() && (std::isalnum(static_cast<unsigned char>(content[j])) || content[j] == '_')) ++j;
         std::string name = content.substr(nameStart, j - nameStart);
         if (name.empty()) { emit(c); ++i; continue; }
-        std::string defaultText;
-        bool hasDefault = false;
+        std::string defaultText, tre, tfmt, tflags;
+        bool hasDefault = false, hasTransform = false;
         if (braced) {
             if (j < content.size() && content[j] == ':') {
                 hasDefault = true; ++j;
@@ -177,6 +265,16 @@ void Application::insertSnippet(const std::string& content) {
                 }
                 defaultText = content.substr(j, d - j - 1);
                 j = d;
+            } else if (j < content.size() && content[j] == '/') {
+                size_t d = j + 1;
+                int depth = 1;
+                for (; d < content.size(); ++d) {
+                    if (content[d] == '\\' && d + 1 < content.size()) { ++d; continue; }
+                    if (content[d] == '{') ++depth;
+                    else if (content[d] == '}' && --depth == 0) break;
+                }
+                hasTransform = splitTransform(content.substr(j + 1, d - j - 1), tre, tfmt, tflags);
+                j = d < content.size() ? d + 1 : d;
             } else {
                 while (j < content.size() && content[j] != '}') ++j;
                 if (j < content.size()) ++j;
@@ -196,12 +294,17 @@ void Application::insertSnippet(const std::string& content) {
                 stop.len = out.size() - before;
             } else if (!stops[index].empty()) {
                 const Stop& first = stops[index].front();
-                emitText(out.substr(first.start, first.len));
+                std::string mirrored = out.substr(first.start, first.len);
+                size_t before = out.size();
+                emitText(hasTransform ? applyTransform(mirrored, tre, tfmt, tflags) : mirrored);
+                stop.len = out.size() - before;
             }
+            stop.transform = hasTransform; stop.re = tre; stop.fmt = tfmt; stop.flags = tflags;
             stops[index].push_back(stop);
         } else {
             auto it = vars.find(name);
-            if (it != vars.end() && !(it->second.empty() && hasDefault)) emitText(it->second);
+            if (it != vars.end() && hasTransform) emitText(applyTransform(it->second, tre, tfmt, tflags));
+            else if (it != vars.end() && !(it->second.empty() && hasDefault)) emitText(it->second);
             else if (hasDefault) emitText(defaultText);
         }
         i = j;
@@ -211,12 +314,15 @@ void Application::insertSnippet(const std::string& content) {
     textBuffer.insert(base, out);
     invalidateLineIndex(); dirty_ = true;
     snippetStops_.clear();
+    snippetTransforms_.clear();
     std::vector<int> order;
     for (auto& [index, list] : stops) if (index != 0) order.push_back(index);
     for (int index : order) {
         std::vector<std::pair<size_t, size_t>> ranges;
-        for (auto& s : stops[index]) ranges.emplace_back(base + s.start, s.len);
+        std::vector<SnippetTransform> transforms;
+        for (auto& s : stops[index]) { ranges.emplace_back(base + s.start, s.len); transforms.push_back({s.transform, s.re, s.fmt, s.flags}); }
         snippetStops_.push_back(std::move(ranges));
+        snippetTransforms_.push_back(std::move(transforms));
     }
     if (stops.count(0)) snippetFinal_ = base + stops[0].front().start; else snippetFinal_ = base + out.size();
     snippetCurrent_ = 0;
@@ -266,10 +372,12 @@ bool Application::advanceSnippet(bool forward) {
         for (size_t k : order) {
             size_t pos = current[k].first, len = current[k].second;
             if (pos + len > textBuffer.size()) continue;
-            textBuffer.replace(pos, len, typed);
-            long diff = static_cast<long>(typed.size()) - static_cast<long>(len);
+            const SnippetTransform* tr = snippetCurrent_ < snippetTransforms_.size() && k < snippetTransforms_[snippetCurrent_].size() ? &snippetTransforms_[snippetCurrent_][k] : nullptr;
+            std::string replacement = tr && tr->active ? applyTransform(typed, tr->regex, tr->format, tr->flags) : typed;
+            textBuffer.replace(pos, len, replacement);
+            long diff = static_cast<long>(replacement.size()) - static_cast<long>(len);
             shiftAfter(pos, diff, &current[k]);
-            current[k].second = typed.size();
+            current[k].second = replacement.size();
         }
     }
     invalidateLineIndex(); dirty_ = true;

@@ -138,6 +138,16 @@ int Application::runSelfTest(const std::string& resultPath) {
     check("snippet moves to second stop", selections_[0].min() == 11 && selections_[0].max() == 16, std::to_string(selections_[0].min()) + "," + std::to_string(selections_[0].max()));
     endSnippet();
 
+    fresh("");
+    insertSnippet("${1:name} ${1/(.)(.*)/${1:/upcase}$2/} ${1/o/0/g}");
+    expect("snippet transform initial", "name Name name");
+    textBuffer.replace(0, 4, "foo");
+    invalidateLineIndex();
+    selections_.clear(); selections_.emplace_back(3);
+    advanceSnippet(true);
+    expect("snippet transform follows typing", "foo Foo f00");
+    endSnippet();
+
     // Project symbol scan and find in files need a folder; use a temp tree.
     {
         fs::path dir = fs::temp_directory_path() / "moreno_selftest_tree";
