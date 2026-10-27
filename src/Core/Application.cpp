@@ -573,6 +573,8 @@ bool Application::init(int argc, char** argv) {
         kb.addCommandHandler("prev_bookmark", [this](){ prevBookmark(); });
         kb.addCommandHandler("clear_bookmarks", [this](){ clearBookmarks(); });
         kb.addCommandHandler("toggle_side_bar", [this](){ toggleSidebar(); });
+        registerCommandHandlers();
+        loadKeymaps();
     }
     bool detachedLaunch = argc > 2 && std::string(argv[1]) == "--detached-tab";
     if (detachedLaunch) pluginHostStartPending_ = true;
@@ -4612,9 +4614,14 @@ void Application::handleEvents() {
                         pendingCtrlK_ = false;
                         if (KeyBindingManager::instance().dispatchChord("ctrl+k", keyStr)) continue;
                     }
+                    if (!pendingChordKey_.empty()) {
+                        std::string first = pendingChordKey_;
+                        pendingChordKey_.clear();
+                        if (KeyBindingManager::instance().dispatchChord(first, keyStr)) continue;
+                    }
                     if (KeyBindingManager::instance().dispatch(keyStr)) continue;
                     // check if this starts a chord
-                    if (KeyBindingManager::instance().hasChord(keyStr)) { pendingCtrlK_ = false; /* use as generic chord flag */ continue; }
+                    if (keyStr != "ctrl+k" && KeyBindingManager::instance().hasChord(keyStr)) { pendingCtrlK_ = false; pendingChordKey_ = keyStr; continue; }
                 }
             }
             if (pendingCtrlK_) {

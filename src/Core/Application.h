@@ -299,6 +299,8 @@ public:
     bool macroRecording() const { return macroRecording_; }
     void nextResult();
     void insertNewline();
+    void loadKeymaps();
+    void registerCommandHandlers();
     void applyLiveSettings();
     bool matchBracketsEnabled() const { return matchBrackets_; }
     void applySaveTransforms();
@@ -652,6 +654,7 @@ private:
     void foldAll();
     void unfoldAll();
     bool pendingCtrlK_ = false;
+    std::string pendingChordKey_;
     // bookmarks
     std::set<int> bookmarks_;
     // split view

@@ -3,6 +3,7 @@
 #include "Core/Application.h"
 #include "Syntax/SyntaxHighlighter.h"
 #include "Settings/SettingsManager.h"
+#include "Commands/KeyBindingManager.h"
 #include <chrono>
 #include <SDL2/SDL.h>
 #include <filesystem>
@@ -348,6 +349,24 @@ int Application::runSelfTest(const std::string& resultPath) {
         check("live settings apply tab size and rulers", tabSize_ == 7 && rulers_.size() == 2 && rulers_[1] == 90);
         tabSize_ = oldTab; rulers_ = oldRulers;
         st.load(oldPath);
+        fs::remove_all(dir, ec);
+    }
+
+    {
+        fs::path dir = fs::temp_directory_path() / "moreno_selftest_keymap";
+        std::error_code ec;
+        fs::create_directories(dir, ec);
+        { std::ofstream f(dir / "k.sublime-keymap", std::ios::binary);
+          f << "[\n  // comment\n  { \"keys\": [\"ctrl+alt+shift+f9\"], \"command\": \"selftest_a\", \"args\": {\"n\": 5} },\n  { \"keys\": [\"ctrl+alt+shift+f9\"], \"command\": \"selftest_b\" },\n  { \"keys\": [\"ctrl+alt+shift+f8\"], \"command\": \"selftest_a\", \"context\": [{\"key\": \"x\"}] },\n  { \"keys\": [\"ctrl+alt+shift+f7\"], \"command\": \"selftest_a\", \"args\": {\"n\": 9} },\n]"; }
+        auto& kb = KeyBindingManager::instance();
+        int gotArg = 0; std::string last;
+        kb.addCommandHandlerWithArgs("selftest_a", [&](const nlohmann::json& a) { gotArg = a.value("n", -1); last = "a"; });
+        kb.addCommandHandler("selftest_b", [&] { last = "b"; });
+        kb.load((dir / "k.sublime-keymap").string());
+        check("keymap with comments dispatches and later bindings win", kb.dispatch("ctrl+alt+shift+f9") && last == "b", last);
+        check("keymap args reach the handler", kb.dispatch("ctrl+alt+shift+f7") && gotArg == 9);
+        check("bindings with a context are ignored", !kb.dispatch("ctrl+alt+shift+f8"));
+        check("key names are normalized", KeyBindingManager::normalize("Ctrl+Shift+Keypad_Minus") == "ctrl+shift+-");
         fs::remove_all(dir, ec);
     }
 

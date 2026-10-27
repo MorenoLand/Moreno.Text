@@ -3,6 +3,8 @@
 #include <vector>
 #include <functional>
 #include <unordered_map>
+#include <fstream>
+#include <regex>
 #include <nlohmann/json.hpp>
 
 struct KeyBinding {
@@ -17,22 +19,28 @@ public:
         static KeyBindingManager k;
         return k;
     }
+    void clear() { bindings_.clear(); }
+    // Reads a keymap in Sublime's JSON format (comments and trailing commas allowed). Entries with a
+    // "context" are skipped because their conditions are not evaluated.
     void load(const std::string& path) {
-        std::ifstream f(path);
+        std::ifstream f(path, std::ios::binary);
         if (!f.is_open()) return;
-        try {
-            auto arr = nlohmann::json::parse(f);
-            if (!arr.is_array()) return;
-            for (auto& entry : arr) {
-                KeyBinding kb;
-                if (entry.contains("keys") && entry["keys"].is_array()) {
-                    for (auto& k : entry["keys"]) kb.keys.push_back(k.get<std::string>());
-                }
-                if (entry.contains("command")) kb.command = entry["command"].get<std::string>();
-                if (entry.contains("args")) kb.args = entry["args"];
-                if (!kb.command.empty()) bindings_.push_back(std::move(kb));
+        std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        if (text.size() >= 3 && static_cast<unsigned char>(text[0]) == 0xEF && static_cast<unsigned char>(text[1]) == 0xBB) text.erase(0, 3);
+        static const std::regex trailingComma(R"(,(\s*[}\]]))");
+        text = std::regex_replace(text, trailingComma, "$1");
+        auto arr = nlohmann::json::parse(text, nullptr, false, true);
+        if (!arr.is_array()) return;
+        for (auto& entry : arr) {
+            if (!entry.is_object() || entry.contains("context")) continue;
+            KeyBinding kb;
+            if (entry.contains("keys") && entry["keys"].is_array()) {
+                for (auto& k : entry["keys"]) if (k.is_string()) kb.keys.push_back(normalize(k.get<std::string>()));
             }
-        } catch (...) {}
+            if (entry.contains("command") && entry["command"].is_string()) kb.command = entry["command"].get<std::string>();
+            if (entry.contains("args")) kb.args = entry["args"];
+            if (!kb.command.empty() && !kb.keys.empty()) bindings_.push_back(std::move(kb));
+        }
     }
     void writeDefault(const std::string& path) {
         std::ofstream f(path);
@@ -80,16 +88,16 @@ public:
         f << j.dump(2);
     }
     void addCommandHandler(const std::string& cmd, std::function<void()> fn) {
+        handlers_[cmd] = [fn = std::move(fn)](const nlohmann::json&) { fn(); };
+    }
+    void addCommandHandlerWithArgs(const std::string& cmd, std::function<void(const nlohmann::json&)> fn) {
         handlers_[cmd] = std::move(fn);
     }
+    // Called for commands with no built-in handler (for example plugin commands). Returns true if it ran one.
+    void setFallback(std::function<bool(const std::string&, const nlohmann::json&)> fn) { fallback_ = std::move(fn); }
     bool dispatch(const std::string& keyCombo) const {
-        for (auto& kb : bindings_) {
-            if (kb.keys.size() == 1 && kb.keys[0] == keyCombo) {
-                auto it = handlers_.find(kb.command);
-                if (it != handlers_.end()) { it->second(); return true; }
-                return false;
-            }
-        }
+        for (auto it = bindings_.rbegin(); it != bindings_.rend(); ++it)
+            if (it->keys.size() == 1 && it->keys[0] == keyCombo) return run(*it);
         return false;
     }
     bool hasChord(const std::string& firstKey) const {
@@ -99,18 +107,31 @@ public:
         return false;
     }
     bool dispatchChord(const std::string& firstKey, const std::string& secondKey) const {
-        for (auto& kb : bindings_) {
-            if (kb.keys.size() == 2 && kb.keys[0] == firstKey && kb.keys[1] == secondKey) {
-                auto it = handlers_.find(kb.command);
-                if (it != handlers_.end()) { it->second(); return true; }
-                return false;
-            }
-        }
+        for (auto it = bindings_.rbegin(); it != bindings_.rend(); ++it)
+            if (it->keys.size() == 2 && it->keys[0] == firstKey && it->keys[1] == secondKey) return run(*it);
         return false;
+    }
+    // Sublime spells some keys differently from the key names Moreno builds from SDL events.
+    static std::string normalize(std::string key) {
+        for (auto& c : key) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        static const std::pair<const char*, const char*> aliases[] = {
+            {"escape", "escape"}, {"enter", "enter"}, {"keypad_enter", "enter"}, {"plus", "="}, {"equals", "="}, {"minus", "-"},
+            {"keypad_minus", "-"}, {"keypad_plus", "="}, {"keypad_multiply", "*"}, {"keypad_divide", "/"}};
+        size_t plus = key.rfind('+');
+        std::string prefix = plus == std::string::npos || plus + 1 >= key.size() ? std::string() : key.substr(0, plus + 1);
+        std::string last = prefix.empty() ? key : key.substr(plus + 1);
+        for (auto& [from, to] : aliases) if (last == from) { last = to; break; }
+        return prefix + last;
     }
     const std::vector<KeyBinding>& bindings() const { return bindings_; }
 private:
     KeyBindingManager() = default;
     std::vector<KeyBinding> bindings_;
-    std::unordered_map<std::string, std::function<void()>> handlers_;
+    bool run(const KeyBinding& kb) const {
+        auto it = handlers_.find(kb.command);
+        if (it != handlers_.end()) { it->second(kb.args); return true; }
+        return fallback_ ? fallback_(kb.command, kb.args) : false;
+    }
+    std::unordered_map<std::string, std::function<void(const nlohmann::json&)>> handlers_;
+    std::function<bool(const std::string&, const nlohmann::json&)> fallback_;
 };
