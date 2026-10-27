@@ -2,6 +2,8 @@
 // writes PASS/FAIL lines, so command behavior can be checked without driving the UI.
 #include "Core/Application.h"
 #include "Syntax/SyntaxHighlighter.h"
+#include "Settings/SettingsManager.h"
+#include <chrono>
 #include <SDL2/SDL.h>
 #include <filesystem>
 #include <fstream>
@@ -304,6 +306,30 @@ int Application::runSelfTest(const std::string& resultPath) {
         expect("one undo reverts a quick run of typing", "");
         doRedo();
         expect("redo restores it", "abc");
+    }
+
+    {
+        auto& st = SettingsManager::instance();
+        bool oldTrim = st.get<bool>("trim_trailing_white_space_on_save", false), oldNl = st.get<bool>("ensure_newline_at_eof_on_save", false);
+        st.set("trim_trailing_white_space_on_save", true); st.set("ensure_newline_at_eof_on_save", true);
+        fresh("a  \nb\t\nc", 4);
+        applySaveTransforms();
+        expect("save trims trailing whitespace and ends with a newline", "a\nb\nc\n");
+        check("cursor follows the trimmed text", selections_[0].cursor == 2, std::to_string(selections_[0].cursor));
+        st.set("trim_trailing_white_space_on_save", oldTrim); st.set("ensure_newline_at_eof_on_save", oldNl);
+        fs::path dir = fs::temp_directory_path() / "moreno_selftest_reload";
+        std::error_code ec;
+        fs::create_directories(dir, ec);
+        fs::path file = dir / "r.txt";
+        { std::ofstream f(file, std::ios::binary); f << "old"; }
+        openFile(file.string());
+        noteFileTime(file.string());
+        lastExternalPoll_ = SDL_GetTicks() - 2000;
+        { std::ofstream f(file, std::ios::binary); f << "new content"; }
+        fs::last_write_time(file, fs::last_write_time(file) + std::chrono::seconds(5));
+        pollExternalChanges();
+        expect("a file that changed on disk is reloaded", "new content");
+        fs::remove_all(dir, ec);
     }
 
     std::ofstream out(resultPath, std::ios::binary | std::ios::trunc);

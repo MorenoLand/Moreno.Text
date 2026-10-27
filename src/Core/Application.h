@@ -299,6 +299,9 @@ public:
     bool macroRecording() const { return macroRecording_; }
     void nextResult();
     void insertNewline();
+    void applySaveTransforms();
+    void noteFileTime(const std::string& path);
+    void pollExternalChanges();
     void pressTab(bool shift);
     void switchHeaderImplementation();
     void cloneTab(size_t index);
@@ -394,6 +397,8 @@ private:
     std::vector<SDL_Event> macro_;
     void loadMacro();
     void indexFindResults();
+    std::map<std::string, std::filesystem::file_time_type> knownFileTimes_;
+    uint32_t lastExternalPoll_ = 0;
     size_t matchingBracketOf(size_t at) const;
     void drawEditorHighlights(float drawTextX, float textOriginY, float lineStep, float top, float bottom, size_t firstLine, size_t lastLine, float gutterRight, float editorRight);
     bool handleCommandShortcut(SDL_Keycode sym, Uint16 mod);

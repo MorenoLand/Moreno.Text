@@ -1287,9 +1287,12 @@ void Application::saveFile() {
         return;
     }
     if (openFilePath_.empty()) { saveFileAs(); return; }
+    applySaveTransforms();
     std::ofstream f(openFilePath_, std::ios::binary);
     if (!f) return;
     f << encodeForSave(openFilePath_, textBuffer);
+    f.close();
+    noteFileTime(openFilePath_);
     dirty_ = false;
     rememberRecentFile(openFilePath_);
     saveSession();
@@ -1311,7 +1314,7 @@ void Application::saveAll() {
     for (auto& tab : tabs_) {
         if (tab.filePath.empty() || !tab.dirty) continue;
         std::ofstream f(tab.filePath, std::ios::binary);
-        if (f && !tab.largeFileGuarded && !tab.binaryView) { f << encodeForSave(tab.filePath, tab.text); tab.dirty = false; rememberRecentFile(tab.filePath); }
+        if (f && !tab.largeFileGuarded && !tab.binaryView) { f << encodeForSave(tab.filePath, tab.text); f.close(); noteFileTime(tab.filePath); tab.dirty = false; rememberRecentFile(tab.filePath); }
     }
     loadTab(activeTab_);
 }
@@ -5122,6 +5125,7 @@ void Application::notifyPluginViewClosed(int id) {
 
 void Application::update() {
     pollBuild();
+    pollExternalChanges();
     trackSelectionHistory();
     pollConsoleLog();
     pollPluginBridge();
