@@ -151,6 +151,23 @@ int Application::runSelfTest(const std::string& resultPath) {
         fs::remove_all(dir, ec);
     }
 
+    {
+        fs::path dir = fs::temp_directory_path() / "moreno_selftest_diff";
+        std::error_code ec;
+        fs::create_directories(dir, ec);
+        fs::path file = dir / "d.txt";
+        { std::ofstream f(file, std::ios::binary); f << "x\ny\nz\n"; }
+        openFile(file.string());
+        textBuffer = "x\nY\nz\nw\n";
+        invalidateLineIndex(); dirty_ = true;
+        refreshDiffHunks(true);
+        check("diff finds two hunks", diffHunks_.size() == 2, std::to_string(diffHunks_.size()));
+        selections_.clear(); selections_.emplace_back(2);
+        revertHunk();
+        expect("revert hunk restores the line", "x\ny\nz\nw\n");
+        fs::remove_all(dir, ec);
+    }
+
     std::ofstream out(resultPath, std::ios::binary | std::ios::trunc);
     out << report.str() << (failures ? "FAILED " : "ALL PASSED ") << failures << "\n";
     return failures ? 1 : 0;

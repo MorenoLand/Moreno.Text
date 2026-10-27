@@ -111,6 +111,10 @@ struct PluginInputPanelState {
     std::string text;
 };
 
+struct DiffHunk {
+    size_t newStart, newEnd, oldStart, oldEnd;
+};
+
 struct SnippetDef {
     std::string content, trigger, description, scope;
 };
@@ -292,6 +296,10 @@ public:
     void saveMacro();
     bool macroRecording() const { return macroRecording_; }
     void nextResult();
+    void nextModification();
+    void previousModification();
+    void revertHunk();
+    void revertAllModifications();
     void openProject();
     void openProjectFile(const std::string& path);
     void saveProjectAs();
@@ -355,6 +363,11 @@ private:
     std::vector<SDL_Event> macro_;
     void loadMacro();
     void indexFindResults();
+    void refreshDiffHunks(bool force);
+    void drawModificationMarkers(float gutterRight, float textOriginY, float lineStep, float top, float bottom);
+    std::vector<DiffHunk> diffHunks_;
+    std::vector<std::string> diffOldLines_;
+    uint32_t diffComputedAt_ = 0;
     void updateEncodingResults(const std::string& query);
     void updateProjectResults(const std::string& pattern);
     std::string encodeForSave(const std::string& path, const std::string& utf8) const;

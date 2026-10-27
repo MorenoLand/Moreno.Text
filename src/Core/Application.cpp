@@ -4335,6 +4335,7 @@ void Application::handleEvents() {
                 }
                 else if (mod & KMOD_SHIFT) selections_[0].cursor = clickPos;
                 else { selections_.clear(); selections_.emplace_back(clickPos); }
+                if (e.button.clicks >= 2 && !(mod & (KMOD_CTRL | KMOD_ALT | KMOD_SHIFT)) && openFindResultAtCursor()) { selecting_ = false; continue; }
                 selecting_ = true;
                 acActive_ = false;
                 desiredCursorX_ = -1.f;
@@ -4419,6 +4420,7 @@ void Application::handleEvents() {
             if (pendingCtrlK_) {
                 pendingCtrlK_ = false;
                 if (ctrl && sym == SDLK_b) { toggleSidebar(); continue; }
+                if (ctrl && sym == SDLK_z) { if (shift) revertAllModifications(); else revertHunk(); continue; }
                 if (ctrl && sym == SDLK_v) { openPasteHistory(); continue; }
                 if (ctrl && sym == SDLK_t) { closeTag(); continue; }
                 if (ctrl && sym == SDLK_RIGHTBRACKET) { reindent(); continue; }
@@ -4515,6 +4517,8 @@ void Application::handleEvents() {
             else if (ctrl && !shift && !(mod & KMOD_ALT) && sym == SDLK_u) softUndo();
             else if (ctrl && shift && sym == SDLK_u) softRedo();
             else if ((mod & KMOD_ALT) && !ctrl && sym == SDLK_PERIOD) closeTag();
+            else if (ctrl && !shift && !(mod & KMOD_ALT) && sym == SDLK_PERIOD) nextModification();
+            else if (ctrl && !shift && !(mod & KMOD_ALT) && sym == SDLK_COMMA) previousModification();
             else if (ctrl && !shift && sym == SDLK_e) useSelectionForFind();
             else if (ctrl && shift && sym == SDLK_e) useSelectionForReplace();
             else if (ctrl && sym == SDLK_PAGEDOWN) nextTab();
@@ -5184,6 +5188,8 @@ void Application::render() {
     addSolid(activePaneLeft, tbH, editorRight, editorBottom, editorBg.r, editorBg.g, editorBg.b, 1.f);
     flushSolid();
     gutter_->draw(fontAtlas(), lineCount, currentLine, firstVisibleLine, activePaneLeft, firstVisibleY, lineStep, fwh - sbH, tbH);
+    drawModificationMarkers(gutterRight, textOriginY, lineStep, tbH, editorBottom);
+    flushSolid();
 
     glEnable(GL_SCISSOR_TEST);
     GLRenderer::scissor((int)gutterRight, (int)(sbH + hScrollbarH), (int)std::max(1.f, editorRight - gutterRight), wh - (int)(tbH + sbH + hScrollbarH));
