@@ -298,6 +298,7 @@ public:
     void saveMacro();
     bool macroRecording() const { return macroRecording_; }
     void nextResult();
+    void switchHeaderImplementation();
     void cloneTab(size_t index);
     void diffWithTab(size_t otherIndex);
     void splitView() { cloneTab(activeTab_); }
@@ -391,6 +392,13 @@ private:
     std::vector<SDL_Event> macro_;
     void loadMacro();
     void indexFindResults();
+    void refreshProjectFileList();
+    void updateFileResults(const std::string& query);
+    void openGotoFile(const std::string& data);
+    std::vector<std::string> projectFiles_;
+    std::string projectFilesRoot_;
+    uint32_t projectFilesAt_ = 0;
+    size_t gotoPendingLine_ = 0;
     void refreshSidebarNode(SidebarNode& node);
     bool promptActive_ = false;
     std::string promptCaption_, findScopeDir_, findResultsRoot_;

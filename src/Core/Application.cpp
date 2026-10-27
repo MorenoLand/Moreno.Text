@@ -3055,22 +3055,7 @@ void Application::updateGotoResults() {
         if (word.size() >= 2 && word.find(pat) != std::string::npos && seen.insert(word).second) goto_.items.push_back(word);
     } else {
         gotoMode_ = Files;
-        for (auto& tab : tabs_) {
-            if (tab.fileName.find(q) != std::string::npos) goto_.items.push_back(tab.fileName);
-        }
-        if (!sidebarRoot_.empty()) {
-            try {
-                for (auto& entry : fs::recursive_directory_iterator(sidebarRoot_)) {
-                    if (entry.is_directory()) continue;
-                    std::string name = entry.path().filename().string();
-                    if (name.find(q) != std::string::npos) {
-                        goto_.items.push_back(name);
-                        goto_.subtexts.push_back(fs::relative(entry.path(), sidebarRoot_).string());
-                    }
-                    if (goto_.items.size() >= 20) break;
-                }
-            } catch (...) {}
-        }
+        updateFileResults(q);
     }
     goto_.selected = goto_.items.empty() ? -1 : 0;
 }
@@ -3667,6 +3652,12 @@ void Application::handleEvents() {
                         size_t bar = entry.rfind('|');
                         goto_.active = false;
                         if (bar != std::string::npos) openLocation(entry.substr(0, bar), static_cast<size_t>(std::strtoull(entry.c_str() + bar + 1, nullptr, 10)));
+                        continue;
+                    }
+                    if (gotoMode_ == Files && goto_.selected < (int)goto_.data.size()) {
+                        std::string target = goto_.data[goto_.selected];
+                        goto_.active = false;
+                        openGotoFile(target);
                         continue;
                     }
                     if (gotoMode_ == SpellSuggest && goto_.selected < (int)goto_.data.size()) {
@@ -4702,6 +4693,7 @@ void Application::handleEvents() {
             else if ((mod & KMOD_ALT) && !ctrl && sym == SDLK_PERIOD) closeTag();
             else if (ctrl && !shift && !(mod & KMOD_ALT) && sym == SDLK_PERIOD) nextModification();
             else if (ctrl && !shift && !(mod & KMOD_ALT) && sym == SDLK_COMMA) previousModification();
+            else if ((mod & KMOD_ALT) && !ctrl && !shift && sym == SDLK_o) switchHeaderImplementation();
             else if (ctrl && !shift && sym == SDLK_e) useSelectionForFind();
             else if (ctrl && shift && sym == SDLK_e) useSelectionForReplace();
             else if (ctrl && sym == SDLK_PAGEDOWN) nextTab();

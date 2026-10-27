@@ -217,6 +217,32 @@ int Application::runSelfTest(const std::string& resultPath) {
         collapseEditorGroupsTo(activeTab_);
     }
 
+    {
+        fs::path dir = fs::temp_directory_path() / "moreno_selftest_goto";
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+        fs::create_directories(dir / "src", ec);
+        fs::create_directories(dir / "docs", ec);
+        { std::ofstream(dir / "src" / "MainWindow.cpp") << "x"; }
+        { std::ofstream(dir / "src" / "MainWindow.h") << "x"; }
+        { std::ofstream(dir / "src" / "main_helper.py") << "x"; }
+        { std::ofstream(dir / "docs" / "readme.txt") << "x"; }
+        loadFolder(dir.string());
+        goto_.items.clear(); goto_.subtexts.clear(); goto_.data.clear();
+        updateFileResults("mw");
+        check("fuzzy match ranks MainWindow first", !goto_.items.empty() && goto_.items[0].rfind("MainWindow", 0) == 0, goto_.items.empty() ? std::string("none") : goto_.items[0]);
+        goto_.items.clear(); goto_.subtexts.clear(); goto_.data.clear();
+        updateFileResults("readme:5");
+        check("file:line suffix is parsed", gotoPendingLine_ == 5 && !goto_.items.empty() && goto_.items[0] == "readme.txt");
+        goto_.items.clear(); goto_.subtexts.clear(); goto_.data.clear();
+        updateFileResults("zzzzqq");
+        check("non matching query yields nothing", goto_.items.empty());
+        openFile((dir / "src" / "MainWindow.h").string());
+        switchHeaderImplementation();
+        check("switch header to implementation", openFilePath_.size() >= 14 && openFilePath_.substr(openFilePath_.size() - 14) == "MainWindow.cpp", openFilePath_);
+        fs::remove_all(dir, ec);
+    }
+
     std::ofstream out(resultPath, std::ios::binary | std::ios::trunc);
     out << report.str() << (failures ? "FAILED " : "ALL PASSED ") << failures << "\n";
     return failures ? 1 : 0;
