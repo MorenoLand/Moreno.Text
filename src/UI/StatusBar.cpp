@@ -14,6 +14,7 @@ static void addStatusRect(std::vector<float>& verts, float x0, float y0, float x
 
 void StatusBar::appendSolidRects(FontAtlas& font, std::vector<float>& verts, float windowW, float windowH,
                                  size_t line, size_t col, const std::string& branch) {
+    if (!visible_) return;
     float barY = windowH - height_;
     addStatusRect(verts, 0, barY, windowW, windowH, 0.15f, 0.15f, 0.18f, 1.f);
 
@@ -32,6 +33,7 @@ void StatusBar::appendSolidRects(FontAtlas& font, std::vector<float>& verts, flo
 
 void StatusBar::drawText(FontAtlas& font, float windowW, float windowH,
                          size_t line, size_t col, const std::string& syntaxName, bool useTabs, int tabSize, const std::string& branch) {
+    if (!visible_) return;
     float barY = windowH - height_;
     char buf[64];
     snprintf(buf, sizeof(buf), "Line %zu, Col %zu", line + 1, col + 1);
@@ -58,6 +60,7 @@ void StatusBar::drawText(FontAtlas& font, float windowW, float windowH,
 
 void StatusBar::draw(FontAtlas& font, float windowW, float windowH, float,
                      size_t line, size_t col, const std::string& syntaxName, bool useTabs, int tabSize, const std::string& branch) {
+    if (!visible_) return;
     std::vector<float> verts;
     appendSolidRects(font, verts, windowW, windowH, line, col, branch);
     if (!verts.empty()) {

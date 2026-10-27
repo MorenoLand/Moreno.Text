@@ -371,7 +371,11 @@ static std::string inferSyntaxKey(const std::string& filePath, const std::string
 Application& Application::instance() { static Application app; return app; }
 
 int Application::run(int argc, char** argv) {
-    if (!init(argc, argv)) return 1;
+    if (!init(argc, argv)) {
+        PluginHostPaths pluginPaths{paths_.exeDir, paths_.dataDir, paths_.packagesDir, paths_.installedPackagesDir, paths_.cacheDir, paths_.libDir};
+        PluginHost::stop(pluginPaths);
+        return 1;
+    }
     while (running_) {
         handleEvents(); update(); render();
         if (pluginHostStartPending_) {
@@ -480,6 +484,8 @@ bool Application::init(int argc, char** argv) {
         autoPair_ = settings.get<bool>("auto_match_enabled", true);
         scrollPastEnd_ = settings.get<bool>("scroll_past_end", true);
         minimapVisible_ = settings.get<bool>("minimap_visible", true);
+        rulers_ = settings.get<std::vector<int>>("rulers", std::vector<int>());
+        wrapColumn_ = std::clamp(settings.get<int>("wrap_width", 0), 0, 400);
     }
     // load color scheme
     {
@@ -489,6 +495,7 @@ bool Application::init(int argc, char** argv) {
         auto& theme = ThemeEngine::instance();
         if (!fs::exists(schemePath)) theme.writeDefault(schemePath);
         theme.load(schemePath);
+        loadSavedColorScheme();
     }
     // load keybindings
     {
@@ -518,9 +525,27 @@ bool Application::init(int argc, char** argv) {
         kb.addCommandHandler("replace", [this](){ commandReplace(); });
         kb.addCommandHandler("goto_anything", [this](){ commandGotoAnything(); });
         kb.addCommandHandler("command_palette", [this](){ commandPalette(); });
-        kb.addCommandHandler("find_under_expand", [this](){ /* Ctrl+D next occurrence */ });
-        kb.addCommandHandler("select_line", [this](){ /* Ctrl+L */ });
-        kb.addCommandHandler("split_selection_into_lines", [this](){ /* Ctrl+Shift+L */ });
+        kb.addCommandHandler("find_under_expand", [this](){ expandSelectionToWord(); });
+        kb.addCommandHandler("select_line", [this](){ expandSelectionToLine(); });
+        kb.addCommandHandler("split_selection_into_lines", [this](){ splitSelectionIntoLines(); });
+        kb.addCommandHandler("single_selection", [this](){ singleSelection(); });
+        kb.addCommandHandler("indent", [this](){ indentSelection(); });
+        kb.addCommandHandler("unindent", [this](){ unindentSelection(); });
+        kb.addCommandHandler("find_next", [this](){ findNext(); });
+        kb.addCommandHandler("find_prev", [this](){ findPrevious(); });
+        kb.addCommandHandler("find_all", [this](){ findAllSelect(); });
+        kb.addCommandHandler("find_in_files", [this](){ commandFindInFiles(); });
+        kb.addCommandHandler("expand_selection_to_brackets", [this](){ expandSelectionToBrackets(); });
+        kb.addCommandHandler("expand_selection_to_indentation", [this](){ expandSelectionToIndentation(); });
+        kb.addCommandHandler("expand_selection_to_scope", [this](){ expandSelectionToScope(); });
+        kb.addCommandHandler("goto_symbol", [this](){ commandGotoSymbol(); });
+        kb.addCommandHandler("goto_line", [this](){ commandGotoLine(); });
+        kb.addCommandHandler("goto_word", [this](){ commandGotoWord(); });
+        kb.addCommandHandler("jump_back", [this](){ jumpBack(); });
+        kb.addCommandHandler("jump_forward", [this](){ jumpForward(); });
+        kb.addCommandHandler("toggle_tabs", [this](){ toggleTabs(); });
+        kb.addCommandHandler("toggle_status_bar", [this](){ toggleStatusBar(); });
+        kb.addCommandHandler("toggle_distraction_free", [this](){ toggleDistractionFree(); });
         kb.addCommandHandler("toggle_comment", [this](){ toggleLineComment(); });
         kb.addCommandHandler("toggle_block_comment", [this](){ toggleBlockComment(); });
         kb.addCommandHandler("swap_line_up", [this](){ swapLineUp(); });
@@ -833,7 +858,7 @@ void Application::saveSession() {
 }
 
 void Application::rebuildLineIndex() const {
-    if (!lineIndexDirty_) return;
+    if (!lineIndexDirty_ && lineIndexSize_ == textBuffer.size()) return;
     lineStarts_.clear();
     lineStarts_.push_back(0);
     size_t pos = 0;
@@ -842,6 +867,7 @@ void Application::rebuildLineIndex() const {
         lineStarts_.push_back(pos);
     }
     lineIndexDirty_ = false;
+    lineIndexSize_ = textBuffer.size();
 }
 
 size_t Application::lineStart(size_t pos) const { if (pos == 0) return 0; size_t p = textBuffer.rfind('\n', pos - 1); return p == std::string::npos ? 0 : p + 1; }
@@ -952,7 +978,7 @@ std::string Application::selectedTextOrLine() const {
 
 void Application::copySelectionOrLine() {
     std::string text = selectedTextOrLine();
-    if (!text.empty()) SDL_SetClipboardText(text.c_str());
+    if (!text.empty()) { SDL_SetClipboardText(text.c_str()); rememberClipboardText(text); }
 }
 
 void Application::cutSelectionOrLine() {
@@ -1239,7 +1265,7 @@ void Application::saveFile() {
     if (openFilePath_.empty()) { saveFileAs(); return; }
     std::ofstream f(openFilePath_, std::ios::binary);
     if (!f) return;
-    f << textBuffer;
+    f << encodeForSave(openFilePath_, textBuffer);
     dirty_ = false;
     rememberRecentFile(openFilePath_);
     saveSession();
@@ -1261,7 +1287,7 @@ void Application::saveAll() {
     for (auto& tab : tabs_) {
         if (tab.filePath.empty() || !tab.dirty) continue;
         std::ofstream f(tab.filePath, std::ios::binary);
-        if (f && !tab.largeFileGuarded && !tab.binaryView) { f << tab.text; tab.dirty = false; rememberRecentFile(tab.filePath); }
+        if (f && !tab.largeFileGuarded && !tab.binaryView) { f << encodeForSave(tab.filePath, tab.text); tab.dirty = false; rememberRecentFile(tab.filePath); }
     }
     loadTab(activeTab_);
 }
@@ -2277,6 +2303,7 @@ bool Application::detachTabToNewWindow(size_t index) {
 }
 
 void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
+    if (!tabsVisible_) return;
     float tabScale = std::clamp((float)tabFontSize_ / 14.f, 0.5f, 1.5f);
     auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
         solidVerts_.insert(solidVerts_.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
@@ -2470,6 +2497,7 @@ void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
 }
 
 bool Application::handleTabBarEvent(const SDL_Event& e, float windowW, float titlebarH) {
+    if (!tabsVisible_) return false;
     float tabScale = std::clamp((float)tabFontSize_ / 14.f, 0.5f, 1.5f);
     float barY = titlebarH;
     constexpr float tabStripInset = 8.f;
@@ -2806,10 +2834,31 @@ void Application::executePaletteCommand(int commandIndex) {
 }
 
 void Application::updateGotoResults() {
-    goto_.items.clear(); goto_.subtexts.clear(); goto_.scores.clear();
+    goto_.items.clear(); goto_.subtexts.clear(); goto_.scores.clear(); goto_.data.clear();
     const std::string& q = goto_.query;
     if (q.empty()) return;
-    if (q[0] == '@') {
+    if (q.rfind("@@", 0) == 0) {
+        gotoMode_ = ProjectSymbols;
+        updateProjectSymbolResults(q.substr(2));
+    } else if (q[0] == '*') {
+        gotoMode_ = Encodings;
+        updateEncodingResults(q.substr(1));
+    } else if (q[0] == '^') {
+        gotoMode_ = Projects;
+        updateProjectResults(q.substr(1));
+    } else if (q[0] == '%') {
+        gotoMode_ = PasteHistory;
+        updatePasteHistoryResults(q.substr(1));
+    } else if (q[0] == '$') {
+        gotoMode_ = Snippets;
+        updateSnippetResults(q.substr(1));
+    } else if (q[0] == '=') {
+        gotoMode_ = ColorSchemes;
+        updateColorSchemeResults(q.substr(1));
+    } else if (q[0] == '!') {
+        gotoMode_ = Builds;
+        updateBuildPickerResults(q.substr(1));
+    } else if (q[0] == '@') {
         gotoMode_ = Symbols;
         std::string pat = q.substr(1);
         std::regex re(R"((?:function|def|class|struct|void|int|string|var|let|const|async)\s+(\w+))", std::regex::icase);
@@ -2899,7 +2948,7 @@ void Application::acceptAutocomplete() {
     size_t pos = selections_[0].cursor;
     textBuffer.insert(pos, completion);
     selections_[0].anchor = selections_[0].cursor = pos + completion.size();
-    dirty_ = true; syntaxDirty_ = true; indentsDirty_ = true;
+    invalidateLineIndex(); dirty_ = true; syntaxDirty_ = true; indentsDirty_ = true;
     acActive_ = false;
 }
 
@@ -2916,7 +2965,7 @@ void Application::swapLineUp() {
     std::string prev = textBuffer.substr(prevLs, ls - prevLs);
     textBuffer.replace(prevLs, le - prevLs, cur + prev);
     selections_[0].anchor = selections_[0].cursor = prevLs + (selections_[0].cursor - ls);
-    dirty_ = true; syntaxDirty_ = true; indentsDirty_ = true;
+    invalidateLineIndex(); dirty_ = true; syntaxDirty_ = true; indentsDirty_ = true;
 }
 
 void Application::swapLineDown() {
@@ -2932,7 +2981,7 @@ void Application::swapLineDown() {
     textBuffer.replace(ls, nextLe - ls, next + cur);
     size_t offset = next.size();
     selections_[0].anchor = selections_[0].cursor = ls + offset + (selections_[0].cursor - ls);
-    dirty_ = true; syntaxDirty_ = true; indentsDirty_ = true;
+    invalidateLineIndex(); dirty_ = true; syntaxDirty_ = true; indentsDirty_ = true;
 }
 
 void Application::duplicateLine() {
@@ -2943,7 +2992,7 @@ void Application::duplicateLine() {
     std::string ins = "\n" + line;
     textBuffer.insert(le, ins);
     selections_[0].anchor = selections_[0].cursor = le + 1 + (selections_[0].cursor - ls);
-    dirty_ = true; syntaxDirty_ = true; indentsDirty_ = true;
+    invalidateLineIndex(); dirty_ = true; syntaxDirty_ = true; indentsDirty_ = true;
 }
 
 void Application::deleteLine() {
@@ -2954,7 +3003,7 @@ void Application::deleteLine() {
     if (le < textBuffer.size()) ++le;
     textBuffer.erase(ls, le - ls);
     selections_[0].anchor = selections_[0].cursor = std::min(ls, textBuffer.size());
-    dirty_ = true; syntaxDirty_ = true; indentsDirty_ = true;
+    invalidateLineIndex(); dirty_ = true; syntaxDirty_ = true; indentsDirty_ = true;
 }
 
 void Application::joinLines() {
@@ -2967,7 +3016,7 @@ void Application::joinLines() {
     while (le < textBuffer.size() && (textBuffer[le] == ' ' || textBuffer[le] == '\t'))
         textBuffer.erase(le, 1);
     textBuffer.insert(le, 1, ' ');
-    dirty_ = true; syntaxDirty_ = true; indentsDirty_ = true;
+    invalidateLineIndex(); dirty_ = true; syntaxDirty_ = true; indentsDirty_ = true;
 }
 
 // ── comment toggle ──
@@ -3005,7 +3054,7 @@ void Application::toggleLineComment() {
             else textBuffer.insert(first, token + " ");
         }
     }
-    dirty_ = true; syntaxDirty_ = true; indentsDirty_ = true;
+    invalidateLineIndex(); dirty_ = true; syntaxDirty_ = true; indentsDirty_ = true;
 }
 
 void Application::toggleBlockComment() {
@@ -3019,7 +3068,7 @@ void Application::toggleBlockComment() {
     textBuffer.insert(b, close);
     textBuffer.insert(a, open);
     sel.anchor = a; sel.cursor = b + open.size() + close.size();
-    dirty_ = true; syntaxDirty_ = true; indentsDirty_ = true;
+    invalidateLineIndex(); dirty_ = true; syntaxDirty_ = true; indentsDirty_ = true;
 }
 
 // ── bookmarks ──
@@ -3108,7 +3157,7 @@ void Application::handleAutoPair(const char* text) {
         std::string wrapped = std::string(1,c) + textBuffer.substr(a, b-a) + close;
         textBuffer.replace(a, b-a, wrapped);
         sel.anchor = a + 1; sel.cursor = a + 1 + (b - a);
-        dirty_ = true; syntaxDirty_ = true; indentsDirty_ = true;
+        invalidateLineIndex(); dirty_ = true; syntaxDirty_ = true; indentsDirty_ = true;
         return;
     }
     if (sel.cursor < textBuffer.size() && textBuffer[sel.cursor] == close) {
@@ -3176,6 +3225,7 @@ void Application::buildVisualLineMap(float editorWidth, float gutterWidth) {
     visualLines_.clear();
     if (!wordWrap_) return;
     float wrapWidth = editorWidth - gutterWidth - 16.f;
+    if (wrapColumn_ > 0) wrapWidth = std::min(wrapWidth, fontAtlas().measureText(std::string(static_cast<size_t>(wrapColumn_), '0')));
     if (wrapWidth < 50.f) wrapWidth = 50.f;
     float charW = std::max(1.f, fontAtlas().measureText(" "));
     int maxCols = std::max(10, (int)(wrapWidth / charW));
@@ -3227,6 +3277,13 @@ void Application::handleEvents() {
             }
             continue;
         }
+        if (e.type == SDL_USEREVENT && e.user.code == 0x4d41) { macroPlaying_ = false; continue; }
+        if (e.type == SDL_KEYDOWN && (e.key.keysym.mod & KMOD_CTRL) && e.key.keysym.sym == SDLK_q) {
+            if (e.key.keysym.mod & KMOD_SHIFT) playMacro(); else toggleMacroRecording();
+            continue;
+        }
+        if (e.type == SDL_KEYDOWN && (e.key.keysym.mod & KMOD_ALT) && e.key.keysym.sym == SDLK_F4) { running_ = false; return; }
+        if (macroRecording_ && !macroPlaying_ && (e.type == SDL_KEYDOWN || e.type == SDL_TEXTINPUT)) macro_.push_back(e);
         if (popupWin_) {
             Uint32 popupId = SDL_GetWindowID(popupWin_);
             if (e.type == SDL_MOUSEMOTION && e.motion.windowID == popupId) {
@@ -3289,7 +3346,7 @@ void Application::handleEvents() {
         if (e.type == SDL_KEYDOWN) {
             cursorLastInputTicks_ = SDL_GetTicks();
             auto mod = e.key.keysym.mod;
-            if (e.key.keysym.sym == SDLK_f && (mod & KMOD_CTRL) && (mod & KMOD_SHIFT) && !(mod & KMOD_ALT)) {
+            if (e.key.keysym.sym == SDLK_f && (mod & KMOD_CTRL) && (mod & KMOD_SHIFT) && (mod & KMOD_ALT)) {
                 debugFpsVisible_ = !debugFpsVisible_;
                 continue;
             }
@@ -3298,8 +3355,9 @@ void Application::handleEvents() {
         // find mode input
         if (find_.active && e.type == SDL_KEYDOWN) {
             auto mod = e.key.keysym.mod; auto sym = e.key.keysym.sym;
-            if (sym == SDLK_ESCAPE) { find_.active = false; acActive_ = false; continue; }
+            if (sym == SDLK_ESCAPE) { find_.active = false; findPanelIsInFiles_ = false; acActive_ = false; continue; }
             if (sym == SDLK_TAB && find_.replaceActive) { findFocus_ = 1 - findFocus_; continue; }
+            if (sym == SDLK_RETURN && findPanelIsInFiles_) { runFindInFiles(); continue; }
             if (sym == SDLK_RETURN) {
                 if (findFocus_ == 1 && find_.replaceActive) {
                     doReplace();
@@ -3434,8 +3492,54 @@ void Application::handleEvents() {
             if (sym == SDLK_RETURN) {
                 if (!goto_.items.empty() && goto_.selected >= 0 && goto_.selected < (int)goto_.items.size()) {
                     if (gotoMode_ == Lines) { goto_.active = false; ensureCursorVisible(); continue; }
+                    if (gotoMode_ == ProjectSymbols && goto_.selected < (int)goto_.data.size()) {
+                        const std::string entry = goto_.data[goto_.selected];
+                        size_t bar = entry.rfind('|');
+                        goto_.active = false;
+                        if (bar != std::string::npos) openLocation(entry.substr(0, bar), static_cast<size_t>(std::strtoull(entry.c_str() + bar + 1, nullptr, 10)));
+                        continue;
+                    }
+                    if (gotoMode_ == Encodings && goto_.selected < (int)goto_.data.size()) {
+                        std::string choice = goto_.data[goto_.selected];
+                        goto_.active = false;
+                        applyEncodingChoice(choice);
+                        continue;
+                    }
+                    if (gotoMode_ == Projects && goto_.selected < (int)goto_.data.size()) {
+                        std::string project = goto_.data[goto_.selected];
+                        goto_.active = false;
+                        openProjectFile(project);
+                        continue;
+                    }
+                    if (gotoMode_ == PasteHistory && goto_.selected < (int)goto_.data.size()) {
+                        size_t historyIndex = static_cast<size_t>(std::strtoull(goto_.data[goto_.selected].c_str(), nullptr, 10));
+                        goto_.active = false;
+                        if (historyIndex < clipHistory_.size()) insertText(clipHistory_[historyIndex]);
+                        continue;
+                    }
+                    if (gotoMode_ == Snippets && goto_.selected < (int)goto_.data.size()) {
+                        size_t snippetIndex = static_cast<size_t>(std::strtoull(goto_.data[goto_.selected].c_str(), nullptr, 10));
+                        goto_.active = false;
+                        insertSnippetByIndex(snippetIndex);
+                        continue;
+                    }
+                    if (gotoMode_ == ColorSchemes && goto_.selected < (int)goto_.data.size()) {
+                        std::string path = goto_.data[goto_.selected];
+                        goto_.active = false;
+                        applyColorScheme(path);
+                        continue;
+                    }
+                    if (gotoMode_ == Builds && goto_.selected < (int)goto_.data.size()) {
+                        size_t choice = static_cast<size_t>(std::strtoull(goto_.data[goto_.selected].c_str(), nullptr, 10));
+                        goto_.active = false;
+                        runBuildChoice(choice);
+                        continue;
+                    }
                     if (gotoMode_ == Symbols) {
-                        // jump to the symbol line
+                        if (goto_.selected < (int)goto_.subtexts.size()) {
+                            size_t ln = static_cast<size_t>(std::strtoull(goto_.subtexts[goto_.selected].c_str() + 5, nullptr, 10));
+                            if (ln > 0) { selections_.clear(); selections_.emplace_back(lineStartForLine(ln - 1)); }
+                        }
                         goto_.active = false; ensureCursorVisible(); continue;
                     }
                     if (gotoMode_ == Words) {
@@ -4307,13 +4411,32 @@ void Application::handleEvents() {
             }
             if (pendingCtrlK_) {
                 pendingCtrlK_ = false;
-                if (ctrl && sym == SDLK_1) { foldAll(); continue; }
+                if (ctrl && sym == SDLK_b) { toggleSidebar(); continue; }
+                if (ctrl && sym == SDLK_v) { openPasteHistory(); continue; }
+                if (ctrl && sym == SDLK_t) { closeTag(); continue; }
+                if (ctrl && sym == SDLK_RIGHTBRACKET) { reindent(); continue; }
+                if (sym == SDLK_LEFT || sym == SDLK_RIGHT) { if (shift) moveFileToNeighboringGroup(sym == SDLK_RIGHT); else focusNeighboringGroup(sym == SDLK_RIGHT); continue; }
+                if (sym == SDLK_UP) { newGroup(); continue; }
+                if (sym == SDLK_DOWN) { closeGroup(); continue; }
+                if (ctrl && sym == SDLK_1) { foldByLevel(1); continue; }
+                if (ctrl && sym == SDLK_2) { foldByLevel(2); continue; }
+                if (ctrl && sym == SDLK_3) { foldByLevel(3); continue; }
+                if (ctrl && sym == SDLK_0) { unfoldAll(); continue; }
+                if (ctrl && sym == SDLK_d) { quickSkipNext(); continue; }
+                if (ctrl && sym == SDLK_SPACE) { setMark(); continue; }
+                if (ctrl && sym == SDLK_a) { selectToMark(); continue; }
+                if (ctrl && sym == SDLK_w) { deleteToMark(); continue; }
+                if (ctrl && sym == SDLK_x) { swapWithMark(); continue; }
+                if (ctrl && sym == SDLK_y) { yank(); continue; }
+                if (ctrl && sym == SDLK_c) { showAtCenter(); continue; }
                 if (ctrl && sym == SDLK_j) { unfoldAll(); continue; }
+                if (ctrl && sym == SDLK_k) { deleteToLineEnd(); continue; }
+                if (ctrl && sym == SDLK_BACKSPACE) { deleteToLineStart(); continue; }
                 if (ctrl && sym == SDLK_u) { convertCaseUpper(); continue; }
                 if (ctrl && sym == SDLK_l) { convertCaseLower(); continue; }
             }
             if (ctrl && sym == SDLK_q) running_ = false;
-            else if (sym == SDLK_ESCAPE) { autoScrollActive_ = false; if (consoleOpen_) { consoleOpen_ = false; } else { selections_.clear(); selections_.emplace_back(sel.cursor); find_.active = false; goto_.active = false; commandPalette_.active = false; if (pluginInputPanel_.active) finishPluginInputPanel(false); if (pluginQuickPanel_.active) finishPluginQuickPanel(-1); tabDropdownOpen_ = false; acActive_ = false; } }
+            else if (sym == SDLK_ESCAPE) { snippetActive_ = false; autoScrollActive_ = false; if (consoleOpen_) { consoleOpen_ = false; } else { selections_.clear(); selections_.emplace_back(sel.cursor); find_.active = false; goto_.active = false; commandPalette_.active = false; if (pluginInputPanel_.active) finishPluginInputPanel(false); if (pluginQuickPanel_.active) finishPluginQuickPanel(-1); tabDropdownOpen_ = false; acActive_ = false; } }
             else if (ctrl && sym == SDLK_k) { pendingCtrlK_ = true; }
             else if (ctrl && shift && sym == SDLK_UP) { swapLineUp(); }
             else if (ctrl && shift && sym == SDLK_DOWN) { swapLineDown(); }
@@ -4342,12 +4465,11 @@ void Application::handleEvents() {
             else if (ctrl && sym == SDLK_c) copySelectionOrLine();
             else if (ctrl && sym == SDLK_x) cutSelectionOrLine();
             else if (ctrl && sym == SDLK_v) pasteClipboard(shift);
-            else if (ctrl && sym == SDLK_b) toggleSidebar();
             else if (ctrl && sym == SDLK_z) { if (shift) doRedo(); else doUndo(); }
             else if (ctrl && sym == SDLK_y) doRedo();
-            else if (ctrl && sym == SDLK_f) { find_.active = true; find_.replaceActive = false; find_.query.clear(); find_.matches.clear(); findFocus_ = 0; }
+            else if (ctrl && !shift && sym == SDLK_f) { findPanelIsInFiles_ = false; find_.active = true; find_.replaceActive = false; find_.query.clear(); find_.matches.clear(); findFocus_ = 0; }
             else if (ctrl && sym == SDLK_BACKQUOTE) { consoleOpen_ = !consoleOpen_; }
-            else if (ctrl && sym == SDLK_h) { find_.active = true; find_.replaceActive = true; find_.query.clear(); find_.matches.clear(); findFocus_ = 0; }
+            else if (ctrl && !shift && sym == SDLK_h) { findPanelIsInFiles_ = false; find_.active = true; find_.replaceActive = true; find_.query.clear(); find_.matches.clear(); findFocus_ = 0; }
             else if (ctrl && sym == SDLK_s) { if (shift) saveFileAs(); else saveFile(); }
             else if (ctrl && shift && sym == SDLK_t) reopenClosedTab();
             else if (ctrl && shift && sym == SDLK_p) commandPalette();
@@ -4359,8 +4481,8 @@ void Application::handleEvents() {
             else if (sym == SDLK_F2 && !(mod & KMOD_CTRL)) { nextBookmark(); }
             else if (sym == SDLK_F11 && !(mod & KMOD_SHIFT)) { toggleFullscreen(); }
             else if ((mod & KMOD_ALT) && sym == SDLK_z) { wordWrap_ = !wordWrap_; visualLines_.clear(); }
-            else if (ctrl && sym == SDLK_n) newBuffer();
-            else if (ctrl && sym == SDLK_w) closeTab(activeTab_);
+            else if (ctrl && !shift && sym == SDLK_n) newBuffer();
+            else if (ctrl && !shift && sym == SDLK_w) closeTab(activeTab_);
             else if (ctrl && shift && sym == SDLK_LEFTBRACKET) toggleFold(lineOfPos(sel.cursor));
             else if (ctrl && shift && sym == SDLK_RIGHTBRACKET) {
                 size_t line = lineOfPos(sel.cursor);
@@ -4369,29 +4491,61 @@ void Application::handleEvents() {
                     if (it->first == ln || (ln > it->first && ln <= it->second)) { foldedRegions_.erase(it); break; }
                 }
             }
-            else if (ctrl && sym == SDLK_d) {
-                size_t pos = sel.cursor, ls = lineStart(pos), le = lineEnd(ls);
-                std::string_view lt(textBuffer.data() + ls, le - ls);
-                size_t col = pos - ls, ws = col, we = col;
-                while (ws > 0 && (isalnum(lt[ws-1]) || lt[ws-1] == '_')) --ws;
-                while (we < lt.size() && (isalnum(lt[we]) || lt[we] == '_')) ++we;
-                if (we > ws) {
-                    std::string word(lt.substr(ws, we - ws));
-                    size_t sf = sel.hasSelection() ? sel.max() : (ls + we);
-                    size_t found = textBuffer.find(word, sf);
-                    if (found == std::string::npos) found = textBuffer.find(word);
-                    if (found != std::string::npos) selections_.emplace_back(found, found + word.size());
-                }
-            }
-            else if (ctrl && sym == SDLK_l) { size_t ls = lineStart(sel.cursor), le = lineEnd(sel.cursor); sel.anchor = ls; sel.cursor = (le < textBuffer.size()) ? le + 1 : le; }
-            else if (ctrl && shift && sym == SDLK_l) {
-                if (sel.hasSelection()) {
-                    size_t a = sel.min(), b = sel.max();
-                    std::vector<SelRange> ns; size_t pos = a;
-                    while (pos <= b) { size_t le = lineEnd(pos); if (le > b) le = b; ns.emplace_back(pos, le); pos = le + 1; if (pos > b || pos == 0) break; }
-                    selections_ = std::move(ns);
-                }
-            }
+            else if ((mod & KMOD_ALT) && shift && sym == SDLK_w) wrapSelectionWithTag();
+            else if ((mod & KMOD_ALT) && shift && sym == SDLK_p) openRecentProjectPicker();
+            else if ((mod & KMOD_ALT) && shift && sym >= SDLK_1 && sym <= SDLK_4) setLayoutColumns(static_cast<size_t>(sym - SDLK_1 + 1));
+            else if (ctrl && shift && !(mod & KMOD_ALT) && sym >= SDLK_1 && sym <= SDLK_4) moveFileToGroup(static_cast<size_t>(sym - SDLK_1));
+            else if (ctrl && !shift && !(mod & KMOD_ALT) && sym >= SDLK_1 && sym <= SDLK_4) focusGroup(static_cast<size_t>(sym - SDLK_1));
+            else if (sym == SDLK_F7 || (ctrl && !shift && sym == SDLK_b)) runBuild();
+            else if (ctrl && shift && sym == SDLK_b) openBuildPicker();
+            else if (ctrl && sym == SDLK_PAUSE) cancelBuild();
+            else if (sym == SDLK_F12 && shift) gotoReference();
+            else if (sym == SDLK_F12) gotoDefinition();
+            else if (ctrl && shift && sym == SDLK_r) commandGotoSymbolInProject();
+            else if (ctrl && sym == SDLK_F3) findUnder(!shift);
+            else if (ctrl && shift && sym == SDLK_w) closeWindow();
+            else if (ctrl && shift && sym == SDLK_h) replaceNext();
+            else if (ctrl && !shift && !(mod & KMOD_ALT) && sym == SDLK_u) softUndo();
+            else if (ctrl && shift && sym == SDLK_u) softRedo();
+            else if ((mod & KMOD_ALT) && !ctrl && sym == SDLK_PERIOD) closeTag();
+            else if (ctrl && !shift && sym == SDLK_e) useSelectionForFind();
+            else if (ctrl && shift && sym == SDLK_e) useSelectionForReplace();
+            else if (ctrl && sym == SDLK_PAGEDOWN) nextTab();
+            else if (ctrl && sym == SDLK_PAGEUP) previousTab();
+            else if (ctrl && sym == SDLK_TAB) { if (shift) previousTab(); else nextTab(); }
+            else if (ctrl && sym == SDLK_F4) closeCurrentTab();
+            else if ((mod & KMOD_ALT) && !ctrl && sym >= SDLK_1 && sym <= SDLK_8) selectTabByIndex(static_cast<size_t>(sym - SDLK_1));
+            else if ((mod & KMOD_ALT) && !ctrl && sym == SDLK_9) selectLastTab();
+            else if ((mod & KMOD_ALT) && !ctrl && sym == SDLK_q) wrapParagraph(80);
+            else if (ctrl && !shift && sym == SDLK_m) jumpToMatchingBracket();
+            else if (ctrl && !shift && sym == SDLK_SPACE) showCompletions();
+            else if (ctrl && sym == SDLK_d) expandSelectionToWord();
+            else if (ctrl && shift && sym == SDLK_l) splitSelectionIntoLines();
+            else if (ctrl && sym == SDLK_l) expandSelectionToLine();
+            else if (ctrl && shift && sym == SDLK_m) expandSelectionToBrackets();
+            else if (ctrl && shift && sym == SDLK_SPACE) expandSelectionToScope();
+            else if (ctrl && shift && sym == SDLK_f) commandFindInFiles();
+            else if (ctrl && shift && sym == SDLK_n) newWindow();
+            else if (ctrl && shift && sym == SDLK_RETURN) insertLineBefore();
+            else if (ctrl && sym == SDLK_RETURN) insertLineAfter();
+            else if (ctrl && sym == SDLK_DELETE) deleteWordForward();
+            else if (ctrl && sym == SDLK_BACKSPACE) deleteWordBackward();
+            else if (ctrl && sym == SDLK_t) transposeCharacters();
+            else if (sym == SDLK_F9) sortLines(ctrl);
+            else if (ctrl && !(mod & KMOD_ALT) && sym == SDLK_EQUALS) changeFontSize(1);
+            else if (ctrl && !(mod & KMOD_ALT) && sym == SDLK_MINUS) changeFontSize(-1);
+            else if (ctrl && sym == SDLK_RIGHTBRACKET) indentSelection();
+            else if (ctrl && sym == SDLK_LEFTBRACKET) unindentSelection();
+            else if (ctrl && sym == SDLK_g) commandGotoLine();
+            else if (ctrl && sym == SDLK_r) commandGotoSymbol();
+            else if (ctrl && sym == SDLK_SEMICOLON) commandGotoWord();
+            else if (sym == SDLK_F4 && shift) previousResult();
+            else if (sym == SDLK_F4 && !ctrl) nextResult();
+            else if (sym == SDLK_F3 && (mod & KMOD_ALT)) findAllUnder();
+            else if (sym == SDLK_F3 && shift) findPrevious();
+            else if (sym == SDLK_F3) findNext();
+            else if (sym == SDLK_F11 && shift) toggleDistractionFree();
+            else if ((mod & KMOD_ALT) && sym == SDLK_MINUS) { if (shift) jumpForward(); else jumpBack(); }
             else if (sym == SDLK_BACKSPACE) {
                 pushUndo();
                 if (sel.hasSelection()) deleteSelection();
@@ -4403,12 +4557,12 @@ void Application::handleEvents() {
                     if (autoPair_ && pos < textBuffer.size()) {
                         char prev = textBuffer[ds], next = textBuffer[pos];
                         if ((prev=='('&&next==')')||(prev=='['&&next==']')||(prev=='{'&&next=='}')||(prev=='"'&&next=='"')||(prev=='\''&&next=='\'')) {
-                            textBuffer.erase(ds, 2);
+                            textBuffer.erase(ds, 2); invalidateLineIndex();
                             sel.anchor = sel.cursor = ds; dirty_ = true; desiredCursorX_ = -1.f;
                             goto did_backspace;
                         }
                     }
-                    textBuffer.erase(ds, pos - ds);
+                    textBuffer.erase(ds, pos - ds); invalidateLineIndex();
                     sel.anchor = sel.cursor = ds; dirty_ = true; desiredCursorX_ = -1.f;
                 }
                 did_backspace:;
@@ -4419,20 +4573,23 @@ void Application::handleEvents() {
                 else if (sel.cursor < textBuffer.size()) {
                     size_t pos = sel.cursor, de = pos + 1;
                     while (de < textBuffer.size() && (textBuffer[de] & 0xC0) == 0x80) ++de;
-                    textBuffer.erase(pos, de - pos); dirty_ = true;
+                    textBuffer.erase(pos, de - pos); invalidateLineIndex(); dirty_ = true;
                 }
             }
             else if (sym == SDLK_RETURN) {
                 if (acActive_) acceptAutocomplete();
+                else if (openFindResultAtCursor()) {}
                 else if (sendPluginViewTextCommand("insert", "\n")) {}
                 else insertText("\n");
             }
             else if (sym == SDLK_TAB) {
                 if (acActive_) { acceptAutocomplete(); }
+                else if (snippetActive_ && advanceSnippet(!shift)) {}
+                else if (!shift && expandSnippetTrigger()) {}
                 else if (shift) {
                     pushUndo(); size_t ls = lineStart(sel.cursor); int rm = 0;
                     while (rm < tabSize_ && ls + rm < textBuffer.size() && textBuffer[ls + rm] == ' ') ++rm;
-                    if (rm > 0) { textBuffer.erase(ls, rm); sel.anchor = sel.cursor = (sel.cursor > ls + rm) ? sel.cursor - rm : ls; dirty_ = true; }
+                    if (rm > 0) { textBuffer.erase(ls, rm); invalidateLineIndex(); sel.anchor = sel.cursor = (sel.cursor > ls + rm) ? sel.cursor - rm : ls; dirty_ = true; }
                 } else insertText(useTabs_ ? "\t" : std::string(tabSize_, ' '));
             }
             else if (sym == SDLK_LEFT) {
@@ -4814,6 +4971,8 @@ void Application::notifyPluginViewClosed(int id) {
 }
 
 void Application::update() {
+    pollBuild();
+    trackSelectionHistory();
     pollConsoleLog();
     pollPluginBridge();
     if (autoScrollActive_) {
@@ -5027,6 +5186,14 @@ void Application::render() {
         if (cy + lineStep >= tbH && cy <= editorBottom) {
             auto lineBg = syntax_->lineHighlightColor();
             addSolid(gutterRight, cy, editorRight, cy + lineStep, lineBg.r, lineBg.g, lineBg.b, 1.f);
+        }
+    }
+    for (int ruler : rulers_) {
+        if (ruler <= 0) continue;
+        float rx = drawTextX + fontAtlas().measureText(std::string(static_cast<size_t>(ruler), '0'));
+        if (rx > gutterRight && rx < editorRight) {
+            auto rc = syntax_->lineHighlightColor();
+            addSolid(rx, tbH, rx + 1.f, editorBottom, std::min(1.f, rc.r + 0.08f), std::min(1.f, rc.g + 0.08f), std::min(1.f, rc.b + 0.08f), 1.f);
         }
     }
 
@@ -5485,7 +5652,7 @@ void Application::render() {
             ar(ox, oy + 28 + goto_.selected * 22, ox + ow, oy + 28 + (goto_.selected + 1) * 22, 0.22f, 0.28f, 0.42f, 1.f);
         flushSolid();
         fontAtlas().drawText("Goto: " + goto_.query + "|", ox + 8, oy + 6, 0.8f, 0.8f, 0.8f, 1.f);
-        const char* modeLabel = gotoMode_ == Symbols ? "Symbols" : gotoMode_ == Lines ? "Go to Line" : gotoMode_ == Words ? "Words" : "Files";
+        const char* modeLabel = gotoMode_ == Symbols ? "Symbols" : gotoMode_ == Lines ? "Go to Line" : gotoMode_ == Words ? "Words" : gotoMode_ == ProjectSymbols ? "Project Symbols" : gotoMode_ == Builds ? "Build" : gotoMode_ == ColorSchemes ? "Color Scheme" : gotoMode_ == Snippets ? "Snippets" : gotoMode_ == PasteHistory ? "Paste History" : gotoMode_ == Encodings ? "Encoding" : gotoMode_ == Projects ? "Projects" : "Files";
         float mlW = fontAtlas().measureText(modeLabel);
         fontAtlas().drawText(modeLabel, ox + ow - mlW - 12, oy + 6, 0.45f, 0.45f, 0.5f, 1.f);
         for (int i = 0; i < (int)goto_.items.size() && i < 10; ++i) {
@@ -5933,6 +6100,28 @@ void Application::shutdown() {
     if (textCursor_) { SDL_FreeCursor(textCursor_); textCursor_ = nullptr; }
     fontAtlas().destroy(); uiFontAtlas().destroy(); GLRenderer::destroy();
     SDL_StopTextInput(); SDL_GL_DeleteContext(glContext_); SDL_DestroyWindow(window_); SDL_Quit();
+    PluginHostPaths pluginPaths{paths_.exeDir, paths_.dataDir, paths_.packagesDir, paths_.installedPackagesDir, paths_.cacheDir, paths_.libDir};
+    PluginHost::stop(pluginPaths);
 }
 
 int main(int argc, char** argv) { return Application::instance().run(argc, argv); }
+
+void Application::changeFontSize(int delta) {
+    int next = std::clamp(fontSize_ + delta, 8, 48);
+    if (next == fontSize_) return;
+    std::string fontPath = findMonospaceFont();
+    if (fontPath.empty()) return;
+    size_t cursorLine = selections_.empty() ? 0 : lineOfPos(selections_[0].cursor);
+    float cursorOffset = cursorLine * fontAtlas().lineHeight() - scrollY_;
+    fontAtlas().destroy();
+    if (!fontAtlas().init(fontPath, next, getWindowBackingScale(window_), fontBold_)) return;
+    fontSize_ = next;
+    scrollY_ = std::max(0.f, cursorLine * fontAtlas().lineHeight() - cursorOffset);
+    maxLineWidthDirty_ = true;
+    visualLines_.clear();
+    auto& settings = SettingsManager::instance();
+    settings.set("font_size", fontSize_);
+    settings.save();
+}
+
+void Application::resetFontSize() { changeFontSize(16 - fontSize_); }

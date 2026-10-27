@@ -1,4 +1,6 @@
 #pragma once
+#include <map>
+#include <nlohmann/json_fwd.hpp>
 #include <SDL2/SDL.h>
 #include <string>
 #include <vector>
@@ -59,6 +61,7 @@ struct GotoState {
     std::vector<std::string> items;
     std::vector<std::string> subtexts;
     std::vector<float> scores;
+    std::vector<std::string> data;
     int selected = 0;
 };
 
@@ -106,6 +109,10 @@ struct PluginInputPanelState {
     std::string responsePath;
     std::string caption;
     std::string text;
+};
+
+struct SnippetDef {
+    std::string content, trigger, description, scope;
 };
 
 struct EditorGroup {
@@ -181,8 +188,8 @@ public:
     void commandPaste() { pasteClipboard(false); }
     void commandPasteAndIndent() { pasteClipboard(true); }
     void commandSelectAll() { if (!selections_.empty()) { selections_[0].anchor = 0; selections_[0].cursor = textBuffer.size(); } }
-    void commandFind() { find_.active = true; find_.replaceActive = false; find_.query.clear(); find_.matches.clear(); }
-    void commandReplace() { find_.active = true; find_.replaceActive = true; find_.query.clear(); find_.matches.clear(); }
+    void commandFind() { findPanelIsInFiles_ = false; find_.active = true; find_.replaceActive = false; find_.query.clear(); find_.matches.clear(); }
+    void commandReplace() { findPanelIsInFiles_ = false; find_.active = true; find_.replaceActive = true; find_.query.clear(); find_.matches.clear(); }
     void commandGotoAnything() { goto_.active = true; goto_.query.clear(); goto_.selected = 0; goto_.items.clear(); }
     void commandPalette() { commandPalette_.active = true; commandPalette_.query.clear(); commandPalette_.cursor = commandPalette_.anchor = 0; commandPalette_.selected = 0; commandPalette_.scroll = 0; commandPalette_.hover = -1; updateCommandPalette(); }
     void toggleConsole();
@@ -209,7 +216,192 @@ public:
     void nextBookmark();
     void prevBookmark();
     void clearBookmarks();
+    void indentSelection();
+    void unindentSelection();
+    void findNext();
+    void findPrevious();
+    void findAllSelect();
+    void commandFindInFiles();
+    void expandSelectionToLine();
+    void expandSelectionToWord();
+    void expandSelectionToBrackets();
+    void expandSelectionToIndentation();
+    void expandSelectionToScope();
+    void splitSelectionIntoLines();
+    void singleSelection();
+    void toggleTabs();
+    void toggleStatusBar();
+    void toggleDistractionFree();
+    void commandGotoSymbol() { openGotoWithPrefix("@"); }
+    void commandGotoLine() { openGotoWithPrefix(":"); }
+    void commandGotoWord() { openGotoWithPrefix("#"); }
+    void jumpBack();
+    void jumpForward();
+    void openSyntaxPicker();
+    void openIndentationPicker();
+    void insertLineBefore();
+    void insertLineAfter();
+    void deleteWordBackward();
+    void deleteWordForward();
+    void deleteToLineEnd();
+    void deleteToLineStart();
+    void transposeCharacters();
+    void sortLines(bool caseSensitive);
+    void reverseLines();
+    void uniqueLines();
+    void addPreviousLine();
+    void addNextLine();
+    void changeFontSize(int delta);
+    void resetFontSize();
+    void newWindow();
+    void closeAllFiles();
+    void closeFolder();
+    void refreshFolder();
+    void openDocumentation();
+    void reportBug();
+    void showAbout();
+    void foldCurrent();
+    void unfoldCurrent();
+    void commandFoldAll() { foldByLevel(1); }
+    void commandUnfoldAll() { unfoldAll(); }
+    void convertLineEndings(bool crlf);
+    void nextTab();
+    void previousTab();
+    void selectTabByIndex(size_t index);
+    void selectLastTab();
+    void closeWindow() { running_ = false; }
+    void findUnder(bool forward);
+    void findAllUnder();
+    void quickSkipNext();
+    void useSelectionForFind();
+    void useSelectionForReplace();
+    void replaceNext();
+    void setMark();
+    void selectToMark();
+    void deleteToMark();
+    void swapWithMark();
+    void yank();
+    void showAtCenter();
+    void wrapParagraph(size_t width);
+    void jumpToMatchingBracket();
+    void foldByLevel(int level);
+    void showCompletions();
+    void toggleMacroRecording();
+    void playMacro();
+    void saveMacro();
+    bool macroRecording() const { return macroRecording_; }
+    void nextResult();
+    void openProject();
+    void openProjectFile(const std::string& path);
+    void saveProjectAs();
+    void editProject();
+    void closeProject();
+    void openRecentProjectPicker();
+    void openReopenEncodingPicker();
+    void openSaveEncodingPicker();
+    void reopenWithEncoding(const std::string& name);
+    void saveWithEncoding(const std::string& name);
+    void applyEncodingChoice(const std::string& data);
+    void setRuler(int column);
+    void setWrapColumn(int column);
+    void softUndo();
+    void softRedo();
+    void openPasteHistory();
+    void convertIdentifierCase(int style);
+    void closeTag();
+    void reindent();
+    void shuffleLines();
+    void permuteSelections(int mode);
+    void trackSelectionHistory();
+    void openSnippetPicker();
+    void wrapSelectionWithTag();
+    void insertSnippet(const std::string& content);
+    bool advanceSnippet(bool forward);
+    bool expandSnippetTrigger();
+    bool snippetActive() const { return snippetActive_; }
+    void endSnippet() { snippetActive_ = false; }
+    void openColorSchemePicker();
+    void customizeColorScheme();
+    void applyColorScheme(const std::string& path);
+    void setLayoutColumns(size_t columns);
+    void focusGroup(size_t index);
+    void focusNeighboringGroup(bool next);
+    void moveFileToGroup(size_t index);
+    void moveFileToNeighboringGroup(bool next);
+    void newGroup();
+    void closeGroup();
+    struct BuildJob;
+    void runBuild();
+    void runBuildChoice(size_t choiceIndex);
+    void cancelBuild();
+    void openBuildPicker();
+    void gotoDefinition();
+    void gotoReference();
+    void commandGotoSymbolInProject() { openGotoWithPrefix("@@"); }
+    void openLocation(const std::string& path, size_t line);
+    void previousResult();
+    bool openFindResultAtCursor();
 private:
+    void openGotoWithPrefix(const std::string& prefix);
+    void recordJump();
+    void applyJump(size_t index);
+    size_t matchLengthAt(size_t pos) const;
+    void selectMatch(size_t pos);
+    void runFindInFiles();
+    bool findPanelIsInFiles_ = false;
+    size_t markPos_ = std::string::npos;
+    bool macroRecording_ = false, macroPlaying_ = false;
+    std::vector<SDL_Event> macro_;
+    void loadMacro();
+    void indexFindResults();
+    void updateEncodingResults(const std::string& query);
+    void updateProjectResults(const std::string& pattern);
+    std::string encodeForSave(const std::string& path, const std::string& utf8) const;
+    std::map<std::string, std::string> fileEncodings_;
+    std::string projectFile_;
+    void rememberClipboardText(const std::string& text);
+    void updatePasteHistoryResults(const std::string& pattern);
+    std::vector<int> rulers_;
+    int wrapColumn_ = 0;
+    std::vector<std::string> clipHistory_;
+    std::vector<std::vector<SelRange>> selectionHistory_, selectionRedo_;
+    std::vector<SelRange> selectionSnapshot_;
+    void loadSnippets();
+    bool snippetScopeMatches(const std::string& scope) const;
+    void updateSnippetResults(const std::string& pattern);
+    void insertSnippetByIndex(size_t index);
+    void selectSnippetStop();
+    std::vector<SnippetDef> snippets_;
+    uint32_t snippetsLoadedAt_ = 0;
+    bool snippetActive_ = false;
+    std::vector<std::vector<std::pair<size_t, size_t>>> snippetStops_;
+    size_t snippetCurrent_ = 0, snippetFinal_ = 0, snippetBufSize_ = 0;
+    void updateColorSchemeResults(const std::string& pattern);
+    void loadSavedColorScheme();
+    void startBuild(const nlohmann::json& spec, const std::string& label);
+    void pollBuild();
+    void appendToBuildTab(const std::string& chunk);
+    void showBuildTab();
+    void indexBuildResults();
+    void updateProjectSymbolResults(const std::string& pattern);
+    void updateBuildPickerResults(const std::string& pattern);
+    std::shared_ptr<BuildJob> buildJob_;
+    std::string buildSystemName_, buildFileRegex_, buildWorkDir_;
+    std::vector<std::string> projectSymbolNames_, projectSymbolPaths_;
+    std::vector<size_t> projectSymbolLines_;
+    uint32_t projectSymbolsBuiltAt_ = 0;
+    std::string projectSymbolsRoot_;
+    void openFindHit(size_t index);
+    std::vector<std::pair<std::string, size_t>> findHits_;
+    std::vector<std::pair<size_t, size_t>> findResultLines_;  // buffer line -> index into findHits_
+    size_t findHitCursor_ = 0;
+    std::string macroPath() const;
+    std::string killRing_;
+    std::string wordOrSelectionAtCursor() const;
+    bool tabsVisible_ = true, statusBarVisible_ = true, distractionFree_ = false;
+    bool dfSavedSidebar_ = false, dfSavedMinimap_ = false, dfSavedTabs_ = true, dfSavedStatus_ = true, dfSavedFullscreen_ = false;
+    std::vector<std::pair<size_t, size_t>> jumpStack_;
+    size_t jumpIndex_ = 0;
     Application() = default;
     bool init(int argc, char** argv);
     void shutdown();
@@ -283,7 +475,7 @@ private:
     bool pluginHostStartPending_ = false;
     bool syntaxDirty_ = true;
     std::string textBuffer;
-    mutable bool lineIndexDirty_ = true;
+    mutable bool lineIndexDirty_ = true; mutable size_t lineIndexSize_ = 0;
     mutable std::vector<size_t> lineStarts_{0};
     std::string openFilePath_;
     std::string openFile_ = "untitled";
@@ -355,7 +547,7 @@ private:
     FindState find_;
     int findFocus_ = 0;
     GotoState goto_;
-    enum GotoMode { Files, Symbols, Lines, Words } gotoMode_ = Files;
+    enum GotoMode { Files, Symbols, Lines, Words, ProjectSymbols, Builds, ColorSchemes, Snippets, PasteHistory, Encodings, Projects } gotoMode_ = Files;
     void updateGotoResults();
     CommandPaletteState commandPalette_;
     std::string pluginStatusText_;

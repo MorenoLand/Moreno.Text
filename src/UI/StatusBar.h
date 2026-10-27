@@ -10,13 +10,16 @@ public:
                   size_t line, size_t col, const std::string& syntaxName, bool useTabs, int tabSize, const std::string& branch);
     void draw(class FontAtlas& font, float windowW, float windowH, float minimapW,
               size_t line, size_t col, const std::string& syntaxName, bool useTabs, int tabSize, const std::string& branch);
-    float height() const { return height_; }
+    float height() const { return visible_ ? height_ : 0.f; }
+    void setVisible(bool v) { visible_ = v; }
+    bool visible() const { return visible_; }
     float indentLabelX() const { return indentLabelX_; }
     float indentLabelW() const { return indentLabelW_; }
     float syntaxLabelX() const { return syntaxLabelX_; }
     float syntaxLabelW() const { return syntaxLabelW_; }
 private:
     float height_ = 22.f;
+    bool visible_ = true;
     float indentLabelX_ = 0, indentLabelW_ = 0;
     float syntaxLabelX_ = 0, syntaxLabelW_ = 0;
 };
