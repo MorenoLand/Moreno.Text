@@ -148,3 +148,39 @@ void Application::revertAllModifications() {
     revertFile();
     diffHunks_.clear();
 }
+
+void Application::cloneTab(size_t index) {
+    saveCurrentTab();
+    if (index >= tabs_.size() || tabs_[index].largeFileGuarded) return;
+    TabBuffer copy = tabs_[index];
+    copy.preview = false;
+    tabs_.insert(tabs_.begin() + static_cast<std::ptrdiff_t>(index) + 1, std::move(copy));
+    for (auto& group : editorGroups_) if (group.tab > index) ++group.tab;
+    if (activeTab_ > index) ++activeTab_;
+    addEditorGroupForTab(index + 1);
+}
+
+void Application::diffWithTab(size_t otherIndex) {
+    saveCurrentTab();
+    if (otherIndex >= tabs_.size() || activeTab_ >= tabs_.size() || otherIndex == activeTab_) return;
+    const TabBuffer& other = tabs_[otherIndex];
+    const TabBuffer& current = tabs_[activeTab_];
+    std::vector<std::string> a = splitLines(other.text), b = splitLines(current.text);
+    std::vector<DiffHunk> hunks;
+    diffLines(a, b, hunks);
+    std::ostringstream out;
+    out << "--- " << (other.fileName.empty() ? "untitled" : other.fileName) << "\n+++ " << (current.fileName.empty() ? "untitled" : current.fileName) << "\n";
+    if (hunks.empty()) out << "\n(no differences)\n";
+    for (const DiffHunk& h : hunks) {
+        out << "@@ -" << h.oldStart + 1 << "," << (h.oldEnd - h.oldStart) << " +" << h.newStart + 1 << "," << (h.newEnd - h.newStart) << " @@\n";
+        for (size_t i = h.oldStart; i < h.oldEnd; ++i) out << "-" << a[i] << "\n";
+        for (size_t i = h.newStart; i < h.newEnd; ++i) out << "+" << b[i] << "\n";
+    }
+    newBuffer();
+    textBuffer = out.str();
+    invalidateLineIndex();
+    openFile_ = "Diff";
+    if (activeTab_ < tabs_.size()) tabs_[activeTab_].fileName = "Diff";
+    dirty_ = false;
+    selections_.clear(); selections_.emplace_back(0);
+}

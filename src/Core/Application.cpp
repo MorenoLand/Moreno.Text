@@ -2651,8 +2651,10 @@ bool Application::handleTabBarEvent(const SDL_Event& e, float windowW, float tit
                 else if (idx == 4) { for (size_t i = tabs_.size(); i-- > 0;) if (!tabs_[i].dirty) closeTabNow(i); }
                 else if (idx == 5) { for (size_t i = tabs_.size(); i-- > tabContextIndex_ + 1;) if (!tabs_[i].dirty) closeTabNow(i); }
                 else if (idx == 6) { for (size_t i = tabs_.size(); i-- > 0;) if (!tabs_[i].filePath.empty() && !fs::exists(tabs_[i].filePath)) closeTabNow(i); }
+                else if (idx == 8) cloneTab(tabContextIndex_);
                 else if (idx == 10) newBuffer();
                 else if (idx == 11) openFileDialog();
+                else if (idx == 13 && tabContextIndex_ != activeTab_) diffWithTab(tabContextIndex_);
                 tabContextOpen_ = false; return true;
             }
             tabContextOpen_ = false;

@@ -204,6 +204,19 @@ int Application::runSelfTest(const std::string& resultPath) {
         fs::remove_all(dir, ec);
     }
 
+    {
+        fresh("a\nb\n");
+        size_t first = activeTab_;
+        fresh("a\nc\n");
+        diffWithTab(first);
+        check("diff with tab shows removed and added lines", textBuffer.find("-b") != std::string::npos && textBuffer.find("+c") != std::string::npos, textBuffer);
+        fresh("clone me");
+        size_t tabCount = tabs_.size();
+        cloneTab(activeTab_);
+        check("split view clones the tab into a second group", tabs_.size() == tabCount + 1 && editorGroups_.size() == 2 && textBuffer == "clone me");
+        collapseEditorGroupsTo(activeTab_);
+    }
+
     std::ofstream out(resultPath, std::ios::binary | std::ios::trunc);
     out << report.str() << (failures ? "FAILED " : "ALL PASSED ") << failures << "\n";
     return failures ? 1 : 0;

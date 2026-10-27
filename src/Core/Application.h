@@ -298,6 +298,9 @@ public:
     void saveMacro();
     bool macroRecording() const { return macroRecording_; }
     void nextResult();
+    void cloneTab(size_t index);
+    void diffWithTab(size_t otherIndex);
+    void splitView() { cloneTab(activeTab_); }
     void sidebarContextAction(int action, const SidebarNode& node);
     void openPrompt(const std::string& caption, const std::string& initial, std::function<void(const std::string&)> callback);
     bool createPath(const std::string& dir, const std::string& name, bool folder, std::string& created);
