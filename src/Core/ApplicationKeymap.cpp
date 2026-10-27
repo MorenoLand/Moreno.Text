@@ -5,6 +5,7 @@
 #include <SDL2/SDL.h>
 #include <algorithm>
 #include <filesystem>
+#include <regex>
 
 #ifdef None
 #undef None
@@ -13,9 +14,50 @@
 namespace fs = std::filesystem;
 using json = nlohmann::json;
 
+// Evaluates one keymap context condition (the "key", "operator", "operand", "match_all" of a Sublime context entry).
+bool Application::evaluateKeyContext(const std::string& key, const std::string& op, const json& operand, bool matchAll) {
+    std::vector<json> values;
+    auto perSelection = [&](auto fn) { for (auto& s : selections_) values.push_back(fn(s)); };
+    size_t size = textBuffer.size();
+    if (key == "num_selections") values.push_back(static_cast<int>(selections_.size()));
+    else if (key == "selection_empty") perSelection([](const SelRange& s) { return !s.hasSelection(); });
+    else if (key == "text") perSelection([&](const SelRange& s) { size_t a = std::min(std::min(s.anchor, s.cursor), size), b = std::min(std::max(s.anchor, s.cursor), size); return textBuffer.substr(a, b - a); });
+    else if (key == "preceding_text") perSelection([&](const SelRange& s) { size_t c = std::min(s.cursor, size); return textBuffer.substr(lineStart(c), c - lineStart(c)); });
+    else if (key == "following_text") perSelection([&](const SelRange& s) { size_t c = std::min(s.cursor, size); return textBuffer.substr(c, lineEnd(c) - c); });
+    else if (key == "overlay_visible") values.push_back(goto_.active);
+    else if (key == "panel_visible" || key == "panel_has_focus") values.push_back(find_.active || find_.replaceActive);
+    else if (key == "has_next_field" || key == "has_prev_field") values.push_back(snippetActive_);
+    else if (key == "read_only") values.push_back(binaryView_ || largeFileGuarded_);
+    else if (key == "auto_complete_visible" || key == "popup_visible" || key == "has_snippet") values.push_back(false);
+    else if (key.rfind("setting.", 0) == 0) values.push_back(SettingsManager::instance().get<json>(key.substr(8), json(nullptr)));
+    else return false;  // scopes (selector) and plugin keys are not available here
+    if (values.empty()) return false;
+    auto test = [&](const json& v) {
+        bool positive = op == "equal" || op == "regex_match" || op == "regex_contain";
+        bool result = false;
+        if (op == "equal" || op == "not_equal") result = v == operand;
+        else if (v.is_string() && operand.is_string()) {
+            try {
+                std::regex re(operand.get<std::string>());
+                std::string s = v.get<std::string>();
+                bool contain = op == "regex_contain" || op == "not_regex_contain";
+                result = contain ? std::regex_search(s, re) : std::regex_search(s, re, std::regex_constants::match_continuous);
+            } catch (...) { return false; }
+        } else return false;
+        return positive ? result : !result;
+    };
+    for (auto& v : values) {
+        bool ok = test(v);
+        if (matchAll && !ok) return false;
+        if (!matchAll && ok) return true;
+    }
+    return matchAll;
+}
+
 void Application::loadKeymaps() {
     auto& kb = KeyBindingManager::instance();
     kb.clear();
+    kb.setContextEvaluator([this](const std::string& key, const std::string& op, const json& operand, bool matchAll) { return evaluateKeyContext(key, op, operand, matchAll); });
     fs::path defaultDir = fs::path(paths_.dataDir) / "Packages" / "Default";
     kb.load((defaultDir / "Default (Windows).moreno-keymap").string());
     std::error_code ec;

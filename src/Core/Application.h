@@ -300,6 +300,7 @@ public:
     void nextResult();
     void insertNewline();
     void loadKeymaps();
+    bool evaluateKeyContext(const std::string& key, const std::string& op, const nlohmann::json& operand, bool matchAll);
     void registerCommandHandlers();
     void applyLiveSettings();
     bool matchBracketsEnabled() const { return matchBrackets_; }

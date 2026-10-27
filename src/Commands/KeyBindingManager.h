@@ -11,6 +11,7 @@ struct KeyBinding {
     std::vector<std::string> keys;
     std::string command;
     nlohmann::json args;
+    nlohmann::json context;  // array of {key, operator, operand, match_all}; empty means always
 };
 
 class KeyBindingManager {
@@ -21,7 +22,7 @@ public:
     }
     void clear() { bindings_.clear(); }
     // Reads a keymap in Sublime's JSON format (comments and trailing commas allowed). Entries with a
-    // "context" are skipped because their conditions are not evaluated.
+    // "context" only fire while the context evaluator (setContextEvaluator) says every condition holds.
     void load(const std::string& path) {
         std::ifstream f(path, std::ios::binary);
         if (!f.is_open()) return;
@@ -32,13 +33,14 @@ public:
         auto arr = nlohmann::json::parse(text, nullptr, false, true);
         if (!arr.is_array()) return;
         for (auto& entry : arr) {
-            if (!entry.is_object() || entry.contains("context")) continue;
+            if (!entry.is_object()) continue;
             KeyBinding kb;
             if (entry.contains("keys") && entry["keys"].is_array()) {
                 for (auto& k : entry["keys"]) if (k.is_string()) kb.keys.push_back(normalize(k.get<std::string>()));
             }
             if (entry.contains("command") && entry["command"].is_string()) kb.command = entry["command"].get<std::string>();
             if (entry.contains("args")) kb.args = entry["args"];
+            if (entry.contains("context") && entry["context"].is_array()) kb.context = entry["context"];
             if (!kb.command.empty() && !kb.keys.empty()) bindings_.push_back(std::move(kb));
         }
     }
@@ -95,20 +97,22 @@ public:
     }
     // Called for commands with no built-in handler (for example plugin commands). Returns true if it ran one.
     void setFallback(std::function<bool(const std::string&, const nlohmann::json&)> fn) { fallback_ = std::move(fn); }
+    using ContextEvaluator = std::function<bool(const std::string& key, const std::string& op, const nlohmann::json& operand, bool matchAll)>;
+    void setContextEvaluator(ContextEvaluator fn) { evaluator_ = std::move(fn); }
     bool dispatch(const std::string& keyCombo) const {
         for (auto it = bindings_.rbegin(); it != bindings_.rend(); ++it)
-            if (it->keys.size() == 1 && it->keys[0] == keyCombo) return run(*it);
+            if (it->keys.size() == 1 && it->keys[0] == keyCombo && contextHolds(*it)) return run(*it);
         return false;
     }
     bool hasChord(const std::string& firstKey) const {
         for (auto& kb : bindings_) {
-            if (kb.keys.size() == 2 && kb.keys[0] == firstKey) return true;
+            if (kb.keys.size() == 2 && kb.keys[0] == firstKey && contextHolds(kb)) return true;
         }
         return false;
     }
     bool dispatchChord(const std::string& firstKey, const std::string& secondKey) const {
         for (auto it = bindings_.rbegin(); it != bindings_.rend(); ++it)
-            if (it->keys.size() == 2 && it->keys[0] == firstKey && it->keys[1] == secondKey) return run(*it);
+            if (it->keys.size() == 2 && it->keys[0] == firstKey && it->keys[1] == secondKey && contextHolds(*it)) return run(*it);
         return false;
     }
     // Sublime spells some keys differently from the key names Moreno builds from SDL events.
@@ -127,6 +131,18 @@ public:
 private:
     KeyBindingManager() = default;
     std::vector<KeyBinding> bindings_;
+    bool contextHolds(const KeyBinding& kb) const {
+        if (!kb.context.is_array() || kb.context.empty()) return true;
+        if (!evaluator_) return false;
+        for (auto& c : kb.context) {
+            if (!c.is_object() || !c.contains("key") || !c["key"].is_string()) return false;
+            std::string op = c.value("operator", std::string("equal"));
+            bool matchAll = c.value("match_all", false);
+            if (!evaluator_(c["key"].get<std::string>(), op, c.contains("operand") ? c["operand"] : nlohmann::json(true), matchAll)) return false;
+        }
+        return true;
+    }
+    ContextEvaluator evaluator_;
     bool run(const KeyBinding& kb) const {
         auto it = handlers_.find(kb.command);
         if (it != handlers_.end()) { it->second(kb.args); return true; }

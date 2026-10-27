@@ -393,6 +393,16 @@ int Application::runSelfTest(const std::string& resultPath) {
         pluginEventsEnabled_ = oldEnabled;
     }
 
+    {
+        fresh("foo(bar)", 4);
+        check("context num_selections", evaluateKeyContext("num_selections", "equal", 1, false));
+        check("context preceding_text regex", evaluateKeyContext("preceding_text", "regex_contain", "foo\\($", false));
+        check("context following_text regex", evaluateKeyContext("following_text", "regex_match", "bar", false));
+        check("context selection_empty", evaluateKeyContext("selection_empty", "equal", true, true));
+        check("context not_equal", !evaluateKeyContext("num_selections", "not_equal", 1, false));
+        check("unknown context keys fail", !evaluateKeyContext("selector", "equal", "source", false));
+    }
+
     std::ofstream out(resultPath, std::ios::binary | std::ios::trunc);
     out << report.str() << (failures ? "FAILED " : "ALL PASSED ") << failures << "\n";
     return failures ? 1 : 0;
