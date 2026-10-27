@@ -1,4 +1,5 @@
 #pragma once
+#include <functional>
 #include "Core/SpellChecker.h"
 #include <map>
 #include <nlohmann/json_fwd.hpp>
@@ -196,7 +197,7 @@ public:
     void commandSelectAll() { if (!selections_.empty()) { selections_[0].anchor = 0; selections_[0].cursor = textBuffer.size(); } }
     void commandFind() { findPanelIsInFiles_ = false; find_.active = true; find_.replaceActive = false; find_.query.clear(); find_.matches.clear(); }
     void commandReplace() { findPanelIsInFiles_ = false; find_.active = true; find_.replaceActive = true; find_.query.clear(); find_.matches.clear(); }
-    void commandGotoAnything() { goto_.active = true; goto_.query.clear(); goto_.selected = 0; goto_.items.clear(); }
+    void commandGotoAnything() { promptActive_ = false; goto_.active = true; goto_.query.clear(); goto_.selected = 0; goto_.items.clear(); }
     void commandPalette() { commandPalette_.active = true; commandPalette_.query.clear(); commandPalette_.cursor = commandPalette_.anchor = 0; commandPalette_.selected = 0; commandPalette_.scroll = 0; commandPalette_.hover = -1; updateCommandPalette(); }
     void toggleConsole();
     void toggleFullscreen();
@@ -297,6 +298,12 @@ public:
     void saveMacro();
     bool macroRecording() const { return macroRecording_; }
     void nextResult();
+    void sidebarContextAction(int action, const SidebarNode& node);
+    void openPrompt(const std::string& caption, const std::string& initial, std::function<void(const std::string&)> callback);
+    bool createPath(const std::string& dir, const std::string& name, bool folder, std::string& created);
+    bool renamePath(const std::string& oldPath, const std::string& newName);
+    bool deletePath(const std::string& path);
+    void refreshSidebarTree();
     void toggleSpellCheck();
     void nextMisspelling();
     void previousMisspelling();
@@ -381,6 +388,10 @@ private:
     std::vector<SDL_Event> macro_;
     void loadMacro();
     void indexFindResults();
+    void refreshSidebarNode(SidebarNode& node);
+    bool promptActive_ = false;
+    std::string promptCaption_, findScopeDir_, findResultsRoot_;
+    std::function<void(const std::string&)> promptCallback_;
     bool ensureSpellDictionary();
     void loadSpellSetting();
     std::vector<std::pair<size_t, size_t>> misspelledInLine(size_t line) const;

@@ -1721,6 +1721,7 @@ bool Application::handleSidebarEvent(const SDL_Event& e, float windowH, float ti
                 int action = sidebarContextItems_[idx].action;
                 std::string path = sidebarContextNode_.path;
                 if (action == 2) openFolderDialog();
+                else if (action == 0 || action == 1 || action == 3 || action == 6 || action == 7 || action == 8 || action == 9 || action == 12) sidebarContextAction(action, sidebarContextNode_);
                 else if (action == 4) SDL_SetClipboardText(path.c_str());
 #ifdef _WIN32
                 else if (action == 5 || action == 11) {
@@ -2983,6 +2984,7 @@ void Application::executePaletteCommand(int commandIndex) {
 }
 
 void Application::updateGotoResults() {
+    if (promptActive_) { goto_.items.clear(); goto_.subtexts.clear(); goto_.scores.clear(); goto_.data.clear(); return; }
     goto_.items.clear(); goto_.subtexts.clear(); goto_.scores.clear(); goto_.data.clear();
     const std::string& q = goto_.query;
     if (q.empty()) return;
@@ -3644,9 +3646,17 @@ void Application::handleEvents() {
             updateCommandPalette(); continue;
         }
         // goto mode
+        if (!goto_.active) promptActive_ = false;
         if (goto_.active && e.type == SDL_KEYDOWN) {
             auto sym = e.key.keysym.sym;
             if (sym == SDLK_ESCAPE) { goto_.active = false; continue; }
+            if (sym == SDLK_RETURN && promptActive_) {
+                auto callback = promptCallback_;
+                std::string text = goto_.query;
+                promptActive_ = false; goto_.active = false;
+                if (callback) callback(text);
+                continue;
+            }
             if (sym == SDLK_RETURN) {
                 if (!goto_.items.empty() && goto_.selected >= 0 && goto_.selected < (int)goto_.items.size()) {
                     if (gotoMode_ == Lines) { goto_.active = false; ensureCursorVisible(); continue; }
@@ -5849,7 +5859,7 @@ void Application::render() {
             ar(ox, oy + 28 + goto_.selected * 22, ox + ow, oy + 28 + (goto_.selected + 1) * 22, 0.22f, 0.28f, 0.42f, 1.f);
         flushSolid();
         fontAtlas().drawText("Goto: " + goto_.query + "|", ox + 8, oy + 6, 0.8f, 0.8f, 0.8f, 1.f);
-        const char* modeLabel = gotoMode_ == Symbols ? "Symbols" : gotoMode_ == Lines ? "Go to Line" : gotoMode_ == Words ? "Words" : gotoMode_ == ProjectSymbols ? "Project Symbols" : gotoMode_ == Builds ? "Build" : gotoMode_ == ColorSchemes ? "Color Scheme" : gotoMode_ == Snippets ? "Snippets" : gotoMode_ == PasteHistory ? "Paste History" : gotoMode_ == Encodings ? "Encoding" : gotoMode_ == Projects ? "Projects" : gotoMode_ == PackageFiles ? "Package Files" : gotoMode_ == SpellSuggest ? "Spelling" : gotoMode_ == Dictionaries ? "Dictionary" : "Files";
+        const char* modeLabel = promptActive_ ? promptCaption_.c_str() : gotoMode_ == Symbols ? "Symbols" : gotoMode_ == Lines ? "Go to Line" : gotoMode_ == Words ? "Words" : gotoMode_ == ProjectSymbols ? "Project Symbols" : gotoMode_ == Builds ? "Build" : gotoMode_ == ColorSchemes ? "Color Scheme" : gotoMode_ == Snippets ? "Snippets" : gotoMode_ == PasteHistory ? "Paste History" : gotoMode_ == Encodings ? "Encoding" : gotoMode_ == Projects ? "Projects" : gotoMode_ == PackageFiles ? "Package Files" : gotoMode_ == SpellSuggest ? "Spelling" : gotoMode_ == Dictionaries ? "Dictionary" : "Files";
         float mlW = fontAtlas().measureText(modeLabel);
         fontAtlas().drawText(modeLabel, ox + ow - mlW - 12, oy + 6, 0.45f, 0.45f, 0.5f, 1.f);
         for (int i = 0; i < (int)goto_.items.size() && i < 10; ++i) {

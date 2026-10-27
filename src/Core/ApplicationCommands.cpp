@@ -353,7 +353,10 @@ void Application::commandFindInFiles() {
 void Application::runFindInFiles() {
     findPanelIsInFiles_ = false;
     find_.active = false;
-    if (find_.query.empty() || sidebarRoot_.empty()) return;
+    std::string searchRoot = findScopeDir_.empty() ? sidebarRoot_ : findScopeDir_;
+    findScopeDir_.clear();
+    if (find_.query.empty() || searchRoot.empty()) return;
+    findResultsRoot_ = searchRoot;
     std::regex re;
     bool useRegex = find_.regex;
     if (useRegex) {
@@ -379,7 +382,7 @@ void Application::runFindInFiles() {
     size_t files = 0, hitFiles = 0, hits = 0;
     const size_t maxHits = 5000;
     std::error_code ec;
-    for (fs::recursive_directory_iterator it(sidebarRoot_, fs::directory_options::skip_permission_denied, ec), end; it != end && hits < maxHits; it.increment(ec)) {
+    for (fs::recursive_directory_iterator it(searchRoot, fs::directory_options::skip_permission_denied, ec), end; it != end && hits < maxHits; it.increment(ec)) {
         if (ec) break;
         if (it->is_directory(ec)) {
             std::string name = it->path().filename().string();
@@ -405,7 +408,7 @@ void Application::runFindInFiles() {
             }
         }
         if (fileHits) {
-            body << fs::relative(it->path(), sidebarRoot_, ec).generic_string() << ":\n" << fileBlock << "\n";
+            body << fs::relative(it->path(), searchRoot, ec).generic_string() << ":\n" << fileBlock << "\n";
             ++hitFiles; hits += fileHits;
         }
     }
@@ -438,7 +441,7 @@ void Application::indexFindResults() {
             if (colon != std::string::npos) {
                 size_t target = static_cast<size_t>(std::strtoull(line.c_str() + 2, nullptr, 10));
                 findResultLines_.emplace_back(lineNo, findHits_.size());
-                findHits_.emplace_back((fs::path(sidebarRoot_) / currentFile).string(), target);
+                findHits_.emplace_back((fs::path(findResultsRoot_.empty() ? sidebarRoot_ : findResultsRoot_) / currentFile).string(), target);
             }
         }
         ++lineNo;

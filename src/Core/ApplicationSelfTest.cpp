@@ -190,6 +190,20 @@ int Application::runSelfTest(const std::string& resultPath) {
         fs::remove_all(dir, ec);
     }
 
+    {
+        fs::path dir = fs::temp_directory_path() / "moreno_selftest_files";
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+        fs::create_directories(dir, ec);
+        std::string created;
+        check("create file", createPath(dir.string(), "a.txt", false, created) && fs::exists(dir / "a.txt"));
+        check("create refuses an existing name", !createPath(dir.string(), "a.txt", false, created));
+        check("create refuses a path separator", !createPath(dir.string(), "x\\y", false, created));
+        check("create folder", createPath(dir.string(), "sub", true, created) && fs::is_directory(dir / "sub"));
+        check("rename", renamePath((dir / "a.txt").string(), "b.txt") && fs::exists(dir / "b.txt") && !fs::exists(dir / "a.txt"));
+        fs::remove_all(dir, ec);
+    }
+
     std::ofstream out(resultPath, std::ios::binary | std::ios::trunc);
     out << report.str() << (failures ? "FAILED " : "ALL PASSED ") << failures << "\n";
     return failures ? 1 : 0;
