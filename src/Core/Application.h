@@ -283,6 +283,8 @@ public:
     void commandFoldAll() { foldByLevel(1); }
     void commandUnfoldAll() { unfoldAll(); }
     void convertLineEndings(bool crlf);
+    void useMacLineEndings();
+    std::set<std::string> macLineEndingFiles_;  // files saved with CR line endings
     void nextTab();
     void previousTab();
     void selectTabByIndex(size_t index);

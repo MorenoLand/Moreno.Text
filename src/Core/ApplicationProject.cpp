@@ -200,7 +200,17 @@ void Application::saveWithEncoding(const std::string& name) {
     pluginStatusUntil_ = SDL_GetTicks() + 3000;
 }
 
-std::string Application::encodeForSave(const std::string& path, const std::string& utf8) const {
+std::string Application::encodeForSave(const std::string& path, const std::string& utf8Text) const {
+    std::string utf8 = utf8Text;
+    if (macLineEndingFiles_.count(path)) {
+        std::string cr;
+        cr.reserve(utf8.size());
+        for (size_t i = 0; i < utf8.size(); ++i) {
+            if (utf8[i] == '\r' && i + 1 < utf8.size() && utf8[i + 1] == '\n') continue;
+            cr += utf8[i] == '\n' ? '\r' : utf8[i];
+        }
+        utf8 = std::move(cr);
+    }
     auto it = fileEncodings_.find(path);
     if (it == fileEncodings_.end() || it->second == "UTF-8") return utf8;
     const EncodingInfo* enc = findEncoding(it->second);

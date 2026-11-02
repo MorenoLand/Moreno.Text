@@ -51,7 +51,9 @@ void Titlebar::buildMenu() {
     auto& view = submenus_[4];
     nestMenuItems(view, "Layout: Single", "Layout: Columns 4", "Layout");
     nestMenuItems(view, "New Group", "Move File to Previous Group", "Groups");
-    nestMenuItems(view, "Line Endings: Windows", "Line Endings: Unix", "Line Endings");
+    for (size_t i = 0; i < view.size(); ++i)
+        if (view[i].label == "Line Endings: Unix") { TitlebarMenuItem mac; mac.label = "Line Endings: Mac OS 9"; mac.action = [] { Application::instance().useMacLineEndings(); }; view.insert(view.begin() + static_cast<std::ptrdiff_t>(i) + 1, std::move(mac)); break; }
+    nestMenuItems(view, "Line Endings: Windows", "Line Endings: Mac OS 9", "Line Endings");
     nestMenuItems(view, "Ruler: None", "Ruler: 120", "Ruler");
     nestMenuItems(view, "Spell Check", "Dictionary...", "Spell Check");
     nestMenuItems(view, "Word Wrap Column: Automatic", "Word Wrap Column: 120", "Word Wrap Column");

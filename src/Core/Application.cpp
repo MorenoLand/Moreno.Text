@@ -1261,6 +1261,11 @@ void Application::openFile(const std::string& path, bool preview) {
         windowEndByte = 0;
         fileSize = 0;
     }
+    macLineEndingFiles_.erase(absPath);
+    if (!binaryView && text.find('\r') != std::string::npos && text.find('\n') == std::string::npos) {  // Mac OS 9 files use CR alone
+        std::replace(text.begin(), text.end(), '\r', '\n');
+        macLineEndingFiles_.insert(absPath);
+    }
     TabBuffer tab; tab.text = std::move(text); tab.filePath = absPath; tab.fileName = fs::path(absPath).filename().string(); tab.binaryView = binaryView;
     tab.binaryFileSize = binaryFileSize; tab.binaryLoadedBytes = binaryLoadedBytes;
     tab.largeFileGuarded = fileSize > guardedLoadLimit;

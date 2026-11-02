@@ -56,3 +56,10 @@ void Application::cancelFindInFiles() {
     pluginStatusText_ = "Find in Files cancelled";
     pluginStatusUntil_ = SDL_GetTicks() + 2000;
 }
+
+// Mac OS 9 line endings: the buffer keeps LF, and the file is written with CR.
+void Application::useMacLineEndings() {
+    convertLineEndings(false);
+    if (!openFilePath_.empty()) macLineEndingFiles_.insert(openFilePath_);
+    dirty_ = true;
+}
