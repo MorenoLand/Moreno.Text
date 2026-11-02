@@ -59,6 +59,16 @@ int SyntaxHighlighter::classifyScope(const std::string& scope) {
     return 0;
 }
 
+std::string SyntaxHighlighter::scopeNameAt(size_t pos) const {
+    std::shared_ptr<const std::vector<ScopeSpan>> spans;
+    { std::lock_guard<std::mutex> lock(tokenMutex_); spans = scopeSpans_; }
+    if (!sublime_ || !spans || spans->empty()) return {};
+    auto it = std::upper_bound(spans->begin(), spans->end(), pos, [](size_t p, const ScopeSpan& s) { return p < s.start; });
+    if (it == spans->begin()) return {};
+    --it;
+    return pos < it->start + it->length ? it->scope : std::string();
+}
+
 void SyntaxHighlighter::setSublimeSyntax(std::shared_ptr<SublimeSyntax> syntax) {
     keywords_.clear(); builtins_.clear(); types_.clear();
     { std::lock_guard<std::mutex> lock(tokenMutex_); treeTokens_ = std::make_shared<const std::vector<SyntaxToken>>(); }
@@ -435,8 +445,11 @@ void SyntaxHighlighter::parseWorkerLoop() {
             parseRequested_ = false;
         }
         std::vector<SyntaxToken> tokens;
+        std::shared_ptr<const std::vector<ScopeSpan>> spansOut;
         if (sublime) {
-            for (const ScopeSpan& span : sublime->tokenize(text, &SyntaxLibrary::shared())) {
+            auto allSpans = std::make_shared<std::vector<ScopeSpan>>(sublime->tokenize(text, &SyntaxLibrary::shared()));
+            if (text.size() < 4u * 1024u * 1024u) spansOut = allSpans;
+            for (const ScopeSpan& span : *allSpans) {
                 int cls = classifyScope(span.scope);
                 if (cls == 0) continue;
                 if (!tokens.empty() && tokens.back().scope == cls && tokens.back().start + tokens.back().length == span.start) tokens.back().length += span.length;
@@ -447,6 +460,7 @@ void SyntaxHighlighter::parseWorkerLoop() {
         if (generation == latestGeneration_.load()) {
             std::lock_guard<std::mutex> lock(tokenMutex_);
             treeTokens_ = std::move(parsed);
+            scopeSpans_ = std::move(spansOut);
         }
     }
 }

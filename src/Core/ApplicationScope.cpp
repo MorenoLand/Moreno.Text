@@ -27,6 +27,10 @@ bool prefixMatches(const std::string& selectorTerm, const std::string& scope) {
 }  // namespace
 
 std::string Application::scopeAt(size_t pos) const {
+    if (syntax_->usesSublimeSyntax()) {  // the real scopes from the .sublime-syntax
+        std::string real = syntax_->scopeNameAt(pos > 0 ? pos - 1 : 0);
+        if (!real.empty()) return real;
+    }
     std::string lang = syntax_->languageName();
     std::string lower = lang;
     for (auto& c : lower) c = c == ' ' ? '-' : static_cast<char>(std::tolower(static_cast<unsigned char>(c)));

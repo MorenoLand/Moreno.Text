@@ -34,6 +34,8 @@ public:
     void setSublimeSyntax(std::shared_ptr<class SublimeSyntax> syntax);
     bool usesSublimeSyntax() const { return sublime_ != nullptr; }
     static int classifyScope(const std::string& scope);
+    // The full scope name at a byte offset when a .sublime-syntax is active (empty otherwise).
+    std::string scopeNameAt(size_t pos) const;
     std::vector<SyntaxToken> highlightLine(std::string_view line, size_t lineOffset) const;
     const SyntaxColor& scopeColor(int scope) const;
     int scopeStyle(int scope) const;  // 1 = bold, 2 = italic
@@ -58,6 +60,7 @@ private:
     const void* language_ = nullptr;
     std::shared_ptr<const std::vector<SyntaxToken>> treeTokens_;
     std::shared_ptr<class SublimeSyntax> sublime_;
+    std::shared_ptr<const std::vector<struct ScopeSpan>> scopeSpans_;
     std::shared_ptr<class SublimeSyntax> pendingSublime_;
     mutable std::mutex tokenMutex_;
     std::thread parseWorker_;
