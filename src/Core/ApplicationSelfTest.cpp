@@ -5,6 +5,7 @@
 #include "Settings/SettingsManager.h"
 #include "Commands/KeyBindingManager.h"
 #include <chrono>
+#include <cstring>
 #include <SDL2/SDL.h>
 #include <filesystem>
 #include <fstream>
@@ -497,6 +498,16 @@ int Application::runSelfTest(const std::string& resultPath) {
     advanceSnippet(true);
     check("overwriting the outer placeholder drops the nested one", !snippetActive_ && selections_[0].cursor == 5, std::to_string(selections_[0].cursor));
     endSnippet();
+
+    {
+        macro_.clear();
+        SDL_Event t; std::memset(&t, 0, sizeof(t)); t.type = SDL_TEXTINPUT; std::strcpy(t.text.text, "hi");
+        SDL_Event k; std::memset(&k, 0, sizeof(k)); k.type = SDL_KEYDOWN; k.key.keysym.sym = SDLK_LEFT; k.key.keysym.mod = KMOD_LSHIFT;
+        macro_ = {t, k};
+        auto exported = macroAsSublime();
+        check("macro exports as Sublime commands", exported.size() == 2 && exported[0]["command"] == "insert" && exported[0]["args"]["characters"] == "hi" && exported[1]["command"] == "move" && exported[1]["args"]["extend"] == true, exported.dump());
+        macro_.clear();
+    }
 
     std::ofstream out(resultPath, std::ios::binary | std::ios::trunc);
     out << report.str() << (failures ? "FAILED " : "ALL PASSED ") << failures << "\n";

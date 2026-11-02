@@ -3503,6 +3503,7 @@ void Application::handleEvents() {
             continue;
         }
         if (e.type == SDL_USEREVENT && e.user.code == 0x4d41) { macroPlaying_ = false; continue; }
+        if (e.type == SDL_USEREVENT && e.user.code == 0x4d43) { runQueuedMacroCommand(); continue; }
         if (e.type == SDL_KEYDOWN && (e.key.keysym.mod & KMOD_CTRL) && e.key.keysym.sym == SDLK_q) {
             if (e.key.keysym.mod & KMOD_SHIFT) playMacro(); else toggleMacroRecording();
             continue;

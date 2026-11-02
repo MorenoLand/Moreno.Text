@@ -133,6 +133,7 @@ void Application::registerCommandHandlers() {
     plain("close_tag", [this] { closeTag(); });
     plain("toggle_record_macro", [this] { toggleMacroRecording(); });
     plain("run_macro", [this] { playMacro(); });
+    withArgs("run_macro_file", [=](const json& a) { runMacroFile(text(a, "file", "")); });
     plain("save_macro", [this] { saveMacro(); });
     withArgs("show_overlay", [=](const json& a) {
         std::string overlay = text(a, "overlay", "goto"), show = text(a, "show", "");

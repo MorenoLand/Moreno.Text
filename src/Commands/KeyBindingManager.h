@@ -104,6 +104,18 @@ public:
             if (it->keys.size() == 1 && it->keys[0] == keyCombo && contextHolds(*it)) return run(*it);
         return false;
     }
+    // The command a single key is bound to right now (nullptr if none).
+    const KeyBinding* find(const std::string& keyCombo) const {
+        for (auto it = bindings_.rbegin(); it != bindings_.rend(); ++it)
+            if (it->keys.size() == 1 && it->keys[0] == keyCombo && contextHolds(*it)) return &*it;
+        return nullptr;
+    }
+    bool runCommand(const std::string& command, const nlohmann::json& args) const {
+        KeyBinding kb;
+        kb.command = command;
+        kb.args = args;
+        return run(kb);
+    }
     bool hasChord(const std::string& firstKey) const {
         for (auto& kb : bindings_) {
             if (kb.keys.size() == 2 && kb.keys[0] == firstKey && contextHolds(kb)) return true;

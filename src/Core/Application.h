@@ -1,6 +1,7 @@
 #pragma once
 #include <functional>
 #include "Core/SpellChecker.h"
+#include <deque>
 #include <map>
 #include <nlohmann/json_fwd.hpp>
 #include <SDL2/SDL.h>
@@ -298,6 +299,9 @@ public:
     void playMacro();
     void saveMacro();
     bool macroRecording() const { return macroRecording_; }
+    void saveMacroAs();
+    void runMacroFile(const std::string& file);
+    void runQueuedMacroCommand();
     void nextResult();
     void insertNewline();
     void loadKeymaps();
@@ -401,6 +405,9 @@ private:
     size_t markPos_ = std::string::npos;
     bool macroRecording_ = false, macroPlaying_ = false;
     std::vector<SDL_Event> macro_;
+    std::deque<std::pair<std::string, std::string>> macroCommandQueue_;  // command name, args as JSON text
+    nlohmann::json macroAsSublime() const;
+    void queueSublimeMacro(const nlohmann::json& commands);
     void loadMacro();
     void indexFindResults();
     bool autoIndent_ = true, matchBrackets_ = true, matchSelection_ = true;
