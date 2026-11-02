@@ -1429,6 +1429,10 @@ def install_plugin(p):
         for a, b in data.get('sel') or [[0, 0]]: view._sel.add(api.Region(int(a), int(b)))
         if created: check_view_event_listeners(view)
         if event == 'on_activated': window._active_view = view
+        if event == 'on_hover':
+            for name in ('on_hover', 'on_hover_async'):
+                _call(name, view, int(data.get('point', 0)), int(data.get('zone', 1)))
+            return
         _fire(event, view)
 
     ns['handle_view_event'] = handle_view_event

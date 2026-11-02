@@ -632,6 +632,11 @@ private:
     float columnStartX_ = 0.f, columnStartY_ = 0.f;
     size_t columnStartLine_ = 0;
     bool handleMiddleColumnSelect(const SDL_Event& e);
+    size_t textOffsetAt(float x, float y, int& zone);
+    int hoverLastX_ = -1, hoverLastY_ = -1;
+    uint32_t hoverSince_ = 0;
+    bool hoverSent_ = false;
+    void pollPluginHover();
     float autoScrollAnchorX_ = 0.f, autoScrollAnchorY_ = 0.f;
     uint32_t autoScrollLastTick_ = 0;
     float tabScrollX_ = 0.f;

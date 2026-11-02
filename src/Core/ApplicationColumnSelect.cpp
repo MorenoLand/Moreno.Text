@@ -81,3 +81,23 @@ bool Application::handleMiddleColumnSelect(const SDL_Event& e) {
     }
     return false;
 }
+
+// Maps a window pixel to a text offset for the active single pane. zone: 1 text, 2 gutter, 0 not over the editor.
+size_t Application::textOffsetAt(float x, float y, int& zone) {
+    zone = 0;
+    if (binaryView_ || largeFileGuarded_ || wordWrap_ || editorGroups_.size() > 1 || selections_.empty()) return 0;
+    int ww = 0, wh = 0;
+    SDL_GetWindowSize(window_, &ww, &wh);
+    float tbH = titlebar_->height() + tabBarH_;
+    float left = sidebarVisible_ ? sidebarWidth_ : 0.f;
+    float textX = left + gutter_->width() + 8.f;
+    if (y < tbH || y >= static_cast<float>(wh) - statusbar_->height() || x < left || x >= static_cast<float>(ww)) return 0;
+    float lineStep = fontAtlas().lineHeight();
+    float originY = tbH + fontAtlas().ascent() + 5.0f;
+    long line = static_cast<long>(std::floor((y - originY + scrollY_) / lineStep));
+    line = std::clamp<long>(line, 0, static_cast<long>(totalLines()) - 1);
+    size_t ls = lineStartForLine(static_cast<size_t>(line)), le = lineEnd(ls);
+    if (x < textX - 8.f) { zone = 2; return ls; }
+    zone = 1;
+    return offsetAtX(textBuffer, ls, le, x - textX + scrollX_, fontAtlas());
+}

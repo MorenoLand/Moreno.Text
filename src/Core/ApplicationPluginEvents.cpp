@@ -1,6 +1,7 @@
 // Sends editor events (load, activate, modify, save, close) to the plugin host so EventListener hooks run on real files.
 #include "Core/Application.h"
 #include "Plugin/PluginHost.h"
+#include "UI/Titlebar.h"
 #include <SDL2/SDL.h>
 #include <nlohmann/json.hpp>
 #include <filesystem>
@@ -74,9 +75,47 @@ void Application::firePluginEvent(const char* event, bool withContent) {
     firePluginEvent(event, pluginEventKey(activeTab_), withContent);
 }
 
+// Sends on_hover after the mouse rests over the text for a moment (once per rest).
+void Application::pollPluginHover() {
+    uint32_t now = SDL_GetTicks();
+    if (mouseX_ != hoverLastX_ || mouseY_ != hoverLastY_) { hoverLastX_ = mouseX_; hoverLastY_ = mouseY_; hoverSince_ = now; hoverSent_ = false; return; }
+    if (hoverSent_ || now - hoverSince_ < 500 || goto_.active || commandPalette_.active || titlebar_->isMenuOpen()) return;
+    hoverSent_ = true;
+    int zone = 0;
+    size_t offset = textOffsetAt(static_cast<float>(mouseX_), static_cast<float>(mouseY_), zone);
+    if (zone == 0) return;
+    std::string key = pluginEventKey(activeTab_);
+    if (key.empty()) return;
+    try {
+        nlohmann::json j;
+        j["type"] = "view_event";
+        j["event"] = "on_hover";
+        j["key"] = key;
+        if (key.rfind("untitled:", 0) != 0) j["path"] = key;
+        j["name"] = openFile_.empty() ? "untitled" : openFile_;
+        j["dirty"] = dirty_;
+        j["point"] = byteToCp(textBuffer, offset);
+        j["zone"] = zone;
+        j["sel"] = nlohmann::json::array();
+        for (auto& s : selections_) j["sel"].push_back({byteToCp(textBuffer, s.anchor), byteToCp(textBuffer, s.cursor)});
+        fs::path bridge = fs::path(paths_.localDir) / "PluginBridge";
+        fs::create_directories(bridge);
+        std::string stem = std::to_string(SDL_GetTicks()) + "-" + std::to_string(pluginEventSeq_++) + "-view_event";
+        fs::path tmp = bridge / (stem + ".tmp");
+        {
+            std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+            if (!f) return;
+            f << j.dump();
+        }
+        std::error_code ec;
+        fs::rename(tmp, bridge / (stem + ".request.json"), ec);
+    } catch (...) {}
+}
+
 void Application::pollPluginEvents() {
     if (!pluginEventsChecked_ || !pluginEventsEnabled_) return;  // set once the background plugin start has scanned the packages
     if (binaryView_ || largeFileGuarded_) { pluginActiveKey_.clear(); return; }
+    pollPluginHover();
     std::string key = pluginEventKey(activeTab_);
     if (key.empty()) { pluginActiveKey_.clear(); return; }
     if (key != pluginActiveKey_) {
