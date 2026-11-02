@@ -391,6 +391,11 @@ public:
     void customizeColorScheme();
     void applyColorScheme(const std::string& path);
     void setLayoutColumns(size_t columns);
+    void setLayoutGrid(size_t cols, size_t rows);
+    struct PaneRect { float l = 0, t = 0, r = 0, b = 0; };
+    void layoutGrid(size_t groupCount, size_t& cols, size_t& rows) const;
+    PaneRect paneRectFor(size_t group, size_t groupCount, float areaLeft, float areaRight, float areaTop, float areaBottom) const;
+    size_t layoutCols_ = 0, layoutRows_ = 1;  // 0 columns means one row of side-by-side groups
     void focusGroup(size_t index);
     void focusNeighboringGroup(bool next);
     void moveFileToGroup(size_t index);

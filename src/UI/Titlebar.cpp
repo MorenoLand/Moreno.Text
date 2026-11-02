@@ -49,7 +49,18 @@ void Titlebar::buildMenu() {
     nestMenuItems(edit, "Undo Selection", "Close Tag", "More");
     nestMenuItems(edit, "Shuffle Lines", "Selections: Shuffle", "Permute Selections");
     auto& view = submenus_[4];
-    nestMenuItems(view, "Layout: Single", "Layout: Columns 4", "Layout");
+    for (size_t i = 0; i < view.size(); ++i)
+        if (view[i].label == "Layout: Columns 4") {
+            TitlebarMenuItem r2, r3, g4;
+            r2.label = "Layout: Rows 2"; r2.action = [] { Application::instance().setLayoutGrid(1, 2); };
+            r3.label = "Layout: Rows 3"; r3.action = [] { Application::instance().setLayoutGrid(1, 3); };
+            g4.label = "Layout: Grid 4"; g4.action = [] { Application::instance().setLayoutGrid(2, 2); };
+            view.insert(view.begin() + static_cast<std::ptrdiff_t>(i) + 1, std::move(g4));
+            view.insert(view.begin() + static_cast<std::ptrdiff_t>(i) + 1, std::move(r3));
+            view.insert(view.begin() + static_cast<std::ptrdiff_t>(i) + 1, std::move(r2));
+            break;
+        }
+    nestMenuItems(view, "Layout: Single", "Layout: Grid 4", "Layout");
     nestMenuItems(view, "New Group", "Move File to Previous Group", "Groups");
     for (size_t i = 0; i < view.size(); ++i)
         if (view[i].label == "Line Endings: Unix") { TitlebarMenuItem mac; mac.label = "Line Endings: Mac OS 9"; mac.action = [] { Application::instance().useMacLineEndings(); }; view.insert(view.begin() + static_cast<std::ptrdiff_t>(i) + 1, std::move(mac)); break; }

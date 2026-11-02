@@ -242,6 +242,7 @@ void Application::setLayoutColumns(size_t columns) {
     while (tabs_.size() < columns) newBuffer();
     saveCurrentTab();
     collapseEditorGroupsTo(base);
+    loadTab(base);  // new buffers made activeTab_ point elsewhere; the groups below are added relative to the base tab
     for (size_t i = 0; i < tabs_.size() && editorGroups_.size() < columns; ++i) {
         if (i == base) continue;
         addEditorGroupForTab(i);

@@ -1097,7 +1097,16 @@ void Application::ensureCursorVisible() {
     float sidebarOffset = sidebarVisible_ ? sidebarWidth_ : 0.f;
     size_t groupCount = std::max<size_t>(1, editorGroups_.size());
     float groupAreaW = std::max(1.f, (float)ww - sidebarOffset);
-    float groupW = groupCount > 1 ? groupAreaW / (float)groupCount : groupAreaW;
+    size_t gridCols = 1, gridRows = 1;
+    layoutGrid(groupCount, gridCols, gridRows);
+    float groupW = gridCols > 1 ? groupAreaW / (float)gridCols : groupAreaW;
+    {   // rows: this pane's top and bottom, not the window's
+        PaneRect pane = paneRectFor(std::min(activeGroup_, groupCount - 1), groupCount, sidebarOffset, (float)ww, tbH, (float)wh - sbH);
+        float realBottom = (float)wh - sbH;
+        tbH = pane.t; sbH = (float)wh - pane.b;
+        textOriginY = tbH + fontAtlas().ascent() + 5.0f;
+        if (pane.b < realBottom - 0.5f) findPanelH = 0.f;
+    }
     bool drawMinimap = minimapVisible_ && groupW > 260.f;
     float mmW = drawMinimap ? std::min(minimap_->width(), std::max(0.f, groupW * 0.18f)) : 0.f;
     float editorLeft = sidebarOffset + gutter_->width() + 8.f;
@@ -4350,6 +4359,15 @@ void Application::handleEvents() {
             float tbH = titlebar_->height() + tabBarH_;
             float sbH = statusbar_->height();
             float findPanelH = find_.active ? (find_.replaceActive ? 62.f : 30.f) : 0.f;
+            {   // rows: measure against the active pane, not the whole window
+                size_t gc = std::max<size_t>(1, editorGroups_.size());
+                if (gc > 1) {
+                    PaneRect pane = paneRectFor(std::min(activeGroup_, gc - 1), gc, sidebarVisible_ ? sidebarWidth_ : 0.f, (float)ww, tbH, (float)wh - sbH);
+                    float realBottom = (float)wh - sbH;
+                    tbH = pane.t; sbH = (float)wh - pane.b;
+                    if (pane.b < realBottom - 0.5f) findPanelH = 0.f;
+                }
+            }
             float lineStep = fontAtlas().lineHeight();
             float viewH = (float)wh - tbH - sbH - findPanelH;
             float contentH = totalLines() * lineStep;
@@ -4538,9 +4556,15 @@ void Application::handleEvents() {
             size_t groupCount = std::max<size_t>(1, editorGroups_.size());
             float groupAreaLeft = sidebarOffset;
             float groupAreaW = std::max(1.f, fww - groupAreaLeft);
-            float groupW = groupCount > 1 ? groupAreaW / (float)groupCount : groupAreaW;
+            size_t gridCols = 1, gridRows = 1;
+            layoutGrid(groupCount, gridCols, gridRows);
+            float groupW = gridCols > 1 ? groupAreaW / (float)gridCols : groupAreaW;
             if (groupCount > 1 && my >= tbH && my < fwh - sbH - findPanelH && mx >= groupAreaLeft) {
-                size_t clickedGroup = std::min(groupCount - 1, (size_t)((mx - groupAreaLeft) / groupW));
+                size_t clickedGroup = activeGroup_;
+                for (size_t g = 0; g < groupCount; ++g) {
+                    PaneRect pr = paneRectFor(g, groupCount, groupAreaLeft, fww, tbH, fwh - sbH);
+                    if (mx >= pr.l && mx < pr.r && my >= pr.t && my < pr.b) { clickedGroup = g; break; }
+                }
                 if (clickedGroup != activeGroup_ && clickedGroup < editorGroups_.size()) {
                     saveCurrentTab();
                     activeGroup_ = clickedGroup;
@@ -4548,8 +4572,15 @@ void Application::handleEvents() {
                     continue;
                 }
             }
-            float activePaneLeft = groupAreaLeft + groupW * (float)activeGroup_;
-            float activePaneRight = activeGroup_ + 1 == groupCount ? fww : activePaneLeft + groupW;
+            PaneRect activeRect = paneRectFor(std::min(activeGroup_, groupCount - 1), groupCount, groupAreaLeft, fww, tbH, fwh - sbH);
+            float activePaneLeft = activeRect.l;
+            float activePaneRight = activeRect.r;
+            {   // from here on the active pane's top and bottom stand in for the window's
+                float realBottom = fwh - sbH;
+                tbH = activeRect.t; sbH = fwh - activeRect.b;
+                textOriginY = tbH + fontAtlas().ascent() + 5.0f;
+                if (activeRect.b < realBottom - 0.5f) findPanelH = 0.f;
+            }
             bool drawMinimap = minimapVisible_ && groupW > 260.f;
             float mmW = drawMinimap ? std::min(minimap_->width(), std::max(0.f, groupW * 0.18f)) : 0.f;
             float mmX = activePaneRight - mmW;
@@ -5391,15 +5422,22 @@ void Application::render() {
     if (activeGroup_ >= groupCount) activeGroup_ = groupCount - 1;
     float groupAreaLeft = sidebarOffset;
     float groupAreaW = std::max(1.f, fww - groupAreaLeft);
-    float groupW = groupCount > 1 ? groupAreaW / (float)groupCount : groupAreaW;
-    float activePaneLeft = groupAreaLeft + groupW * (float)activeGroup_;
-    float activePaneRight = activeGroup_ + 1 == groupCount ? fww : activePaneLeft + groupW;
+    size_t gridCols = 1, gridRows = 1;
+    layoutGrid(groupCount, gridCols, gridRows);
+    float groupW = gridCols > 1 ? groupAreaW / (float)gridCols : groupAreaW;
     bool drawMinimap = minimapVisible_ && groupW > 260.f;
     float mmW = drawMinimap ? std::min(minimap_->width(), std::max(0.f, groupW * 0.18f)) : 0.f;
     float scrollbarW = drawMinimap ? 0.f : 10.f;
     float tbH = titlebar_->height() + tabBarH_;
     float sbH = statusbar_->height();
     float findPanelH = find_.active ? (find_.replaceActive ? 62.f : 30.f) : 0.f;
+    // The active pane's top and bottom stand in for the window's while it is drawn; restored before the status bar.
+    const float windowTbH = tbH, windowSbH = sbH, windowFindPanelH = findPanelH;
+    PaneRect activeRect = paneRectFor(activeGroup_, groupCount, groupAreaLeft, fww, windowTbH, fwh - windowSbH);
+    float activePaneLeft = activeRect.l;
+    float activePaneRight = activeRect.r;
+    tbH = activeRect.t; sbH = fwh - activeRect.b;
+    if (activeRect.b < fwh - windowSbH - 0.5f) findPanelH = 0.f;
     float lineStep = fontAtlas().lineHeight();
     float textOriginY = tbH + fontAtlas().ascent() + 5.0f;
     size_t lineCount = totalLines();
@@ -5422,7 +5460,7 @@ void Application::render() {
     }
 
     drawTabBar(uiFontAtlas(), fww, titlebar_->height());
-    drawSidebar(uiFontAtlas(), fwh, tbH, sbH);
+    drawSidebar(uiFontAtlas(), fwh, windowTbH, windowSbH);
 
     float gutterW = gutter_->width();
     static std::unordered_map<std::string, std::unique_ptr<SyntaxHighlighter>> previewSyntaxCache;
@@ -5453,8 +5491,13 @@ void Application::render() {
         if (gi == activeGroup_) continue;
         size_t tabIndex = editorGroups_[gi].tab;
         if (tabIndex >= tabs_.size()) continue;
-        float paneLeft = groupAreaLeft + groupW * (float)gi;
-        float paneRight = gi + 1 == groupCount ? fww : paneLeft + groupW;
+        PaneRect paneRect = paneRectFor(gi, groupCount, groupAreaLeft, fww, windowTbH, fwh - windowSbH);
+        float paneLeft = paneRect.l;
+        float paneRight = paneRect.r;
+        float tbH = paneRect.t;                 // this pane's own top and bottom
+        float sbH = fwh - paneRect.b;
+        float findPanelH = paneRect.b < fwh - windowSbH - 0.5f ? 0.f : windowFindPanelH;
+        if (paneRect.b < fwh - windowSbH - 0.5f) addSolid(paneLeft, paneRect.b - 1.f, paneRight, paneRect.b, 0.35f, 0.37f, 0.43f, 1.f);  // divider under panes in upper rows
         const auto& tab = tabs_[tabIndex];
         auto& paneSyntax = previewSyntaxForTab(tab);
         auto bg = paneSyntax.backgroundColor();
@@ -5855,6 +5898,8 @@ void Application::render() {
         float mmMaxScroll = (mmContentH + mmScrollPad > mmViewH) ? mmContentH + mmScrollPad - mmViewH : 0.f;
         minimap_->draw(fontAtlas(), *syntax_, textBuffer, mmX, textOriginY, fwh - findPanelH, tbH, gutterW, lineStep, scrollY_, mmMaxScroll, mmOver);
     }
+    if (activeRect.b < fwh - windowSbH - 0.5f) addSolid(activePaneLeft, activeRect.b - 1.f, activePaneRight, activeRect.b, 0.35f, 0.37f, 0.43f, 1.f);
+    tbH = windowTbH; sbH = windowSbH; findPanelH = windowFindPanelH;
     // status bar
     std::string branch;
     if (consoleOpen_) {
