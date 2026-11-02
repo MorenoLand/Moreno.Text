@@ -361,6 +361,7 @@ public:
     void openRecentProjectPicker();
     void openReopenEncodingPicker();
     void openSaveEncodingPicker();
+    static std::vector<std::string> encodingNames();
     void reopenWithEncoding(const std::string& name);
     void saveWithEncoding(const std::string& name);
     void applyEncodingChoice(const std::string& data);

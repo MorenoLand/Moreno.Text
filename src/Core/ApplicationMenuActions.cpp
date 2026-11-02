@@ -37,3 +37,9 @@ void Application::setIndentUsingSpaces(bool spaces) {
 }
 
 void Application::detectIndentation() { guessIndent(); }
+
+std::vector<std::string> Application::encodingNames() {
+    std::vector<std::string> names;
+    extern std::vector<std::string> allEncodingNames();
+    return allEncodingNames();
+}

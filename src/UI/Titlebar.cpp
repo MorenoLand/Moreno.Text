@@ -55,7 +55,6 @@ void Titlebar::buildMenu() {
     nestMenuItems(view, "Ruler: None", "Ruler: 120", "Ruler");
     nestMenuItems(view, "Spell Check", "Dictionary...", "Spell Check");
     nestMenuItems(view, "Word Wrap Column: Automatic", "Word Wrap Column: 120", "Word Wrap Column");
-    nestMenuItems(submenus_[0], "Reopen with Encoding...", "Revert File", "More");
     auto leaf = [](const std::string& label, std::function<void()> fn) { TitlebarMenuItem it; it.label = label; it.action = std::move(fn); return it; };
     auto group = [](const std::string& label, std::vector<TitlebarMenuItem> kids) { TitlebarMenuItem it; it.label = label; it.shortcut = ">"; it.children = std::move(kids); return it; };
     auto replaceItem = [](std::vector<TitlebarMenuItem>& list, const std::string& label, TitlebarMenuItem item) {
@@ -76,6 +75,13 @@ void Titlebar::buildMenu() {
         if (item.label != "Code Folding") continue;
         for (int level = 4; level <= 9; ++level) item.children.push_back(leaf("Fold Level " + std::to_string(level), [level] { Application::instance().foldByLevel(level); }));
     }
+    std::vector<TitlebarMenuItem> reopenKids, saveKids;
+    for (const std::string& name : Application::encodingNames()) {
+        reopenKids.push_back(leaf(name, [name] { Application::instance().reopenWithEncoding(name); }));
+        saveKids.push_back(leaf(name, [name] { Application::instance().saveWithEncoding(name); }));
+    }
+    replaceItem(submenus_[0], "Reopen with Encoding...", group("Reopen with Encoding", std::move(reopenKids)));
+    replaceItem(submenus_[0], "Save with Encoding...", group("Save with Encoding", std::move(saveKids)));
     std::vector<TitlebarMenuItem> focusKids, moveKids;
     for (size_t g = 0; g < 4; ++g) {
         focusKids.push_back(leaf("Group " + std::to_string(g + 1), [g] { Application::instance().focusGroup(g); }));

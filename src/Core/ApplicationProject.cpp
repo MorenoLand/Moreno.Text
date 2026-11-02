@@ -225,6 +225,12 @@ void pushRecentProject(const std::string& path) {
 
 }  // namespace
 
+std::vector<std::string> allEncodingNames() {
+    std::vector<std::string> names;
+    for (auto& e : kEncodings) names.emplace_back(e.name);
+    return names;
+}
+
 void Application::openProjectFile(const std::string& path) {
     json project = readJsonFile(path);
     if (!project.is_object()) { pluginStatusText_ = "Couldn't read the project file"; pluginStatusUntil_ = SDL_GetTicks() + 3000; return; }
