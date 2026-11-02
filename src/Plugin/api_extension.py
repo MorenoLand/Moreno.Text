@@ -3,7 +3,7 @@
 # Everything here works on the host-side mirror of a view/window; operations that need the
 # editor's renderer or index (popups, phantoms, folds, symbols) keep their state and return
 # correctly typed results.
-import enum, html, importlib, itertools, json, os, re, sys, threading, time
+import enum, html, importlib, itertools, json, os, re, sys, threading, time, uuid
 
 
 def _consts(ns, cls, names, prefix=''):
@@ -1305,7 +1305,27 @@ def install_plugin(p):
     # Editor tabs are mirrored as views so EventListener / ViewEventListener hooks see real files.
     class _MirrorView(api.View):
         _mirror = True
-        def _emit(self, focus=False): pass
+        _synced = None
+        _key = ''
+
+        # Plugin edits are sent back to the editor as one replaced range (code point offsets).
+        def _emit(self, focus=False):
+            old = self._synced
+            new = self.text
+            if old is None or old == new: return
+            n = min(len(old), len(new)); p = 0
+            while p < n and old[p] == new[p]: p += 1
+            s = 0
+            while s < n - p and old[-1 - s] == new[-1 - s]: s += 1
+            bridge = os.environ.get('MORENO_BRIDGE_DIR', '')
+            if not bridge: return
+            self._synced = new
+            sel = [[r.a, r.b] for r in self._sel.regions]
+            rid = str(uuid.uuid4())
+            tmp = os.path.join(bridge, rid + '.tmp')
+            with open(tmp, 'w', encoding='utf-8') as fp:
+                json.dump({'type': 'view_edit', 'key': self._key, 'start': p, 'old': old[p:len(old) - s], 'new': new[p:len(new) - s], 'sel': sel}, fp)
+            os.replace(tmp, os.path.join(bridge, rid + '.request.json'))
 
     _mirror_views = {}
 
@@ -1338,7 +1358,9 @@ def install_plugin(p):
         path = str(data.get('path', ''))
         if path: view._settings.set('file_name', path)
         view.title = str(data.get('name', 'untitled'))
-        if 'content' in data: view.text = str(data['content'])
+        view._key = key
+        if 'content' in data: view.text = str(data['content']); view._synced = view.text
+        elif view._synced is None: view._synced = view.text
         view._dirty = bool(data.get('dirty', False))
         view._sel.clear()
         for a, b in data.get('sel') or [[0, 0]]: view._sel.add(api.Region(int(a), int(b)))

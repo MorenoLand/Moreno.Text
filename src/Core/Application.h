@@ -719,6 +719,7 @@ private:
     void firePluginEvent(const char* event, const std::string& key, bool withContent);
     void firePluginEvent(const char* event, bool withContent = false);
     void pollPluginEvents();
+    int applyPluginViewEdit(const nlohmann::json& j);
     bool pluginEventsChecked_ = false, pluginEventsEnabled_ = false;
     std::string pluginActiveKey_;
     std::set<std::string> pluginSeenKeys_;

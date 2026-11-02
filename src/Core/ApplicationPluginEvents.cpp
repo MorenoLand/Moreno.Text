@@ -15,6 +15,24 @@ namespace fs = std::filesystem;
 
 namespace {
 constexpr size_t kMaxEventText = 4u * 1024u * 1024u;
+
+// Plugins count code points (like Python strings); the editor counts UTF-8 bytes.
+size_t byteToCp(const std::string& s, size_t byteOff) {
+    byteOff = std::min(byteOff, s.size());
+    size_t n = 0;
+    for (size_t i = 0; i < byteOff; ++i) if ((static_cast<unsigned char>(s[i]) & 0xC0) != 0x80) ++n;
+    return n;
+}
+
+size_t cpToByte(const std::string& s, size_t cp) {
+    size_t i = 0;
+    while (i < s.size() && cp > 0) {
+        ++i;
+        while (i < s.size() && (static_cast<unsigned char>(s[i]) & 0xC0) == 0x80) ++i;
+        --cp;
+    }
+    return i;
+}
 }
 
 std::string Application::pluginEventKey(size_t tabIndex) const {
@@ -36,7 +54,7 @@ void Application::firePluginEvent(const char* event, const std::string& key, boo
         j["name"] = openFile_.empty() ? "untitled" : openFile_;
         j["dirty"] = dirty_;
         j["sel"] = nlohmann::json::array();
-        for (auto& s : selections_) j["sel"].push_back({std::min(s.anchor, textBuffer.size()), std::min(s.cursor, textBuffer.size())});
+        for (auto& s : selections_) j["sel"].push_back({byteToCp(textBuffer, s.anchor), byteToCp(textBuffer, s.cursor)});
         if (withContent && textBuffer.size() <= kMaxEventText) j["content"] = textBuffer;
         fs::path bridge = fs::path(paths_.localDir) / "PluginBridge";
         fs::create_directories(bridge);
@@ -93,4 +111,40 @@ void Application::pollPluginEvents() {
         pluginSelections_ = selections_;
         firePluginEvent("on_selection_modified", key, false);
     }
+}
+
+// Applies a view_edit request from the plugin host: one replaced range, kept only if the old text still matches.
+int Application::applyPluginViewEdit(const nlohmann::json& j) {
+    std::string key = j.value("key", "");
+    std::string oldText = j.value("old", ""), newText = j.value("new", "");
+    size_t startCp = j.value("start", static_cast<size_t>(0));
+    size_t tabIndex = tabs_.size();
+    for (size_t i = 0; i < tabs_.size(); ++i)
+        if (pluginEventKey(i) == key) { tabIndex = i; break; }
+    if (tabIndex == tabs_.size()) return 1;
+    bool active = tabIndex == activeTab_;
+    if (active && (binaryView_ || largeFileGuarded_)) return 2;
+    std::string& text = active ? textBuffer : tabs_[tabIndex].text;
+    size_t start = cpToByte(text, startCp);
+    if (text.compare(start, oldText.size(), oldText) != 0 || start + oldText.size() > text.size()) return 3;
+    if (active) {
+        pushUndo();
+        text.replace(start, oldText.size(), newText);
+        if (j.contains("sel") && j["sel"].is_array() && !j["sel"].empty()) {
+            selections_.clear();
+            for (auto& r : j["sel"]) {
+                if (!r.is_array() || r.size() != 2) continue;
+                selections_.emplace_back(cpToByte(text, r[0].get<size_t>()), cpToByte(text, r[1].get<size_t>()));
+            }
+        }
+        if (selections_.empty()) selections_.emplace_back(0);
+        for (auto& s : selections_) { s.anchor = std::min(s.anchor, text.size()); s.cursor = std::min(s.cursor, text.size()); }
+        dirty_ = true;
+        invalidateLineIndex();
+        syntaxDirty_ = true; indentsDirty_ = true;
+    } else {
+        text.replace(start, oldText.size(), newText);
+        tabs_[tabIndex].dirty = true;
+    }
+    return 0;
 }

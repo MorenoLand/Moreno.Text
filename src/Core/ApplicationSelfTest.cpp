@@ -413,6 +413,17 @@ int Application::runSelfTest(const std::string& resultPath) {
         check("unknown context keys fail", !evaluateKeyContext("selector", "equal", "source", false));
     }
 
+    {
+        fresh("h\303\251llo w\303\266rld", 0);
+        nlohmann::json edit = {{"key", pluginEventKey(activeTab_)}, {"start", 6}, {"old", "w\303\266rld"}, {"new", "world"}, {"sel", nlohmann::json::array({nlohmann::json::array({11, 11})})}};
+        applyPluginViewEdit(edit);
+        expect("plugin edit applies by code point offset", "h\303\251llo world");
+        check("plugin edit moves the cursor", selections_[0].cursor == 12, std::to_string(selections_[0].cursor));
+        edit["old"] = "nope";
+        applyPluginViewEdit(edit);
+        expect("stale plugin edit is dropped", "h\303\251llo world");
+    }
+
     std::ofstream out(resultPath, std::ios::binary | std::ios::trunc);
     out << report.str() << (failures ? "FAILED " : "ALL PASSED ") << failures << "\n";
     return failures ? 1 : 0;

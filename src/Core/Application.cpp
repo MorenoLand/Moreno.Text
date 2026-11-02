@@ -4895,6 +4895,11 @@ void Application::pollPluginBridge() {
             handledPluginRequests_.insert(chosen.string());
             return;
         }
+        if (type == "view_edit") {
+            handledPluginRequests_.insert(chosen.string());
+            applyPluginViewEdit(j);
+            return;
+        }
         if (type == "view_update") {
             int id = j.value("id", 0);
             if (closedPluginViewIds_.count(id)) {
