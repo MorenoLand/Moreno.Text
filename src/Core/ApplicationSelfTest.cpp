@@ -460,6 +460,28 @@ int Application::runSelfTest(const std::string& resultPath) {
         acActive_ = false;
     }
 
+    {
+        fs::path base = fs::temp_directory_path() / "moreno_selftest_multi";
+        std::error_code ec;
+        fs::remove_all(base, ec);
+        fs::create_directories(base / "one", ec);
+        fs::create_directories(base / "two", ec);
+        std::ofstream(base / "one" / "a.txt") << "a";
+        std::ofstream(base / "two" / "b.txt") << "b";
+        loadFolder((base / "one").string());
+        addFolderToProject((base / "two").string());
+        check("a second folder joins the project", projectRoots().size() == 2 && sidebarRoots().size() == 2);
+        projectFilesAt_ = 0;
+        refreshProjectFileList();
+        bool hasA = false, hasB = false;
+        for (auto& f : projectFiles_) { if (f == "a.txt") hasA = true; if (f.find("b.txt") != std::string::npos) hasB = true; }
+        check("Goto Anything lists files from every folder", hasA && hasB);
+        removeFolderFromProject((base / "one").string());
+        check("removing the first folder promotes the next", projectRoots().size() == 1 && fs::path(sidebarRoot_).filename() == "two");
+        closeFolder();
+        fs::remove_all(base, ec);
+    }
+
     std::ofstream out(resultPath, std::ios::binary | std::ios::trunc);
     out << report.str() << (failures ? "FAILED " : "ALL PASSED ") << failures << "\n";
     return failures ? 1 : 0;

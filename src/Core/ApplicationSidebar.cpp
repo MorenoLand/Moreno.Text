@@ -52,6 +52,7 @@ void Application::refreshSidebarNode(SidebarNode& node) {
 void Application::refreshSidebarTree() {
     if (sidebarRoot_.empty()) return;
     refreshSidebarNode(sidebarTree_);
+    for (auto& extra : extraFolders_) refreshSidebarNode(extra);
 }
 
 bool Application::createPath(const std::string& dir, const std::string& name, bool folder, std::string& created) {

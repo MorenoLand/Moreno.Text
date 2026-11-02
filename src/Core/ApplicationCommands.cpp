@@ -382,7 +382,10 @@ void Application::runFindInFiles() {
     size_t files = 0, hitFiles = 0, hits = 0;
     const size_t maxHits = 5000;
     std::error_code ec;
-    for (fs::recursive_directory_iterator it(searchRoot, fs::directory_options::skip_permission_denied, ec), end; it != end && hits < maxHits; it.increment(ec)) {
+    std::vector<std::string> searchRoots = {searchRoot};
+    if (searchRoot == sidebarRoot_) for (auto& extra : extraFolders_) searchRoots.push_back(extra.path);
+    for (const std::string& rootDir : searchRoots)
+    for (fs::recursive_directory_iterator it(rootDir, fs::directory_options::skip_permission_denied, ec), end; it != end && hits < maxHits; it.increment(ec)) {
         if (ec) break;
         if (it->is_directory(ec)) {
             std::string name = it->path().filename().string();
@@ -408,7 +411,7 @@ void Application::runFindInFiles() {
             }
         }
         if (fileHits) {
-            body << fs::relative(it->path(), searchRoot, ec).generic_string() << ":\n" << fileBlock << "\n";
+            body << (rootDir == searchRoot ? fs::relative(it->path(), searchRoot, ec).generic_string() : it->path().generic_string()) << ":\n" << fileBlock << "\n";
             ++hitFiles; hits += fileHits;
         }
     }

@@ -1424,6 +1424,7 @@ void Application::openFolderDialog() {
 void Application::loadFolder(const std::string& path) {
     sidebarRoot_ = path;
     sidebarTree_ = {};
+    extraFolders_.clear();
     sidebarTree_.name = fs::path(path).filename().string();
     if (sidebarTree_.name.empty()) sidebarTree_.name = path;
     sidebarTree_.path = path;
@@ -1530,17 +1531,21 @@ void Application::drawSidebar(FontAtlas& font, float windowH, float titlebarH, f
     float rowH = 22.f, y = titlebarH + 26.f - sidebarScrollY_;
     sidebarContentH_ = 0.f;
     sidebarContentW_ = 0.f;
-    if (!sidebarTree_.name.empty()) sidebarContentH_ += rowH;
+    auto roots = sidebarRoots();
+    auto isRoot = [&](const SidebarNode& n) { return std::find(roots.begin(), roots.end(), &n) != roots.end(); };
+    for (auto* rt : roots) if (!rt->name.empty()) sidebarContentH_ += rowH;
     std::function<void(SidebarNode&)> countNode = [&](SidebarNode& node) {
-        if (&node != &sidebarTree_) {
+        if (!isRoot(node)) {
             sidebarContentH_ += rowH;
             float labelX = 8.f + node.depth * 14.f + 46.f;
             sidebarContentW_ = std::max(sidebarContentW_, labelX + font.measureText(node.name) * sidebarScale + 8.f);
         }
         if (node.folder && node.expanded) for (auto& child : node.children) countNode(child);
     };
-    countNode(sidebarTree_);
-    if (!sidebarTree_.name.empty()) sidebarContentW_ = std::max(sidebarContentW_, 44.f + font.measureText(sidebarTree_.name) * sidebarScale + 8.f);
+    for (auto* rt : roots) {
+        countNode(*rt);
+        if (!rt->name.empty()) sidebarContentW_ = std::max(sidebarContentW_, 44.f + font.measureText(rt->name) * sidebarScale + 8.f);
+    }
     bool showHScroll = sidebarContentW_ > sidebarWidth_ - 8.f;
     float hScrollH = showHScroll ? 14.f : 0.f;
     float maxScrollX = std::max(0.f, sidebarContentW_ - (sidebarWidth_ - 8.f));
@@ -1551,16 +1556,18 @@ void Application::drawSidebar(FontAtlas& font, float windowH, float titlebarH, f
     addSolidRect(v, 0.f, titlebarH, sidebarWidth_ - 1.f, titlebarH + 20.f, 0.095f, 0.105f, 0.125f, 1.f);
     addSolidRect(v, 0.f, titlebarH + 19.f, sidebarWidth_ - 1.f, titlebarH + 20.f, 0.17f, 0.19f, 0.22f, 1.f);
     textDraws.push_back({"FOLDERS", 10.f, titlebarH + 3.f, sidebarScale, 0.78f, 0.80f, 0.84f});
-    if (!sidebarTree_.name.empty() && y + rowH >= titlebarH + 20.f && y <= windowH - statusbarH) {
-        addSolidRect(v, 0.f, y - 3.f, sidebarWidth_ - 1.f, y + rowH - 3.f, 0.14f, 0.155f, 0.18f, 1.f);
-        addSolidRect(v, 0.f, y + rowH - 4.f, sidebarWidth_ - 1.f, y + rowH - 3.f, 0.20f, 0.22f, 0.26f, 1.f);
-        addDisclosure(8.f - sidebarScrollX_, y, sidebarTree_.expanded);
-        addFolderIcon(20.f - sidebarScrollX_, y);
-        textDraws.push_back({sidebarTree_.name, 38.f - sidebarScrollX_, y + 4.f, sidebarScale, 0.88f, 0.88f, 0.91f});
-    }
-    y += rowH;
+    auto drawRootHeader = [&](SidebarNode& rt) {
+        if (!rt.name.empty() && y + rowH >= titlebarH + 20.f && y <= windowH - statusbarH) {
+            addSolidRect(v, 0.f, y - 3.f, sidebarWidth_ - 1.f, y + rowH - 3.f, 0.14f, 0.155f, 0.18f, 1.f);
+            addSolidRect(v, 0.f, y + rowH - 4.f, sidebarWidth_ - 1.f, y + rowH - 3.f, 0.20f, 0.22f, 0.26f, 1.f);
+            addDisclosure(8.f - sidebarScrollX_, y, rt.expanded);
+            addFolderIcon(20.f - sidebarScrollX_, y);
+            textDraws.push_back({rt.name, 38.f - sidebarScrollX_, y + 4.f, sidebarScale, 0.88f, 0.88f, 0.91f});
+        }
+        y += rowH;
+    };
     std::function<void(SidebarNode&)> drawNode = [&](SidebarNode& node) {
-        if (&node != &sidebarTree_) {
+        if (!isRoot(node)) {
             float rowY = y; y += rowH;
             bool visible = rowY + rowH >= titlebarH + 20.f && rowY <= windowH - statusbarH;
             if (visible) {
@@ -1611,7 +1618,7 @@ void Application::drawSidebar(FontAtlas& font, float windowH, float titlebarH, f
         }
         if (node.folder && node.expanded) for (auto& child : node.children) drawNode(child);
     };
-    drawNode(sidebarTree_);
+    for (auto* rt : roots) { drawRootHeader(*rt); drawNode(*rt); }
     if (sidebarContentH_ > viewH) {
         float thumbH = std::max(20.f, viewH * (viewH / sidebarContentH_));
         float thumbY = titlebarH + (sidebarScrollY_ / maxScroll) * (viewH - thumbH);
@@ -1755,7 +1762,7 @@ bool Application::handleSidebarEvent(const SDL_Event& e, float windowH, float ti
                     std::string dir = sidebarContextNode_.folder ? path : fs::path(path).parent_path().string();
                     ShellExecuteA(nullptr, "open", dir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
                 } else if (action == 10) {
-                    sidebarRoot_.clear(); sidebarTree_ = {}; sidebarVisible_ = false; saveSession();
+                    removeFolderFromProject(path);
                 }
 #endif
             }
@@ -1776,19 +1783,24 @@ bool Application::handleSidebarEvent(const SDL_Event& e, float windowH, float ti
     auto hitSidebarNode = [&](float my, SidebarNode*& outNode, bool& root) {
     float rowH = 22.f, y = titlebarH + 26.f - sidebarScrollY_;
         outNode = nullptr; root = false;
-        if (!sidebarTree_.name.empty()) {
-            if (my >= y - 3.f && my < y + rowH - 3.f) { outNode = &sidebarTree_; root = true; return true; }
-            y += rowH;
-        }
+        auto roots = sidebarRoots();
+        auto isRoot = [&](const SidebarNode& n) { return std::find(roots.begin(), roots.end(), &n) != roots.end(); };
         std::function<bool(SidebarNode&)> hitNode = [&](SidebarNode& node) -> bool {
-            if (&node != &sidebarTree_) {
+            if (!isRoot(node)) {
                 float rowY = y; y += rowH;
                 if (my >= rowY - 3.f && my < rowY + rowH - 3.f) { outNode = &node; return true; }
             }
             if (node.folder && node.expanded) for (auto& child : node.children) if (hitNode(child)) return true;
             return false;
         };
-        return hitNode(sidebarTree_);
+        for (auto* rt : roots) {
+            if (!rt->name.empty()) {
+                if (my >= y - 3.f && my < y + rowH - 3.f) { outNode = rt; root = true; return true; }
+                y += rowH;
+            }
+            if (hitNode(*rt)) return true;
+        }
+        return false;
     };
     if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == 3 && e.button.x <= sidebarWidth_ && e.button.y >= titlebarH && e.button.y <= windowH - statusbarH) {
         SidebarNode* node = nullptr; bool root = false;
@@ -1797,12 +1809,10 @@ bool Application::handleSidebarEvent(const SDL_Event& e, float windowH, float ti
     }
     if (e.type != SDL_MOUSEBUTTONDOWN || e.button.button != 1 || e.button.x > sidebarWidth_ || e.button.y < titlebarH || e.button.y > windowH - statusbarH) return false;
     float rowH = 22.f, y = titlebarH + 26.f - sidebarScrollY_, mx = (float)e.button.x, my = (float)e.button.y;
-    if (!sidebarTree_.name.empty()) {
-        if (my >= y - 3.f && my < y + rowH - 3.f) { sidebarTree_.expanded = !sidebarTree_.expanded; return true; }
-        y += rowH;
-    }
+    auto roots = sidebarRoots();
+    auto isRoot = [&](const SidebarNode& n) { return std::find(roots.begin(), roots.end(), &n) != roots.end(); };
     std::function<bool(SidebarNode&)> hitNode = [&](SidebarNode& node) -> bool {
-        if (&node != &sidebarTree_) {
+        if (!isRoot(node)) {
             float rowY = y; y += rowH;
             if (my >= rowY - 3.f && my < rowY + rowH - 3.f) {
                 if (node.folder) {
@@ -1815,7 +1825,14 @@ bool Application::handleSidebarEvent(const SDL_Event& e, float windowH, float ti
         if (node.folder && node.expanded) for (auto& child : node.children) if (hitNode(child)) return true;
         return false;
     };
-    return hitNode(sidebarTree_);
+    for (auto* rt : roots) {
+        if (!rt->name.empty()) {
+            if (my >= y - 3.f && my < y + rowH - 3.f) { rt->expanded = !rt->expanded; return true; }
+            y += rowH;
+        }
+        if (hitNode(*rt)) return true;
+    }
+    return false;
 }
 
 // ── undo/redo ──

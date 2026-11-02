@@ -185,6 +185,7 @@ public:
     bool detachTabToNewWindow(size_t index);
     void openFileDialog();
     void openFolderDialog();
+    void addFolderDialog();
     void toggleSidebar() { sidebarVisible_ = !sidebarVisible_; }
     void saveAll();
     void revertFile();
@@ -621,6 +622,11 @@ private:
     float sidebarContentW_ = 0.f;
     std::string sidebarRoot_;
     SidebarNode sidebarTree_;
+    std::vector<SidebarNode> extraFolders_;  // folders after the first in a multi-folder project
+    std::vector<SidebarNode*> sidebarRoots();
+    std::vector<std::string> projectRoots();
+    void addFolderToProject(const std::string& path);
+    void removeFolderFromProject(const std::string& path);
     bool sidebarContextOpen_ = false;
     int sidebarContextHover_ = -1;
     float sidebarContextX_ = 0.f, sidebarContextY_ = 0.f;

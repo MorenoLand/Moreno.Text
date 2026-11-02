@@ -229,7 +229,7 @@ void Application::closeAllFiles() {
 }
 
 void Application::closeFolder() {
-    sidebarRoot_.clear(); sidebarTree_ = {}; sidebarVisible_ = false;
+    sidebarRoot_.clear(); sidebarTree_ = {}; extraFolders_.clear(); sidebarVisible_ = false;
     saveSession();
 }
 

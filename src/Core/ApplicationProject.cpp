@@ -230,12 +230,16 @@ void Application::openProjectFile(const std::string& path) {
     if (!project.is_object()) { pluginStatusText_ = "Couldn't read the project file"; pluginStatusUntil_ = SDL_GetTicks() + 3000; return; }
     fs::path base = fs::path(path).parent_path();
     if (project.contains("folders") && project["folders"].is_array() && !project["folders"].empty()) {
-        auto& first = project["folders"][0];
-        std::string folder = first.is_object() ? first.value("path", std::string(".")) : (first.is_string() ? first.get<std::string>() : std::string("."));
-        fs::path resolved = fs::path(folder).is_absolute() ? fs::path(folder) : base / folder;
-        std::error_code ec;
-        resolved = fs::weakly_canonical(resolved, ec);
-        if (fs::is_directory(resolved)) { loadFolder(resolved.string()); sidebarVisible_ = true; }
+        bool loadedFirst = false;
+        for (auto& entry : project["folders"]) {
+            std::string folder = entry.is_object() ? entry.value("path", std::string(".")) : (entry.is_string() ? entry.get<std::string>() : std::string("."));
+            fs::path resolved = fs::path(folder).is_absolute() ? fs::path(folder) : base / folder;
+            std::error_code ec;
+            resolved = fs::weakly_canonical(resolved, ec);
+            if (!fs::is_directory(resolved)) continue;
+            if (!loadedFirst) { loadFolder(resolved.string()); sidebarVisible_ = true; loadedFirst = true; }
+            else addFolderToProject(resolved.string());
+        }
     }
     if (project.contains("settings") && project["settings"].is_object()) {
         auto& st = project["settings"];
@@ -283,9 +287,16 @@ void Application::saveProjectAs() {
     json project = fs::exists(file) ? readJsonFile(file) : json::object();
     if (!project.is_object()) project = json::object();
     std::error_code ec;
-    std::string folderPath = sidebarRoot_.empty() ? std::string(".") : fs::relative(sidebarRoot_, file.parent_path(), ec).generic_string();
-    if (ec || folderPath.empty()) folderPath = sidebarRoot_;
-    project["folders"] = json::array({json{{"path", folderPath}}});
+    json folderList = json::array();
+    std::vector<std::string> rootList = projectRoots();
+    if (rootList.empty()) rootList.push_back(".");
+    for (const std::string& root : rootList) {
+        std::string folderPath = root == "." ? root : fs::relative(root, file.parent_path(), ec).generic_string();
+        if (ec || folderPath.empty()) folderPath = root;
+        folderList.push_back(json{{"path", folderPath}});
+        ec.clear();
+    }
+    project["folders"] = folderList;
     std::ofstream out(file, std::ios::binary | std::ios::trunc);
     out << project.dump(4);
     projectFile_ = file.string();
