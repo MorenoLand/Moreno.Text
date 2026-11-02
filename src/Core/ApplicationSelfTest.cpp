@@ -411,7 +411,10 @@ int Application::runSelfTest(const std::string& resultPath) {
         check("context following_text regex", evaluateKeyContext("following_text", "regex_match", "bar", false));
         check("context selection_empty", evaluateKeyContext("selection_empty", "equal", true, true));
         check("context not_equal", !evaluateKeyContext("num_selections", "not_equal", 1, false));
-        check("unknown context keys fail", !evaluateKeyContext("selector", "equal", "source", false));
+        check("selector context matches the language", evaluateKeyContext("selector", "equal", "text.plain", false) || evaluateKeyContext("selector", "equal", "source", false));
+        check("selectors: prefix and descendants", scopeSelectorMatches("source.c string", "source.c string.quoted") && scopeSelectorMatches("comment", "source.c comment.line") && !scopeSelectorMatches("comment", "source.c commentary"));
+        check("selectors: exclusions and alternatives", !scopeSelectorMatches("source.c - comment", "source.c comment.line") && scopeSelectorMatches("text.html, source.c - comment", "source.c keyword.control"));
+        check("unknown context keys fail", !evaluateKeyContext("plugin.thing", "equal", "x", false));
     }
 
     {

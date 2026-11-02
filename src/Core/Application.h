@@ -305,6 +305,8 @@ public:
     void nextResult();
     void insertNewline();
     void loadKeymaps();
+    std::string scopeAt(size_t pos) const;
+    static bool scopeSelectorMatches(const std::string& selector, const std::string& scope);
     bool evaluateKeyContext(const std::string& key, const std::string& op, const nlohmann::json& operand, bool matchAll);
     void registerCommandHandlers();
     void applyLiveSettings();

@@ -24,6 +24,7 @@ bool Application::evaluateKeyContext(const std::string& key, const std::string& 
     else if (key == "text") perSelection([&](const SelRange& s) { size_t a = std::min(std::min(s.anchor, s.cursor), size), b = std::min(std::max(s.anchor, s.cursor), size); return textBuffer.substr(a, b - a); });
     else if (key == "preceding_text") perSelection([&](const SelRange& s) { size_t c = std::min(s.cursor, size); return textBuffer.substr(lineStart(c), c - lineStart(c)); });
     else if (key == "following_text") perSelection([&](const SelRange& s) { size_t c = std::min(s.cursor, size); return textBuffer.substr(c, lineEnd(c) - c); });
+    else if (key == "selector" || key == "eol_selector") perSelection([&](const SelRange& s) { return scopeAt(key == "selector" ? s.cursor : lineEnd(s.cursor)); });
     else if (key == "overlay_visible") values.push_back(goto_.active);
     else if (key == "panel_visible" || key == "panel_has_focus") values.push_back(find_.active || find_.replaceActive);
     else if (key == "has_next_field" || key == "has_prev_field") values.push_back(snippetActive_);
@@ -32,7 +33,12 @@ bool Application::evaluateKeyContext(const std::string& key, const std::string& 
     else if (key.rfind("setting.", 0) == 0) values.push_back(SettingsManager::instance().get<json>(key.substr(8), json(nullptr)));
     else return false;  // scopes (selector) and plugin keys are not available here
     if (values.empty()) return false;
+    bool isSelector = key == "selector" || key == "eol_selector";
     auto test = [&](const json& v) {
+        if (isSelector && (op == "equal" || op == "not_equal") && operand.is_string() && v.is_string()) {
+            bool m = scopeSelectorMatches(operand.get<std::string>(), v.get<std::string>());
+            return op == "equal" ? m : !m;
+        }
         bool positive = op == "equal" || op == "regex_match" || op == "regex_contain";
         bool result = false;
         if (op == "equal" || op == "not_equal") result = v == operand;
