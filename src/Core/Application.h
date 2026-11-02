@@ -2,6 +2,7 @@
 #include <functional>
 #include "Core/SpellChecker.h"
 #include <deque>
+#include <future>
 #include <map>
 #include <nlohmann/json_fwd.hpp>
 #include <SDL2/SDL.h>
@@ -737,6 +738,10 @@ private:
     void firePluginEvent(const char* event, const std::string& key, bool withContent);
     void firePluginEvent(const char* event, bool withContent = false);
     void pollPluginEvents();
+    struct PluginStartResult { bool anyScripts = false; std::vector<PluginPaletteCommand> commands; };
+    std::future<PluginStartResult> pluginStartFuture_;
+    void startPluginsAsync();
+    void pollPluginStart();
     bool pluginQueryContext(const std::string& key, const std::string& op, const nlohmann::json& operand, bool matchAll);
     std::map<std::string, std::pair<uint32_t, bool>> pluginContextCache_;
     uint32_t pluginContextDownUntil_ = 0;

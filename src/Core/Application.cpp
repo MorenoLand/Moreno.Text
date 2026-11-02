@@ -30,6 +30,7 @@
 #include <regex>
 #include <chrono>
 #include <cctype>
+#include <future>
 #include <thread>
 #include <cmath>
 #include <memory>
@@ -368,6 +369,15 @@ static std::string inferSyntaxKey(const std::string& filePath, const std::string
     return ext;
 }
 
+// Set MORENO_STARTUP_LOG to a file path to get timestamps for each startup stage.
+static void startupTick(const char* label) {
+    static const auto t0 = std::chrono::steady_clock::now();
+    const char* path = std::getenv("MORENO_STARTUP_LOG");
+    if (!path) return;
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+    std::ofstream(path, std::ios::app) << ms << " ms  " << label << '\n';
+}
+
 Application& Application::instance() { static Application app; return app; }
 
 int Application::run(int argc, char** argv) {
@@ -384,12 +394,15 @@ int Application::run(int argc, char** argv) {
         }
     }
     while (running_) {
+        static int frames = 0;
+        if (frames < 3) startupTick("frame start");
         handleEvents(); update(); render();
+        if (frames == 0 && window_) SDL_ShowWindow(window_);  // shown once the first frame is drawn, so it never appears blank
+        if (frames < 3) { startupTick("frame done"); ++frames; }
         if (pluginHostStartPending_) {
             pluginHostStartPending_ = false;
-            PluginHostPaths pluginPaths{paths_.exeDir, paths_.dataDir, paths_.packagesDir, paths_.installedPackagesDir, paths_.cacheDir, paths_.libDir};
-            PluginHost::start(pluginPaths);
-            refreshPluginCommands();
+            startupTick("plugin host start (background)");
+            startPluginsAsync();
         }
     }
     shutdown();
@@ -436,6 +449,7 @@ static void resizeRendererForWindow(SDL_Window* window) {
 }
 
 bool Application::init(int argc, char** argv) {
+    startupTick("init begin");
     initPaths();
     static ConsoleBuf coutBuf(consoleBuffer_), cerrBuf(consoleBuffer_);
     static std::streambuf* oldCout = std::cout.rdbuf(&coutBuf);
@@ -448,8 +462,10 @@ bool Application::init(int argc, char** argv) {
     try {
         fs::path bridge = fs::path(paths_.localDir) / "PluginBridge";
         fs::create_directories(bridge);
+        // Only stale files: another running window (for example one a tab was just dragged out of) may have requests in flight.
+        auto cutoff = fs::file_time_type::clock::now() - std::chrono::seconds(5);
         for (auto& entry : fs::directory_iterator(bridge)) {
-            if (entry.is_regular_file()) fs::remove(entry.path());
+            if (entry.is_regular_file() && entry.last_write_time() < cutoff) fs::remove(entry.path());
         }
     } catch (...) {}
     consoleBuffer_ += "DPI mode: per-monitor v2\n";
@@ -576,13 +592,10 @@ bool Application::init(int argc, char** argv) {
         registerCommandHandlers();
         loadKeymaps();
     }
+    startupTick("settings, keymaps loaded");
     bool detachedLaunch = argc > 2 && std::string(argv[1]) == "--detached-tab";
-    if (detachedLaunch) pluginHostStartPending_ = true;
-    else {
-        refreshPluginCommands();
-        PluginHostPaths pluginPaths{paths_.exeDir, paths_.dataDir, paths_.packagesDir, paths_.installedPackagesDir, paths_.cacheDir, paths_.libDir};
-        PluginHost::start(pluginPaths);
-    }
+    (void)detachedLaunch;
+    pluginHostStartPending_ = true;  // started in the background after the first frame
     selections_.emplace_back(0);
     TabBuffer initTab; initTab.fileName = "untitled"; initTab.selections.emplace_back(0);
     tabs_.push_back(std::move(initTab));
@@ -592,7 +605,9 @@ bool Application::init(int argc, char** argv) {
 #ifdef SDL_HINT_VIDEO_HIGHDPI_DISABLED
     SDL_SetHint(SDL_HINT_VIDEO_HIGHDPI_DISABLED, "0");
 #endif
+    startupTick("before SDL_Init");
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS) != 0) { std::cerr << "SDL_Init: " << SDL_GetError() << std::endl; return false; }
+    startupTick("SDL_Init done");
     sidebarResizeCursor_ = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_SIZEWE);
     textCursor_ = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_IBEAM);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
@@ -630,8 +645,9 @@ bool Application::init(int argc, char** argv) {
         }
     }
     window_ = SDL_CreateWindow("Moreno Text", initialX, initialY,
-        initialW, initialH, SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_BORDERLESS);
+        initialW, initialH, SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_BORDERLESS);
     if (!window_) { fprintf(stderr, "SDL_CreateWindow: %s\n", SDL_GetError()); return false; }
+    startupTick("SDL_CreateWindow done");
     SDL_SetWindowResizable(window_, SDL_TRUE);
     SDL_SetWindowMinimumSize(window_, 400, 300);
     glContext_ = SDL_GL_CreateContext(window_);
@@ -640,16 +656,20 @@ bool Application::init(int argc, char** argv) {
     SDL_GL_SetSwapInterval(1);
     glewExperimental = GL_TRUE;
     if (GLenum err = glewInit(); err != GLEW_OK) { fprintf(stderr, "glewInit: %s\n", glewGetErrorString(err)); return false; }
+    startupTick("GL context + glew done");
     int w = 0, h = 0, drawableW = 0, drawableH = 0;
     getWindowSizes(window_, w, h, drawableW, drawableH);
     if (!GLRenderer::init(w, h, drawableW, drawableH)) return false;
+    startupTick("GLRenderer::init done");
     std::string fontPath = findMonospaceFont();
     if (fontPath.empty() || !fontAtlas().init(fontPath, fontSize_, getWindowBackingScale(window_), fontBold_) || !uiFontAtlas().init(fontPath, 14, getWindowBackingScale(window_), fontBold_)) { fprintf(stderr, "Font init failed\n"); return false; }
+    startupTick("font atlases done");
     titlebar_ = new Titlebar(); titlebar_->init(w);
     gutter_ = new Gutter();
     minimap_ = new Minimap();
     statusbar_ = new StatusBar();
     syntax_ = new SyntaxHighlighter();
+    startupTick("UI objects done");
     fs::create_directories(paths_.localDir);
     loadRecentFiles();
     // window icon
@@ -673,6 +693,7 @@ bool Application::init(int argc, char** argv) {
 #endif
     }
     SDL_StartTextInput();
+    startupTick("window created");
     if (detachedLaunch && fs::exists(argv[2])) {
         tabs_.clear();
         selections_.clear();
@@ -695,6 +716,7 @@ bool Application::init(int argc, char** argv) {
         openFile(argv[1]);
     }
     else if (!loadSession()) newBuffer();
+    startupTick("init done");
     return true;
 }
 
@@ -2973,6 +2995,30 @@ void Application::updateCommandPalette() {
     if (commandPalette_.scroll < 0) commandPalette_.scroll = 0;
 }
 
+// Starts the plugin host and scans for plugin commands off the main thread so the window can paint first.
+void Application::startPluginsAsync() {
+    PluginHostPaths pluginPaths{paths_.exeDir, paths_.dataDir, paths_.packagesDir, paths_.installedPackagesDir, paths_.cacheDir, paths_.libDir};
+    std::string packagesDir = paths_.packagesDir;
+    pluginStartFuture_ = std::async(std::launch::async, [pluginPaths, packagesDir] {
+        PluginStartResult result;
+        auto scripts = PluginHost::discoverScripts(packagesDir);
+        result.anyScripts = !scripts.empty();
+        for (auto& command : PluginHost::discoverCommands(scripts, packagesDir)) result.commands.push_back({command.caption, command.name});
+        PluginHost::start(pluginPaths);
+        return result;
+    });
+}
+
+void Application::pollPluginStart() {
+    if (!pluginStartFuture_.valid()) return;
+    if (pluginStartFuture_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
+    PluginStartResult result = pluginStartFuture_.get();
+    pluginCommands_ = std::move(result.commands);
+    pluginEventsChecked_ = true;
+    pluginEventsEnabled_ = result.anyScripts;
+    startupTick("plugin host started");
+}
+
 void Application::refreshPluginCommands() {
     pluginCommands_.clear();
     auto commands = PluginHost::discoverCommands(PluginHost::discoverScripts(paths_.packagesDir), paths_.packagesDir);
@@ -5205,6 +5251,7 @@ void Application::notifyPluginViewClosed(int id) {
 
 void Application::update() {
     pollBuild();
+    pollPluginStart();
     pollExternalChanges();
     trackSelectionHistory();
     pollConsoleLog();
@@ -6334,6 +6381,7 @@ void Application::render() {
 }
 
 void Application::shutdown() {
+    if (pluginStartFuture_.valid()) pluginStartFuture_.wait();
     saveSession();
     saveRecentFiles();
     if (window_) {

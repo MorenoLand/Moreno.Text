@@ -75,11 +75,7 @@ void Application::firePluginEvent(const char* event, bool withContent) {
 }
 
 void Application::pollPluginEvents() {
-    if (!pluginEventsChecked_) {
-        pluginEventsChecked_ = true;
-        pluginEventsEnabled_ = !PluginHost::discoverScripts(paths_.packagesDir).empty();
-    }
-    if (!pluginEventsEnabled_) return;
+    if (!pluginEventsChecked_ || !pluginEventsEnabled_) return;  // set once the background plugin start has scanned the packages
     if (binaryView_ || largeFileGuarded_) { pluginActiveKey_.clear(); return; }
     std::string key = pluginEventKey(activeTab_);
     if (key.empty()) { pluginActiveKey_.clear(); return; }
