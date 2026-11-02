@@ -699,19 +699,59 @@ def _install_functions(m):
 
     def channel(): return 'stable'
     def executable_hash(): return ('moreno', 'moreno', 'moreno')
+    def _bridge_request(kind, payload, wait, timeout=120):
+        bridge = os.environ.get('MORENO_BRIDGE_DIR', '')
+        if not bridge: return None
+        rid = str(uuid.uuid4())
+        response = os.path.join(bridge, rid + '.response.json')
+        body = dict(payload); body['type'] = kind; body['response'] = response
+        tmp = os.path.join(bridge, rid + '.tmp')
+        with open(tmp, 'w', encoding='utf-8') as fp: json.dump(body, fp)
+        os.replace(tmp, os.path.join(bridge, rid + '.request.json'))
+        if not wait: return None
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if os.path.exists(response):
+                try:
+                    with open(response, 'r', encoding='utf-8') as fp: data = json.load(fp)
+                except Exception:
+                    time.sleep(0.02); continue
+                try: os.remove(response)
+                except OSError: pass
+                return data
+            time.sleep(0.03)
+        return None
+    def _dialog(msg, buttons):
+        data = _bridge_request('dialog', {'message': str(msg), 'buttons': buttons}, True)
+        return -1 if data is None else int(data.get('button', -1))
+    def message_dialog(msg): _dialog(msg, ['OK'])
+    def error_message(msg): _dialog(msg, ['OK'])
+    def ok_cancel_dialog(msg, ok_title='', title=''): return _dialog(msg, [ok_title or 'OK', 'Cancel']) == 0
     def yes_no_cancel_dialog(msg, yes_title='', no_title='', title=''):
-        print('[yes-no-cancel]', msg); return m.DialogResult.CANCEL
-    def open_dialog(callback, file_types=[], directory=None, multi_select=False, allow_folders=False): callback(None)
-    def save_dialog(callback, file_types=[], directory=None, name=None, extension=None): callback(None)
+        i = _dialog(msg, [yes_title or 'Yes', no_title or 'No', 'Cancel'])
+        return m.DialogResult.YES if i == 0 else m.DialogResult.NO if i == 1 else m.DialogResult.CANCEL
+    def _file_dialog(callback, mode, directory, name, multi):
+        data = _bridge_request('file_dialog', {'mode': mode, 'directory': directory or '', 'name': name or '', 'multi': bool(multi)}, True, 600)
+        paths = (data or {}).get('paths') or []
+        callback((paths if multi else paths[0]) if paths else None)
+    def open_dialog(callback, file_types=[], directory=None, multi_select=False, allow_folders=False):
+        _file_dialog(callback, 'folder' if allow_folders and not file_types else 'open', directory, None, multi_select)
+    def save_dialog(callback, file_types=[], directory=None, name=None, extension=None): _file_dialog(callback, 'save', directory, name, False)
+    def select_folder_dialog(callback, directory=None, multi_select=False): _file_dialog(callback, 'folder', directory, None, False)
     def choose_font_dialog(callback, default=None): callback(None)
     def format_command(cmd, args=None):
         return cmd if not args else cmd + ' ' + json.dumps(args)
     def command_url(cmd, args=None):
         from urllib.parse import quote
         return 'subl:' + cmd + ('' if not args else ' ' + quote(json.dumps(args)))
-    def get_clipboard(size_limit=16777216): return clip['text'][:size_limit]
+    def get_clipboard(size_limit=16777216):
+        data = _bridge_request('clipboard_get', {}, True, 2)
+        if data is not None and 'text' in data: clip['text'] = str(data['text'])
+        return clip['text'][:size_limit]
     def get_clipboard_async(callback, size_limit=16777216): callback(get_clipboard(size_limit))
-    def set_clipboard(text): clip['text'] = str(text)
+    def set_clipboard(text):
+        clip['text'] = str(text)
+        _bridge_request('clipboard_set', {'text': clip['text']}, False)
 
     def _flag(name):
         def setter(flag=None):
@@ -793,9 +833,8 @@ def _install_functions(m):
                find_syntax_by_name, find_syntax_by_scope, find_syntax_for_file, make_sheet, windows):
         setattr(m, fn.__name__, fn)
 
-    real_ok_cancel = m.ok_cancel_dialog
-    m.ok_cancel_dialog = lambda msg, ok_title='OK', title='': real_ok_cancel(msg, ok_title)
-    m.select_folder_dialog = lambda callback, directory=None, multi_select=False: callback(None)
+    for fn in (message_dialog, error_message, ok_cancel_dialog, select_folder_dialog):
+        setattr(m, fn.__name__, fn)
 
 
 def _install_window(m):
@@ -1390,6 +1429,38 @@ def install_plugin(p):
         _fire(event, view)
 
     ns['handle_view_event'] = handle_view_event
+
+    def handle_completion_query(data):
+        key = str(data.get('key', ''))
+        view = _mirror_views.get(key)
+        if view is None or not view.is_valid(): return
+        if 'content' in data: view.text = str(data['content']); view._synced = view.text
+        point = int(data.get('point', 0))
+        view._sel.clear(); view._sel.add(api.Region(point, point))
+        prefix = str(data.get('prefix', ''))
+        result = on_query_completions(view.id, prefix, [point])
+        items = []
+        inhibit = False
+        if result:
+            entries, flags = result
+            inhibit = bool(int(flags) & 8)
+            for it in entries:
+                if isinstance(it, str): trigger, contents = it, it
+                elif isinstance(it, (tuple, list)): trigger = str(it[0]); contents = str(it[1]) if len(it) > 1 else trigger
+                else:
+                    trigger = str(getattr(it, 'trigger', '')); contents = getattr(it, 'completion', '') or trigger
+                    contents = str(contents)
+                label, _, hint = trigger.partition('	')
+                items.append([label, contents, hint])
+        bridge = os.environ.get('MORENO_BRIDGE_DIR', '')
+        if not bridge: return
+        rid = str(uuid.uuid4())
+        tmp = os.path.join(bridge, rid + '.tmp')
+        with open(tmp, 'w', encoding='utf-8') as fp:
+            json.dump({'type': 'completions', 'key': key, 'prefix': prefix, 'items': items[:100], 'inhibit': inhibit}, fp)
+        os.replace(tmp, os.path.join(bridge, rid + '.request.json'))
+
+    ns['handle_completion_query'] = handle_completion_query
     ns['pending_on_activated_async_lock'] = threading.Lock()
     class ZipResourceReader:
         def __init__(self, loader, fullname): self.loader = loader; self.fullname = fullname

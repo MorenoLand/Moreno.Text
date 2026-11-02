@@ -435,6 +435,31 @@ int Application::runSelfTest(const std::string& resultPath) {
         check("plugin regions can be erased", pluginRegions_[key].count("lint") == 0);
     }
 
+    {
+        fs::path resp = fs::temp_directory_path() / "moreno_selftest_clip.response.json";
+        std::error_code ec;
+        fs::remove(resp, ec);
+        handlePluginRpc("clipboard_set", {{"text", "from-plugin"}});
+        handlePluginRpc("clipboard_get", {{"response", resp.string()}});
+        std::ifstream f(resp, std::ios::binary);
+        std::string body((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        f.close();
+        check("plugin clipboard round trip", body.find("from-plugin") != std::string::npos, body);
+        fs::remove(resp, ec);
+    }
+
+    {
+        fresh("fo", 2);
+        acPrefix_ = "fo"; acItems_ = {"foobar"}; acInsert_ = {""}; acActive_ = true;
+        applyPluginCompletions({{"key", pluginEventKey(activeTab_)}, {"prefix", "fo"}, {"inhibit", false},
+                                {"items", nlohmann::json::array({nlohmann::json::array({"format", "format($1)", ""}), nlohmann::json::array({"zzz", "zzz", ""})})}});
+        check("plugin completions merge ahead of words", acItems_.size() == 2 && acItems_[0] == "format" && acItems_[1] == "foobar");
+        acSelected_ = 0;
+        acceptAutocomplete();
+        expect("plugin snippet completion replaces the prefix", "format()");
+        acActive_ = false;
+    }
+
     std::ofstream out(resultPath, std::ios::binary | std::ios::trunc);
     out << report.str() << (failures ? "FAILED " : "ALL PASSED ") << failures << "\n";
     return failures ? 1 : 0;

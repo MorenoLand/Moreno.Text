@@ -647,6 +647,9 @@ private:
     std::string acPrefix_;
     size_t acPrefixStart_ = 0;
     void updateAutocomplete();
+    std::vector<std::string> acInsert_;  // parallel to acItems_: text to insert for plugin completions, empty for plain words
+    void requestPluginCompletions();
+    void applyPluginCompletions(const nlohmann::json& j);
     void acceptAutocomplete();
     std::set<std::pair<int,int>> foldedRegions_;
     void toggleFold(size_t line);
@@ -719,6 +722,7 @@ private:
     void firePluginEvent(const char* event, const std::string& key, bool withContent);
     void firePluginEvent(const char* event, bool withContent = false);
     void pollPluginEvents();
+    void handlePluginRpc(const std::string& type, const nlohmann::json& j);
     struct PluginRegionSet { std::vector<std::pair<size_t, size_t>> ranges; int flags = 0; float r = 0.f, g = 0.f, b = 0.f; };
     std::map<std::string, std::map<std::string, PluginRegionSet>> pluginRegions_;  // tab key -> region name -> regions
     void applyPluginRegions(const nlohmann::json& j);

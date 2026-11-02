@@ -3096,7 +3096,7 @@ void Application::updateGotoResults() {
 }
 
 void Application::updateAutocomplete() {
-    acItems_.clear(); acActive_ = false;
+    acItems_.clear(); acInsert_.clear(); acActive_ = false;
     if (acPrefix_.size() < 2) return;
     std::unordered_set<std::string> seen;
     seen.insert(acPrefix_);
@@ -3122,10 +3122,29 @@ void Application::updateAutocomplete() {
     }
     if (!acItems_.empty()) { acActive_ = true; acSelected_ = 0; }
     if (acItems_.size() > 10) acItems_.resize(10);
+    acInsert_.assign(acItems_.size(), std::string());
+    requestPluginCompletions();
 }
 
 void Application::acceptAutocomplete() {
     if (!acActive_ || acSelected_ >= (int)acItems_.size()) return;
+    if (acSelected_ < (int)acInsert_.size() && !acInsert_[acSelected_].empty()) {
+        std::string insert = acInsert_[acSelected_];
+        size_t cursor = std::min(selections_[0].cursor, textBuffer.size());
+        size_t from = cursor >= acPrefix_.size() ? cursor - acPrefix_.size() : 0;
+        pushUndo();
+        textBuffer.erase(from, cursor - from);
+        selections_.clear(); selections_.emplace_back(from);
+        invalidateLineIndex();
+        acActive_ = false;
+        if (insert.find('$') != std::string::npos) insertSnippet(insert);
+        else {
+            textBuffer.insert(from, insert);
+            selections_.clear(); selections_.emplace_back(from + insert.size());
+            invalidateLineIndex(); dirty_ = true; syntaxDirty_ = true; indentsDirty_ = true;
+        }
+        return;
+    }
     std::string completion = acItems_[acSelected_].substr(acPrefix_.size());
     size_t pos = selections_[0].cursor;
     textBuffer.insert(pos, completion);
@@ -4894,6 +4913,16 @@ void Application::pollPluginBridge() {
             pluginStatusText_ = j.value("text", "");
             pluginStatusUntil_ = SDL_GetTicks() + 5000;
             handledPluginRequests_.insert(chosen.string());
+            return;
+        }
+        if (type == "dialog" || type == "file_dialog" || type == "clipboard_get" || type == "clipboard_set") {
+            handledPluginRequests_.insert(chosen.string());
+            handlePluginRpc(type, j);
+            return;
+        }
+        if (type == "completions") {
+            handledPluginRequests_.insert(chosen.string());
+            applyPluginCompletions(j);
             return;
         }
         if (type == "view_regions") {

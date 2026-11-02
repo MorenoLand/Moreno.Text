@@ -186,3 +186,63 @@ void Application::applyPluginRegions(const nlohmann::json& j) {
     }
     pluginRegions_[key][name] = std::move(set);
 }
+
+// Asks the plugin host for on_query_completions results for the word being typed.
+void Application::requestPluginCompletions() {
+    if (!pluginEventsEnabled_ || selections_.empty() || binaryView_ || largeFileGuarded_) return;
+    std::string key = pluginEventKey(activeTab_);
+    if (key.empty()) return;
+    try {
+        nlohmann::json j;
+        j["type"] = "completion_query";
+        j["key"] = key;
+        j["prefix"] = acPrefix_;
+        j["point"] = byteToCp(textBuffer, selections_[0].cursor);
+        if (textBuffer.size() <= 256u * 1024u) j["content"] = textBuffer;
+        fs::path bridge = fs::path(paths_.localDir) / "PluginBridge";
+        fs::create_directories(bridge);
+        std::string stem = std::to_string(SDL_GetTicks()) + "-" + std::to_string(pluginEventSeq_++) + "-completion_query";
+        fs::path tmp = bridge / (stem + ".tmp");
+        {
+            std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+            if (!f) return;
+            f << j.dump();
+        }
+        std::error_code ec;
+        fs::rename(tmp, bridge / (stem + ".request.json"), ec);
+    } catch (...) {}
+}
+
+// Merges completions from the plugin host into the autocomplete popup if they still match what is being typed.
+void Application::applyPluginCompletions(const nlohmann::json& j) {
+    if (j.value("key", "") != pluginEventKey(activeTab_) || j.value("prefix", "") != acPrefix_ || acPrefix_.size() < 2) return;
+    auto lower = [](std::string s) { for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); return s; };
+    std::string needle = lower(acPrefix_);
+    std::vector<std::string> items, inserts;
+    if (j.contains("items") && j["items"].is_array()) {
+        for (auto& it : j["items"]) {
+            if (!it.is_array() || it.size() < 2) continue;
+            std::string label = it[0].get<std::string>(), contents = it[1].get<std::string>();
+            std::string hay = lower(label);
+            size_t at = 0;
+            for (char c : needle) { at = hay.find(c, at); if (at == std::string::npos) break; ++at; }
+            if (at == std::string::npos) continue;
+            items.push_back(label);
+            inserts.push_back(contents);
+        }
+    }
+    if (items.empty()) return;
+    if (!j.value("inhibit", false)) {
+        for (size_t i = 0; i < acItems_.size(); ++i) {
+            if (std::find(items.begin(), items.end(), acItems_[i]) != items.end()) continue;
+            items.push_back(acItems_[i]);
+            inserts.push_back(i < acInsert_.size() ? acInsert_[i] : std::string());
+        }
+    }
+    if (items.size() > 10) { items.resize(10); inserts.resize(10); }
+    bool wasActive = acActive_;
+    acItems_ = std::move(items);
+    acInsert_ = std::move(inserts);
+    acActive_ = true;
+    if (!wasActive || acSelected_ >= static_cast<int>(acItems_.size())) acSelected_ = 0;
+}
