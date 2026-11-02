@@ -2003,6 +2003,12 @@ void Application::shapePopupWindowForMenu() {
         CombineRgn(region, region, submenu, RGN_OR);
         DeleteObject(submenu);
     }
+    SDL_Rect flyoutRect{};
+    if (titlebar_->getMenuFlyoutRect(uiFontAtlas(), flyoutRect)) {
+        HRGN flyout = CreateRectRgn(flyoutRect.x + 3, flyoutRect.y + 3, flyoutRect.x + flyoutRect.w + 3, flyoutRect.y + flyoutRect.h + 3);
+        CombineRgn(region, region, flyout, RGN_OR);
+        DeleteObject(flyout);
+    }
     SetWindowRgn(reinterpret_cast<HWND>(wmInfo.info.win.window), region, TRUE);
 #endif
 }

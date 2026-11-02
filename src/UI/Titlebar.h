@@ -39,6 +39,8 @@ public:
     void deferMenuDraw() { menuDeferred_ = true; }
     void getMenuBounds(float& x, float& y, float& w, float& h) const;
     void getMenuPanelRects(class FontAtlas& font, int windowW, int windowH, SDL_Rect& mainRect, SDL_Rect& submenuRect, bool& hasSubmenu) const;
+    // Where the nested flyout for the hovered item goes, relative to the popup window origin like getMenuPanelRects.
+    bool getMenuFlyoutRect(class FontAtlas& font, SDL_Rect& rect) const;
     void getMenuPopupBounds(class FontAtlas& font, float& x, float& y, float& w, float& h) const;
     void drawMenuPopup(FontAtlas& font, float ox, float oy);
 private:

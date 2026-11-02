@@ -133,7 +133,7 @@ int Titlebar::maxFlyoutRows() {
     int display = window ? SDL_GetWindowDisplayIndex(window) : 0;
     SDL_Rect bounds{};
     if (display < 0 || SDL_GetDisplayUsableBounds(display, &bounds) != 0) return 20;
-    return std::max(6, (bounds.h - 90) / 24);
+    return std::max(6, static_cast<int>(bounds.h * 0.45f) / 24);  // flyouts start partway down, so keep them well inside the screen
 }
 
 // First visible row of the current flyout; resets when a different item opens it.
@@ -206,6 +206,15 @@ void Titlebar::getMenuPopupBounds(FontAtlas& font, float& x, float& y, float& w,
     y = height_ + static_cast<float>(minY) - 3.f;
     w = static_cast<float>(maxX - minX) + 6.f;
     h = static_cast<float>(maxY - minY) + 6.f;
+}
+
+bool Titlebar::getMenuFlyoutRect(FontAtlas& font, SDL_Rect& rect) const {
+    SDL_Rect mainRect{}, submenuRect{}; bool hasSubmenu = false;
+    getMenuPanelRects(font, 32000, 32000, mainRect, submenuRect, hasSubmenu);
+    const auto* fly = currentFlyout();
+    if (!hasSubmenu || !fly) return false;
+    rect = {submenuRect.x + submenuRect.w + 2, submenuRect.y + 2 + submenuHovered_ * 24, static_cast<int>(flyoutWidth(font, *fly)) + 1, 2 + flyoutRows(fly->size()) * 24 + 1};
+    return true;
 }
 
 void Titlebar::getMenuPanelRects(FontAtlas& font, int windowW, int windowH, SDL_Rect& mainRect, SDL_Rect& submenuRect, bool& hasSubmenu) const {
