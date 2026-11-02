@@ -43,3 +43,16 @@ std::vector<std::string> Application::encodingNames() {
     extern std::vector<std::string> allEncodingNames();
     return allEncodingNames();
 }
+
+void Application::clearRecentFiles() {
+    recentFiles_.clear();
+    saveRecentFiles();
+}
+
+// Stops looking at Find in Files results and closes the find panel.
+void Application::cancelFindInFiles() {
+    find_.active = false;
+    findPanelIsInFiles_ = false;
+    pluginStatusText_ = "Find in Files cancelled";
+    pluginStatusUntil_ = SDL_GetTicks() + 2000;
+}

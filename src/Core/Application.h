@@ -184,6 +184,8 @@ public:
     void closeTab(size_t index);
     void closeCurrentTab() { closeTab(activeTab_); }
     void reopenClosedTab();
+    void clearRecentFiles();
+    void cancelFindInFiles();
     bool detachTabToNewWindow(size_t index);
     void openFileDialog();
     void openFolderDialog();
@@ -615,6 +617,10 @@ private:
     float horizontalScrollbarDragOffset_ = 0.f;
     int mouseX_ = 0, mouseY_ = 0;
     bool autoScrollActive_ = false;
+    bool columnDragging_ = false, columnMoved_ = false;
+    float columnStartX_ = 0.f, columnStartY_ = 0.f;
+    size_t columnStartLine_ = 0;
+    bool handleMiddleColumnSelect(const SDL_Event& e);
     float autoScrollAnchorX_ = 0.f, autoScrollAnchorY_ = 0.f;
     uint32_t autoScrollLastTick_ = 0;
     float tabScrollX_ = 0.f;
@@ -745,6 +751,7 @@ private:
     void firePluginEvent(const char* event, const std::string& key, bool withContent);
     void firePluginEvent(const char* event, bool withContent = false);
     void pollPluginEvents();
+    void firePluginWindowEvent(const char* event);
     // pre-warmed spare window (see ApplicationWarm.cpp)
     bool warmIdle_ = false;
     bool showWindowPending_ = true;

@@ -1478,6 +1478,14 @@ def install_plugin(p):
             os.replace(tmp, response)
 
     ns['handle_query_context'] = handle_query_context
+
+    def handle_window_event(data):
+        window = api.active_window()
+        event = str(data.get('event', ''))
+        for name in (event, event + '_async'):
+            _call(name, window)
+
+    ns['handle_window_event'] = handle_window_event
     ns['pending_on_activated_async_lock'] = threading.Lock()
     class ZipResourceReader:
         def __init__(self, loader, fullname): self.loader = loader; self.fullname = fullname

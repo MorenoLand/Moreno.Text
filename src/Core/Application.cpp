@@ -3078,6 +3078,7 @@ void Application::pollPluginStart() {
     pluginCommands_ = std::move(result.commands);
     pluginEventsChecked_ = true;
     pluginEventsEnabled_ = result.anyScripts;
+    firePluginWindowEvent("on_new_window");
     startupTick("plugin host started");
 }
 
@@ -3597,6 +3598,7 @@ void Application::handleEvents() {
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
         if (e.type == SDL_QUIT) { running_ = false; return; }
+        if (handleMiddleColumnSelect(e)) continue;
         if (e.type == SDL_DROPFILE) {
             if (e.drop.file) {
                 std::string dropped(e.drop.file);

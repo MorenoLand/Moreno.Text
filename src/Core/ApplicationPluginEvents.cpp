@@ -286,3 +286,21 @@ bool Application::pluginQueryContext(const std::string& key, const std::string& 
     if (pluginContextCache_.size() > 200) pluginContextCache_.clear();
     return result;
 }
+
+// Window-level events (on_new_window, on_load_project, ...) for plugins.
+void Application::firePluginWindowEvent(const char* event) {
+    if (!pluginEventsEnabled_) return;
+    try {
+        fs::path bridge = fs::path(paths_.localDir) / "PluginBridge";
+        fs::create_directories(bridge);
+        std::string stem = std::to_string(SDL_GetTicks()) + "-" + std::to_string(pluginEventSeq_++) + "-window_event";
+        fs::path tmp = bridge / (stem + ".tmp");
+        {
+            std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+            if (!f) return;
+            f << nlohmann::json{{"type", "window_event"}, {"event", event}}.dump();
+        }
+        std::error_code ec;
+        fs::rename(tmp, bridge / (stem + ".request.json"), ec);
+    } catch (...) {}
+}

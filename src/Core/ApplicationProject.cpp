@@ -256,6 +256,7 @@ void Application::openProjectFile(const std::string& path) {
     }
     projectFile_ = path;
     pushRecentProject(path);
+    firePluginWindowEvent("on_load_project");
     pluginStatusText_ = "Project: " + fs::path(path).stem().string();
     pluginStatusUntil_ = SDL_GetTicks() + 3000;
 }

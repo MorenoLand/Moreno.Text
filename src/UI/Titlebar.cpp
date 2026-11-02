@@ -75,6 +75,16 @@ void Titlebar::buildMenu() {
         if (item.label != "Code Folding") continue;
         for (int level = 4; level <= 9; ++level) item.children.push_back(leaf("Fold Level " + std::to_string(level), [level] { Application::instance().foldByLevel(level); }));
     }
+    for (size_t i = 0; i < submenus_[3].size(); ++i)
+        if (submenus_[3][i].label == "Find...") {
+            submenus_[3].insert(submenus_[3].begin() + static_cast<std::ptrdiff_t>(i) + 1, leaf("Incremental Find", [] { Application::instance().commandFind(); }));
+            break;
+        }
+    for (size_t i = 0; i < submenus_[3].size(); ++i)
+        if (submenus_[3][i].label == "Previous Result") {
+            submenus_[3].insert(submenus_[3].begin() + static_cast<std::ptrdiff_t>(i) + 1, leaf("Cancel Find in Files", [] { Application::instance().cancelFindInFiles(); }));
+            break;
+        }
     std::vector<TitlebarMenuItem> reopenKids, saveKids;
     for (const std::string& name : Application::encodingNames()) {
         reopenKids.push_back(leaf(name, [name] { Application::instance().reopenWithEncoding(name); }));
@@ -128,6 +138,10 @@ const std::vector<TitlebarMenuItem>* Titlebar::currentFlyout() const {
         auto& recent = Application::instance().recentFiles();
         for (size_t i = 0; i < recent.size(); ++i) recentFlyout_.push_back({recent[i], "", [i] { Application::instance().openRecentFile(i); }});
         if (recentFlyout_.empty()) recentFlyout_.push_back({"(Empty)", "", nullptr});
+        TitlebarMenuItem sep; sep.separator = true;
+        recentFlyout_.push_back(sep);
+        recentFlyout_.push_back({"Reopen Closed File", "Ctrl+Shift+T", [] { Application::instance().reopenClosedTab(); }});
+        recentFlyout_.push_back({"Clear Items", "", [] { Application::instance().clearRecentFiles(); }});
         return &recentFlyout_;
     }
     return nullptr;
