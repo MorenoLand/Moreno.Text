@@ -83,6 +83,21 @@ contexts:
         for (auto& s : lib.all()) std::cout << s->name() << " | " << s->scope() << "\n";
         return n > 0 ? 0 : 21;
     }
+    // Optional: <packages dir> <scope> <source file>: tokenize with a syntax from the library (inheritance and embeds work).
+    if (argc == 4) {
+        SyntaxLibrary lib;
+        lib.loadPaths({argv[1]});
+        auto syntax = lib.byScope(argv[2]);
+        if (!syntax) { std::cerr << "no syntax with scope " << argv[2] << "\n"; return 22; }
+        std::ifstream code(argv[3], std::ios::binary);
+        std::string source((std::istreambuf_iterator<char>(code)), std::istreambuf_iterator<char>());
+        for (auto& s : syntax->tokenize(source, &lib)) {
+            std::string t = source.substr(s.start, s.length);
+            for (auto& c : t) if (c == '\n') c = ' ';
+            std::cout << s.start << "+" << s.length << " [" << t << "] " << s.scope << "\n";
+        }
+        return 0;
+    }
     // Optional: tokenize a real syntax file when one is passed in.
     if (argc == 3) {
         std::ifstream in(argv[1], std::ios::binary);

@@ -39,6 +39,7 @@ int main(int argc, char** argv) {
     CHECK(rfind_("\\p{Alpha}+", "12 abc", w) && w == "abc", 21);
     CHECK(rfind_("colou?r", "my color", w) && w == "color", 22);
     CHECK(rfind_("a{2,3}", "aaaa", w) && w == "aaa", 23);
+    CHECK(rfind_("[[^a-c]&&[a-z]]+", "ABCabcxyz", w) && w == "xyz", 25);
     std::string err;
     CHECK(!OnigRegex::compile("(unclosed", err) && !err.empty(), 24);
     return 0;

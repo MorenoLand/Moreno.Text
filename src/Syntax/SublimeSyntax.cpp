@@ -263,11 +263,15 @@ struct Context;
 struct Pattern {
     enum Kind { Match, Include, Embed } kind = Match;
     std::string source;                       // match regex text (variables expanded)
+    std::string rawSource, rawEscape;         // before variable expansion, for syntaxes that extend another
+    const SublimeSyntax::Impl* owner = nullptr;  // the syntax this pattern was written in: context names in push/set resolve there
     mutable std::shared_ptr<OnigRegex> regex;
     mutable bool compileTried = false;
     std::vector<std::string> scope;
     std::map<int, std::vector<std::string>> captures;
-    enum Action { None, Push, Pop, Set } action = None;
+    enum Action { None, Push, Pop, Set, Branch, Fail } action = None;
+    std::string branchPoint, failName;
+    std::vector<std::string> branchTargets;
     int popCount = 1;
     std::vector<std::string> targets;         // context names, or scope:... references
     std::vector<std::shared_ptr<Context>> inlineTargets;
@@ -283,6 +287,8 @@ struct Context {
     std::vector<std::string> metaScope, metaContentScope;
     bool includePrototype = true;
     bool clearScopes = false;
+    bool metaPrepend = false, metaAppend = false;
+    bool hasMetaScope = false, hasMetaContentScope = false;
     std::vector<Pattern> patterns;
     const SublimeSyntax::Impl* owner = nullptr;
 };
@@ -292,6 +298,9 @@ struct SublimeSyntax::Impl {
     std::map<std::string, std::string> variables;
     std::map<std::string, std::shared_ptr<Context>> contexts;
     std::vector<std::shared_ptr<Context>> anonymous;
+    std::vector<std::string> extends;
+    std::string sourcePath;
+    bool resolved = false;
     std::string baseScope;
     int anonCounter = 0;
 };
@@ -336,8 +345,10 @@ struct Loader {
         if (!items.is_array()) return ctx;
         for (auto& item : items) {
             if (!item.is_object()) continue;
-            if (item.contains("meta_scope")) ctx->metaScope = splitScopes(item["meta_scope"].get<std::string>());
-            if (item.contains("meta_content_scope")) ctx->metaContentScope = splitScopes(item["meta_content_scope"].get<std::string>());
+            if (item.contains("meta_scope")) { ctx->metaScope = splitScopes(item["meta_scope"].get<std::string>()); ctx->hasMetaScope = true; }
+            if (item.contains("meta_content_scope")) { ctx->metaContentScope = splitScopes(item["meta_content_scope"].get<std::string>()); ctx->hasMetaContentScope = true; }
+            if (item.contains("meta_prepend")) ctx->metaPrepend = true;
+            if (item.contains("meta_append")) ctx->metaAppend = true;
             if (item.contains("meta_include_prototype")) ctx->includePrototype = item["meta_include_prototype"].is_boolean() ? item["meta_include_prototype"].get<bool>() : true;
             if (item.contains("clear_scopes")) ctx->clearScopes = true;
             if (item.contains("match") || item.contains("include") || item.contains("embed")) ctx->patterns.push_back(makePattern(item));
@@ -370,6 +381,7 @@ struct Loader {
 
     Pattern makePattern(const json& item) {
         Pattern p;
+        p.owner = &impl;
         if (item.contains("include") && item["include"].is_string()) {
             p.kind = Pattern::Include;
             p.includeName = item["include"].get<std::string>();
@@ -379,15 +391,30 @@ struct Loader {
             p.kind = Pattern::Embed;
             p.embedScope = item["embed"].is_string() ? item["embed"].get<std::string>() : std::string();
             if (item.contains("embed_scope") && item["embed_scope"].is_string()) p.embedScopeNames = splitScopes(item["embed_scope"].get<std::string>());
-            if (item.contains("escape") && item["escape"].is_string()) p.escape = expandVariables(item["escape"].get<std::string>(), impl.variables);
+            if (item.contains("escape") && item["escape"].is_string()) { p.rawEscape = item["escape"].get<std::string>(); p.escape = expandVariables(p.rawEscape, impl.variables); }
             p.escapeCaptures = readCaptures(item.value("escape_captures", json()));
-            p.source = item.contains("match") ? expandVariables(item["match"].get<std::string>(), impl.variables) : std::string();
+            p.rawSource = item.contains("match") ? item["match"].get<std::string>() : std::string();
+            p.source = expandVariables(p.rawSource, impl.variables);
+            if (item.contains("scope") && item["scope"].is_string()) p.scope = splitScopes(item["scope"].get<std::string>());
+            p.captures = readCaptures(item.value("captures", json()));
+            if (item.contains("pop")) {
+                const json& pop = item["pop"];
+                if (pop.is_number()) { p.action = Pattern::Pop; p.popCount = std::max(1, pop.get<int>()); }
+                else if (pop.is_boolean() && pop.get<bool>()) p.action = Pattern::Pop;
+            }
             return p;
         }
-        p.source = expandVariables(item["match"].get<std::string>(), impl.variables);
+        p.rawSource = item["match"].get<std::string>();
+        p.source = expandVariables(p.rawSource, impl.variables);
         if (item.contains("scope") && item["scope"].is_string()) p.scope = splitScopes(item["scope"].get<std::string>());
         p.captures = readCaptures(item.value("captures", json()));
-        if (item.contains("push")) { p.action = Pattern::Push; readTargets(item["push"], p); }
+        if (item.contains("branch_point") && item["branch_point"].is_string() && item.contains("branch") && item["branch"].is_array()) {
+            p.action = Pattern::Branch;
+            p.branchPoint = item["branch_point"].get<std::string>();
+            for (auto& b : item["branch"]) if (b.is_string()) p.branchTargets.push_back(b.get<std::string>());
+        }
+        else if (item.contains("fail") && item["fail"].is_string()) { p.action = Pattern::Fail; p.failName = item["fail"].get<std::string>(); }
+        else if (item.contains("push")) { p.action = Pattern::Push; readTargets(item["push"], p); }
         else if (item.contains("set")) { p.action = Pattern::Set; readTargets(item["set"], p); }
         else if (item.contains("pop")) {
             const json& pop = item["pop"];
@@ -405,7 +432,9 @@ struct Loader {
 std::shared_ptr<SublimeSyntax> SublimeSyntax::parse(const std::string& yamlText, std::string& error) {
     json doc;
     try { doc = Yaml(yamlText).parse(); } catch (const std::exception& e) { error = e.what(); return nullptr; }
-    if (!doc.is_object() || !doc.contains("contexts") || !doc["contexts"].is_object()) { error = "no contexts"; return nullptr; }
+    if (!doc.is_object()) { error = "not a mapping"; return nullptr; }
+    bool extending = doc.contains("extends");
+    if (!extending && (!doc.contains("contexts") || !doc["contexts"].is_object())) { error = "no contexts"; return nullptr; }
     std::shared_ptr<SublimeSyntax> syn(new SublimeSyntax());
     syn->name_ = doc.value("name", std::string());
     syn->scope_ = doc.value("scope", std::string());
@@ -416,13 +445,19 @@ std::shared_ptr<SublimeSyntax> SublimeSyntax::parse(const std::string& yamlText,
     if (doc.contains("variables") && doc["variables"].is_object())
         for (auto it = doc["variables"].begin(); it != doc["variables"].end(); ++it)
             if (it.value().is_string()) syn->impl_->variables[it.key()] = it.value().get<std::string>();
+    if (extending) {
+        if (doc["extends"].is_string()) syn->impl_->extends.push_back(doc["extends"].get<std::string>());
+        else if (doc["extends"].is_array()) for (auto& e : doc["extends"]) if (e.is_string()) syn->impl_->extends.push_back(e.get<std::string>());
+    }
     Loader loader{*syn->impl_};
-    for (auto it = doc["contexts"].begin(); it != doc["contexts"].end(); ++it)
-        syn->impl_->contexts[it.key()] = loader.makeContext(it.key(), it.value());
+    if (doc.contains("contexts") && doc["contexts"].is_object())
+        for (auto it = doc["contexts"].begin(); it != doc["contexts"].end(); ++it)
+            syn->impl_->contexts[it.key()] = loader.makeContext(it.key(), it.value());
+    syn->impl_->resolved = !extending;
     if (std::getenv("MORENO_SYNTAX_DEBUG")) std::fprintf(stderr, "contexts parsed: %zu (else-pop %d)", syn->impl_->contexts.size(), static_cast<int>(syn->impl_->contexts.count("else-pop")));
     if (std::getenv("MORENO_SYNTAX_DEBUG")) std::fputc(10, stderr);
     if (std::getenv("MORENO_SYNTAX_LIST")) for (auto& kv : syn->impl_->contexts) { std::fputs(kv.first.c_str(), stdout); std::fputc(10, stdout); }
-    if (!syn->impl_->contexts.count("main")) { error = "no main context"; return nullptr; }
+    if (!extending && !syn->impl_->contexts.count("main")) { error = "no main context"; return nullptr; }
     return syn;
 }
 
@@ -447,6 +482,22 @@ struct Tokenizer {
     std::vector<ScopeSpan> spans;
     std::deque<std::shared_ptr<Context>> temps;
     std::map<const SublimeSyntax::Impl*, std::shared_ptr<SublimeSyntax>> libraryHold;
+
+    // Backtracking for branch/fail: the state before a branch pattern ran, so a failing alternative can be undone.
+    struct Snapshot {
+        std::string name;
+        const Pattern* pattern = nullptr;
+        size_t lineStart = 0, pos = 0;
+        std::vector<Frame> stack;
+        std::vector<std::string> scopes;
+        size_t spanCount = 0, lastSpanLength = 0;
+        size_t nextAlternative = 1;
+    };
+    std::vector<Snapshot> snapshots;
+    bool jumpPending = false;
+    size_t jumpLine = 0, jumpPos = 0;
+    const Pattern* altPattern = nullptr;
+    size_t altLine = 0, altPos = 0, altIndex = 0;
 
     Tokenizer(const SublimeSyntax::Impl& r, const SyntaxLibrary* lib) : root(r), library(lib) {}
 
@@ -518,19 +569,28 @@ struct Tokenizer {
         scopes.clear();
         if (!root.baseScope.empty()) scopes.push_back(root.baseScope);
         pushFrame(mainCtx, nullptr, nullptr);
-        size_t lineStart = 0;
+        size_t lineStart = 0, startPos = 0;
+        long rewinds = 0;
         while (lineStart < text.size()) {
             size_t nl = text.find('\n', lineStart);
             size_t lineEnd = nl == std::string::npos ? text.size() : nl + 1;
-            tokenizeLine(text, lineStart, lineEnd);
+            tokenizeLine(text, lineStart, lineEnd, startPos);
+            startPos = 0;
+            if (jumpPending) {
+                jumpPending = false;
+                lineStart = jumpLine;
+                startPos = jumpPos;
+                if (++rewinds > 20000) break;  // a grammar that keeps failing; give up on the rest
+                continue;
+            }
             lineStart = lineEnd;
         }
         return std::move(spans);
     }
 
-    void tokenizeLine(const std::string& full, size_t lineStart, size_t lineEnd) {
+    void tokenizeLine(const std::string& full, size_t lineStart, size_t lineEnd, size_t startPos) {
         std::string line = full.substr(lineStart, lineEnd - lineStart);
-        size_t pos = 0, anchor = 0;
+        size_t pos = startPos, anchor = startPos;
         int guard = 0;
         std::string scopeText;
         while (pos < line.size() && ++guard < 4000) {
@@ -539,6 +599,11 @@ struct Tokenizer {
             std::vector<const Pattern*> candidates;
             if (frame.withPrototype) for (auto& wp : *frame.withPrototype) collect(*wp, *owner, candidates, 0, false);
             collect(*frame.ctx, *owner, candidates, 0, true);
+            // an embed's escape is live while anything above the embed is on the stack, and wins ties
+            std::vector<std::pair<const Pattern*, size_t>> escapes;
+            for (size_t j = stack.size(); j-- > 0;)
+                if (stack[j].temp && stack[j].temp->name == "__embed" && !stack[j].temp->patterns.empty()) escapes.emplace_back(&stack[j].temp->patterns[0], j);
+            for (size_t e = escapes.size(); e-- > 0;) candidates.insert(candidates.begin(), escapes[e].first);
 
             const Pattern* best = nullptr;
             OnigRegex::Match bestMatch;
@@ -565,15 +630,53 @@ struct Tokenizer {
             if (!best) { currentScopes(scopeText); emit(lineStart + pos, lineStart + line.size(), scopeText); pos = line.size(); break; }
 
             size_t ms = static_cast<size_t>(bestMatch.groups[0].first), me = static_cast<size_t>(bestMatch.groups[0].second);
+            if (best->action == Pattern::Fail) {
+                // undo back to the branch point and try its next alternative
+                long found = -1;
+                for (size_t k = snapshots.size(); k-- > 0;) if (snapshots[k].name == best->failName) { found = static_cast<long>(k); break; }
+                if (found >= 0) {
+                    Snapshot snap = snapshots[static_cast<size_t>(found)];
+                    snapshots.resize(static_cast<size_t>(found));
+                    stack = snap.stack;
+                    scopes = snap.scopes;
+                    spans.resize(snap.spanCount);
+                    if (!spans.empty()) spans.back().length = snap.lastSpanLength;
+                    altPattern = snap.pattern; altLine = snap.lineStart; altPos = snap.pos; altIndex = snap.nextAlternative;
+                    jumpPending = true; jumpLine = snap.lineStart; jumpPos = snap.pos;
+                    return;
+                }
+                // no branch to undo: treat as a plain empty match
+                size_t step = std::max(pos + 1, me);
+                currentScopes(scopeText);
+                emit(lineStart + pos, lineStart + std::min(step, line.size()), scopeText);
+                pos = std::min(step, line.size());
+                anchor = pos;
+                continue;
+            }
+            size_t branchIndex = 0;
+            if (best->action == Pattern::Branch) {
+                if (altPattern == best && altLine == lineStart && altPos == pos) branchIndex = altIndex;
+                altPattern = nullptr;
+                if (branchIndex >= best->branchTargets.size()) branchIndex = best->branchTargets.empty() ? 0 : best->branchTargets.size() - 1;
+                Snapshot snap;
+                snap.name = best->branchPoint; snap.pattern = best; snap.lineStart = lineStart; snap.pos = pos;
+                snap.stack = stack; snap.scopes = scopes; snap.spanCount = spans.size(); snap.lastSpanLength = spans.empty() ? 0 : spans.back().length;
+                snap.nextAlternative = branchIndex + 1;
+                if (branchIndex + 1 < best->branchTargets.size()) snapshots.push_back(std::move(snap));
+                if (snapshots.size() > 64) snapshots.erase(snapshots.begin());
+            }
             currentScopes(scopeText);
             emit(lineStart + pos, lineStart + ms, scopeText);
 
             // resolve push/set targets before emitting the match so meta_scope applies to it
             std::vector<Resolved> targets;
-            if (best->action == Pattern::Push || best->action == Pattern::Set || best->kind == Pattern::Embed) {
-                for (auto& t : best->targets) {
+            if (best->action == Pattern::Push || best->action == Pattern::Set || best->action == Pattern::Branch || best->kind == Pattern::Embed) {
+                const SublimeSyntax::Impl* patternOwner = best->owner ? best->owner : owner;
+                std::vector<std::string> wanted = best->targets;
+                if (best->action == Pattern::Branch && branchIndex < best->branchTargets.size()) wanted = {best->branchTargets[branchIndex]};
+                for (auto& t : wanted) {
                     const SublimeSyntax::Impl* foundOwner = nullptr;
-                    const Context* c = find(*owner, t, &foundOwner);
+                    const Context* c = find(*patternOwner, t, &foundOwner);
                     if (c) targets.push_back({c, nullptr});
                 }
                 for (auto& inl : best->inlineTargets) targets.push_back({inl.get(), inl});
@@ -583,11 +686,13 @@ struct Tokenizer {
                     temp->owner = owner;
                     temp->metaContentScope = best->embedScopeNames;
                     Pattern esc;
+                    esc.owner = patternOwner;
                     esc.source = best->escape;
                     esc.captures = best->escapeCaptures;
                     esc.action = Pattern::Pop;
                     temp->patterns.push_back(esc);
                     Pattern inc;
+                    inc.owner = patternOwner;
                     inc.kind = Pattern::Include;
                     inc.includeName = best->embedScope;
                     temp->patterns.push_back(inc);
@@ -598,7 +703,13 @@ struct Tokenizer {
 
             // scopes for the matched text
             std::vector<std::string> matchScopes = scopes;
-            if (best->action == Pattern::Pop) {
+            long escapeFrame = -1;
+            for (auto& e : escapes) if (e.first == best) escapeFrame = static_cast<long>(e.second);
+            if (escapeFrame >= 0) {
+                size_t drop = 0;
+                for (size_t j = static_cast<size_t>(escapeFrame); j < stack.size(); ++j) drop += stack[j].metaCount + stack[j].contentCount;
+                matchScopes.resize(matchScopes.size() >= drop ? matchScopes.size() - drop : 0);
+            } else if (best->action == Pattern::Pop) {
                 size_t drop = stack.back().contentCount;
                 matchScopes.resize(matchScopes.size() >= drop ? matchScopes.size() - drop : 0);
             } else {
@@ -634,14 +745,21 @@ struct Tokenizer {
             }
 
             // state change
-            if (best->action == Pattern::Pop) {
+            if (escapeFrame >= 0) {
+                while (stack.size() > static_cast<size_t>(escapeFrame)) popFrame();
+            } else if (best->kind == Pattern::Embed) {
+                if (best->action == Pattern::Pop) for (int i = 0; i < best->popCount; ++i) popFrame();  // "pop: 1" together with embed
+                for (auto& t : targets) pushFrame(t.ctx, nullptr, t.keep);
+            } else if (best->action == Pattern::Pop) {
                 for (int i = 0; i < best->popCount; ++i) popFrame();
             } else if (best->action == Pattern::Set || (best->kind == Pattern::Embed)) {
                 if (best->action == Pattern::Set) popFrame();
                 for (auto& t : targets) pushFrame(t.ctx, best->withPrototype.empty() ? nullptr : &best->withPrototype, t.keep);
-            } else if (best->action == Pattern::Push) {
+            } else if (best->action == Pattern::Push || best->action == Pattern::Branch) {
                 for (auto& t : targets) pushFrame(t.ctx, best->withPrototype.empty() ? nullptr : &best->withPrototype, t.keep);
             }
+            // a branch whose context has been popped again is settled: it cannot be undone any more
+            while (!snapshots.empty() && stack.size() <= snapshots.back().stack.size()) snapshots.pop_back();
             bool changed = best->action != Pattern::None || best->kind == Pattern::Embed;
             if (me == pos && !changed) {
                 // an empty match that changes nothing: step over one character
@@ -754,7 +872,8 @@ size_t SyntaxLibrary::loadPackage(const std::string& packagePath) {
         if (!inflateEntry(data, dataOffset, comp, raw, method, text)) continue;
         std::string err;
         auto syn = SublimeSyntax::parse(text, err);
-        if (syn) { add(syn); ++added; }
+        if (syn) { syn->impl_->sourcePath = "Packages/" + fs::path(packagePath).stem().string() + "/" + name; add(syn); ++added; }
+        else if (std::getenv("MORENO_SYNTAX_DEBUG")) std::fprintf(stderr, "syntax failed: %s: %s", name.c_str(), err.c_str()), std::fputc(10, stderr);
     }
     return added;
 }
@@ -768,10 +887,113 @@ size_t SyntaxLibrary::loadPaths(const std::vector<std::string>& dirs) {
         for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec))
             if (it->is_regular_file(ec) && it->path().extension() == ".sublime-package") added += loadPackage(it->path().string());
     }
+    resolveExtends();
     return added;
 }
 
 SyntaxLibrary& SyntaxLibrary::shared() {
     static SyntaxLibrary library;
     return library;
+}
+
+// ── Inheritance (extends) ────────────────────────────────────────────────────────────────────────────────
+
+namespace {
+
+std::shared_ptr<Context> cloneContext(const Context& src, const SublimeSyntax::Impl* owner) {
+    auto copy = std::make_shared<Context>(src);
+    copy->owner = owner;
+    for (Pattern& p : copy->patterns) {
+        p.regex.reset();
+        p.compileTried = false;
+        p.owner = owner;
+        for (auto& inl : p.inlineTargets) inl = cloneContext(*inl, owner);
+        for (auto& wp : p.withPrototype) wp = cloneContext(*wp, owner);
+    }
+    return copy;
+}
+
+void reexpand(Context& ctx, const std::map<std::string, std::string>& vars) {
+    for (Pattern& p : ctx.patterns) {
+        if (!p.rawSource.empty()) p.source = expandVariables(p.rawSource, vars);
+        if (!p.rawEscape.empty()) p.escape = expandVariables(p.rawEscape, vars);
+        p.regex.reset();
+        p.compileTried = false;
+        for (auto& inl : p.inlineTargets) reexpand(*inl, vars);
+        for (auto& wp : p.withPrototype) reexpand(*wp, vars);
+    }
+}
+
+}  // namespace
+
+void SyntaxLibrary::resolveExtends() {
+    // a syntax is resolved once every parent it names is
+    for (int round = 0; round < 8; ++round) {
+        bool changed = false;
+        for (auto& syn : syntaxes_) {
+            SublimeSyntax::Impl& impl = *syn->impl_;
+            if (impl.resolved) continue;
+            std::vector<std::shared_ptr<SublimeSyntax>> parents;
+            bool ready = true;
+            for (const std::string& ref : impl.extends) {
+                std::shared_ptr<SublimeSyntax> found;
+                std::string base = fs::path(ref).filename().string();
+                std::string pkgDir = fs::path(impl.sourcePath).parent_path().string();
+                for (auto& cand : syntaxes_) {
+                    if (cand == syn) continue;
+                    const std::string& path = cand->impl_->sourcePath;
+                    if (path == ref) { found = cand; break; }
+                }
+                if (!found)
+                    for (auto& cand : syntaxes_) {
+                        if (cand == syn) continue;
+                        const std::string& path = cand->impl_->sourcePath;
+                        if (fs::path(path).filename().string() == base && fs::path(path).parent_path().string() == pkgDir) { found = cand; break; }
+                    }
+                if (!found)
+                    for (auto& cand : syntaxes_) {
+                        if (cand == syn) continue;
+                        if (fs::path(cand->impl_->sourcePath).filename().string() == base) { found = cand; break; }
+                    }
+                if (!found) { ready = false; break; }
+                if (!found->impl_->resolved) { ready = false; break; }
+                parents.push_back(found);
+            }
+            if (!ready) continue;
+            // variables: the first parent's, overlaid by later parents, overlaid by this syntax's own
+            std::map<std::string, std::string> vars;
+            for (auto& parent : parents) for (auto& kv : parent->impl_->variables) vars[kv.first] = kv.second;
+            for (auto& kv : impl.variables) vars[kv.first] = kv.second;
+            std::map<std::string, std::shared_ptr<Context>> own = std::move(impl.contexts);
+            impl.contexts.clear();
+            for (auto& parent : parents) {
+                for (auto& kv : parent->impl_->contexts) {
+                    auto inherited = cloneContext(*kv.second, &impl);
+                    auto existing = impl.contexts.find(kv.first);
+                    if (existing == impl.contexts.end()) { impl.contexts[kv.first] = inherited; continue; }
+                    // two parents define it: later ones append after earlier ones
+                    existing->second->patterns.insert(existing->second->patterns.end(), inherited->patterns.begin(), inherited->patterns.end());
+                }
+            }
+            for (auto& kv : own) {
+                auto mine = kv.second;
+                mine->owner = &impl;
+                auto inherited = impl.contexts.find(kv.first);
+                if (inherited == impl.contexts.end() || (!mine->metaPrepend && !mine->metaAppend)) { impl.contexts[kv.first] = mine; continue; }
+                std::shared_ptr<Context> merged = inherited->second;
+                if (mine->hasMetaScope) { merged->metaScope = mine->metaScope; merged->hasMetaScope = true; }
+                if (mine->hasMetaContentScope) { merged->metaContentScope = mine->metaContentScope; merged->hasMetaContentScope = true; }
+                if (mine->metaPrepend) merged->patterns.insert(merged->patterns.begin(), mine->patterns.begin(), mine->patterns.end());
+                else merged->patterns.insert(merged->patterns.end(), mine->patterns.begin(), mine->patterns.end());
+            }
+            impl.variables = vars;
+            for (auto& kv : impl.contexts) reexpand(*kv.second, vars);
+            if (impl.baseScope.empty()) impl.baseScope = syn->scope_;
+            impl.resolved = true;
+            changed = true;
+        }
+        if (!changed) break;
+    }
+    // syntaxes that never resolved (a missing parent) are dropped
+    syntaxes_.erase(std::remove_if(syntaxes_.begin(), syntaxes_.end(), [](const std::shared_ptr<SublimeSyntax>& s) { return !s->impl_->resolved || !s->impl_->contexts.count("main"); }), syntaxes_.end());
 }

@@ -52,6 +52,8 @@ public:
     size_t loadPackage(const std::string& packagePath);
     // Loads loose syntaxes under each directory and every .sublime-package found directly inside it.
     size_t loadPaths(const std::vector<std::string>& dirs);
+    // Merges syntaxes that use `extends` with their parents. Called after loading.
+    void resolveExtends();
     // The library the editor shares. It is filled on a background thread; ready() says when.
     static SyntaxLibrary& shared();
     bool ready() const { return ready_.load(); }

@@ -9,6 +9,7 @@ struct ClassSet {
     std::vector<std::pair<uint32_t, uint32_t>> ranges;
     std::vector<std::string> named;  // posix / property names, optionally prefixed with ^ to negate
     std::vector<ClassSet> nested;
+    std::vector<ClassSet> intersect;  // for [a&&b]: every operand must match
     bool negate = false;
 };
 
@@ -70,6 +71,11 @@ bool namedClassHas(const std::string& rawName, uint32_t cp) {
 }
 
 bool classMatches(const ClassSet& set, uint32_t cp, bool icase) {
+    if (!set.intersect.empty()) {
+        bool all = true;
+        for (auto& operand : set.intersect) if (!classMatches(operand, cp, icase)) { all = false; break; }
+        return set.negate ? !all : all;
+    }
     bool hit = false;
     for (auto& [lo, hi] : set.ranges) {
         if (cp >= lo && cp <= hi) { hit = true; break; }
@@ -228,11 +234,21 @@ struct Compiler {
 
     ClassSet parseClass() {  // after '['
         ClassSet set;
-        if (more() && pat[i] == '^') { set.negate = true; ++i; }
+        std::vector<ClassSet> operands;  // the finished parts of a && chain
+        bool wholeNegate = false;
+        auto closeClass = [&]() {
+            if (operands.empty()) { set.negate = wholeNegate; return set; }
+            operands.push_back(std::move(set));
+            ClassSet joined;
+            joined.negate = wholeNegate;
+            joined.intersect = std::move(operands);
+            return joined;
+        };
+        if (more() && pat[i] == '^') { wholeNegate = true; ++i; }
         bool first = true;
         while (more()) {
             char c = pat[i];
-            if (c == ']' && !first) { ++i; return set; }
+            if (c == ']' && !first) { ++i; return closeClass(); }
             first = false;
             if (c == '[') {
                 if (i + 1 < pat.size() && pat[i + 1] == ':') {
@@ -248,7 +264,12 @@ struct Compiler {
                 set.nested.push_back(parseClass());
                 continue;
             }
-            if (c == '&' && i + 1 < pat.size() && pat[i + 1] == '&') { i += 2; continue; }  // intersections are treated as unions
+            if (c == '&' && i + 1 < pat.size() && pat[i + 1] == '&') {
+                i += 2;
+                operands.push_back(std::move(set));
+                set = ClassSet();
+                continue;
+            }
             uint32_t lo;
             if (c == '\\' && i + 1 < pat.size()) {
                 char e = pat[i + 1];
@@ -266,7 +287,7 @@ struct Compiler {
             set.ranges.emplace_back(lo, hi);
         }
         fail("unterminated character class");
-        return set;
+        return closeClass();
     }
 
     int parseAtom() {
