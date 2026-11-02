@@ -82,6 +82,7 @@ struct CommandPaletteState {
     float scrollbarDragOffset = 0.f;
 };
 
+class FontAtlas;
 struct PluginPaletteCommand {
     std::string caption;
     std::string name;
@@ -270,6 +271,9 @@ public:
     void addPreviousLine();
     void addNextLine();
     void changeFontSize(int delta);
+    FontAtlas& boldFontAtlas();
+    int boldAtlasSize_ = 0;
+    float boldAtlasScale_ = 0.f;
     void resetFontSize();
     void newWindow();
     void closeAllFiles();

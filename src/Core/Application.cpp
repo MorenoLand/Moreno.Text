@@ -5702,7 +5702,10 @@ void Application::render() {
                     }
                     auto& c = syntax_->scopeColor(tok.scope);
                     std::string_view tokText(textBuffer.data() + tok.start, tok.length);
-                    fontAtlas().drawTextClipped(tokText, cx, y, textX, editorRight, c.r, c.g, c.b, 1.0f);
+                    int style = syntax_->scopeStyle(tok.scope);
+                    if (style & 1) boldFontAtlas().drawTextClipped(tokText, cx, y, textX, editorRight, c.r, c.g, c.b, 1.0f);
+                    else if (style & 2) fontAtlas().drawTextItalic(tokText, cx, y, 1.f, c.r, c.g, c.b, 1.0f);
+                    else fontAtlas().drawTextClipped(tokText, cx, y, textX, editorRight, c.r, c.g, c.b, 1.0f);
                     cx += fontAtlas().measureText(tokText);
                     prevEnd = (tok.start - lStart) + tok.length;
                     if (cx > editorRight) break;
@@ -6528,6 +6531,20 @@ void Application::shutdown() {
 }
 
 int main(int argc, char** argv) { return Application::instance().run(argc, argv); }
+
+// A second atlas of the editor font in bold, for scheme rules with font_style "bold". Rebuilt when the size changes.
+FontAtlas& Application::boldFontAtlas() {
+    static FontAtlas atlas;
+    float scale = getWindowBackingScale(window_);
+    if (boldAtlasSize_ != fontSize_ || boldAtlasScale_ != scale) {
+        atlas.destroy();
+        atlas.setKeepRegularAdvance(true);
+        std::string path = findMonospaceFont();
+        if (path.empty() || !atlas.init(path, fontSize_, scale, true)) { boldAtlasSize_ = 0; return fontAtlas(); }
+        boldAtlasSize_ = fontSize_; boldAtlasScale_ = scale;
+    }
+    return atlas;
+}
 
 void Application::changeFontSize(int delta) {
     int next = std::clamp(fontSize_ + delta, 8, 48);

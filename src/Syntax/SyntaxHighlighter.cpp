@@ -541,6 +541,12 @@ std::vector<SyntaxToken> SyntaxHighlighter::highlightLine(std::string_view line,
     return tokens;
 }
 
+int SyntaxHighlighter::scopeStyle(int scope) const {
+    if (useLocalColors_ || scope < 1 || scope >= 9) return 0;
+    static const char* scopeNames[] = {"", "keyword", "string", "comment", "number", "type", "function", "operator", "punctuation"};
+    return ThemeEngine::instance().styleForScope(scopeNames[scope]);
+}
+
 const SyntaxColor& SyntaxHighlighter::scopeColor(int scope) const {
     if (useLocalColors_) {
         if (scope < 0 || scope >= 9) scope = 0;

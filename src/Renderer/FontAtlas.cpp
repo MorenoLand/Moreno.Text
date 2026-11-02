@@ -89,7 +89,9 @@ void FontAtlas::loadGlyph(uint32_t cp) {
         measureCache_.clear();
         return;
     }
+    long regularAdvance = face->glyph->advance.x;
     if (bold_ && !FT_HAS_COLOR(face)) FT_GlyphSlot_Embolden(face->glyph);
+    if (keepRegularAdvance_) face->glyph->advance.x = regularAdvance;  // bold runs mixed with regular text must not shift it
     int w = static_cast<int>(face->glyph->bitmap.width);
     int h = static_cast<int>(face->glyph->bitmap.rows);
     AtlasGlyph g;

@@ -57,16 +57,29 @@ public:
         }
         if (data.contains("rules") && data["rules"].is_array()) {
             for (auto& rule : data["rules"]) {
-                if (!rule.is_object() || !rule.contains("scope") || !rule["scope"].is_string() || !rule.contains("foreground")) continue;
+                if (!rule.is_object() || !rule.contains("scope") || !rule["scope"].is_string()) continue;
+                bool hasForeground = rule.contains("foreground");
+                bool hasStyle = rule.contains("font_style") && rule["font_style"].is_string();
+                if (!hasForeground && !hasStyle) continue;
                 ThemeColor c = fgColor_;
-                color(rule["foreground"], c);
+                if (hasForeground) color(rule["foreground"], c);
+                int style = 0;
+                if (hasStyle) {
+                    std::string fs = rule["font_style"].get<std::string>();
+                    if (fs.find("bold") != std::string::npos) style |= 1;
+                    if (fs.find("italic") != std::string::npos) style |= 2;
+                }
                 std::string scopes = rule["scope"].get<std::string>();
                 size_t start = 0;
                 while (start <= scopes.size()) {
                     size_t comma = scopes.find(',', start);
                     std::string one = scopes.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
                     size_t a = one.find_first_not_of(" \t"), b = one.find_last_not_of(" \t");
-                    if (a != std::string::npos) scopeColors_[one.substr(a, b - a + 1)] = c;
+                    if (a != std::string::npos) {
+                        std::string key = one.substr(a, b - a + 1);
+                        if (hasForeground) scopeColors_[key] = c;
+                        if (hasStyle) scopeStyles_[key] = style;
+                    }
                     if (comma == std::string::npos) break;
                     start = comma + 1;
                 }
@@ -81,6 +94,10 @@ public:
             {"operator", {"keyword.operator"}},
         };
         for (auto& [coarse, options] : fallbacks) {
+            for (auto option : options) {
+                auto st = scopeStyles_.find(option);
+                if (!scopeStyles_.count(coarse) && st != scopeStyles_.end()) scopeStyles_[coarse] = st->second;
+            }
             if (scopeColors_.count(coarse)) continue;
             for (auto option : options) {
                 auto it = scopeColors_.find(option);
@@ -98,6 +115,13 @@ public:
             if (scope.find(k) == 0) return v;
         }
         return fgColor_;
+    }
+    // 1 = bold, 2 = italic, from the scheme's font_style (0 when the rule sets none)
+    int styleForScope(const std::string& scope) const {
+        auto it = scopeStyles_.find(scope);
+        if (it != scopeStyles_.end()) return it->second;
+        for (auto& [k, v] : scopeStyles_) if (scope.find(k) == 0) return v;
+        return 0;
     }
     ThemeColor bgColor() const { return bgColor_; }
     ThemeColor fgColor() const { return fgColor_; }
@@ -204,8 +228,11 @@ private:
                 static const std::pair<const char*, const char*> keys[] = {{"background", "background"}, {"foreground", "foreground"}, {"caret", "caret"},
                     {"lineHighlight", "line_highlight"}, {"selection", "selection"}, {"gutter", "gutter"}, {"gutterForeground", "gutter_foreground"}};
                 for (auto& [from, to] : keys) if (st.contains(from) && st[from].is_string()) globals[to] = st[from];
-            } else if (entry["scope"].is_string() && st.contains("foreground") && st["foreground"].is_string()) {
-                rules.push_back({{"scope", entry["scope"]}, {"foreground", st["foreground"]}});
+            } else if (entry["scope"].is_string() && ((st.contains("foreground") && st["foreground"].is_string()) || (st.contains("fontStyle") && st["fontStyle"].is_string()))) {
+                nlohmann::json rule = {{"scope", entry["scope"]}};
+                if (st.contains("foreground") && st["foreground"].is_string()) rule["foreground"] = st["foreground"];
+                if (st.contains("fontStyle") && st["fontStyle"].is_string()) rule["font_style"] = st["fontStyle"];
+                rules.push_back(rule);
             }
         }
         scheme["globals"] = globals;
@@ -287,6 +314,7 @@ private:
         gutterFg_ = {0.416f, 0.416f, 0.470f, 1.f};
         minimapBg_ = {0.082f, 0.082f, 0.094f, 1.f};
         scopeColors_.clear();
+        scopeStyles_.clear();
     }
 
     ThemeColor bgColor_ = {0.118f, 0.118f, 0.133f, 1.f};
@@ -298,5 +326,6 @@ private:
     ThemeColor gutterFg_ = {0.416f, 0.416f, 0.470f, 1.f};
     ThemeColor minimapBg_ = {0.082f, 0.082f, 0.094f, 1.f};
     std::unordered_map<std::string, ThemeColor> scopeColors_;
+    std::unordered_map<std::string, int> scopeStyles_;
     std::string path_, name_;
 };

@@ -32,6 +32,7 @@ public:
     const std::string& languageName() const { return langName_; }
     std::vector<SyntaxToken> highlightLine(std::string_view line, size_t lineOffset) const;
     const SyntaxColor& scopeColor(int scope) const;
+    int scopeStyle(int scope) const;  // 1 = bold, 2 = italic
     SyntaxColor backgroundColor() const;
     SyntaxColor lineHighlightColor() const;
     SyntaxColor gutterColor() const;

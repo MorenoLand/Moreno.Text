@@ -23,6 +23,7 @@ public:
     FontAtlas& operator=(const FontAtlas&) = delete;
     bool init(const std::string& fontPath, int fontSize = 16, float backingScale = 1.f, bool bold = false);
     void destroy();
+    void setKeepRegularAdvance(bool keep) { keepRegularAdvance_ = keep; }
     const AtlasGlyph& getGlyph(uint32_t codepoint);
     static size_t visibleGlyphReserve(size_t textSize, float clipLeft, float clipRight, float minGlyphAdvance) {
         if (textSize == 0 || clipRight <= clipLeft || minGlyphAdvance <= 0.f) return 0;
@@ -56,6 +57,7 @@ private:
     int atlasW_ = 1024, atlasH_ = 1024;
     float backingScale_ = 1.f;
     bool bold_ = false;
+    bool keepRegularAdvance_ = false;
     std::vector<uint8_t> atlasData_;
     mutable std::unordered_map<std::string, float> measureCache_;
     bool dirty_ = false;
