@@ -6,6 +6,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <filesystem>
+#include <functional>
 #include <fstream>
 #include <map>
 #include <regex>
@@ -240,75 +241,75 @@ void Application::insertSnippet(const std::string& content) {
     std::map<int, std::vector<Stop>> stops;
     auto emit = [&](char c) { out += c; if (c == '\n') out += indent; };
     auto emitText = [&](const std::string& text) { for (char c : text) emit(c); };
-    for (size_t i = 0; i < content.size();) {
-        char c = content[i];
-        if (c == '\\' && i + 1 < content.size() && (content[i + 1] == '$' || content[i + 1] == '\\' || content[i + 1] == '}')) { emit(content[i + 1]); i += 2; continue; }
-        if (c != '$') { emit(c); ++i; continue; }
-        size_t j = i + 1;
-        bool braced = j < content.size() && content[j] == '{';
-        if (braced) ++j;
-        size_t nameStart = j;
-        while (j < content.size() && (std::isalnum(static_cast<unsigned char>(content[j])) || content[j] == '_')) ++j;
-        std::string name = content.substr(nameStart, j - nameStart);
-        if (name.empty()) { emit(c); ++i; continue; }
-        std::string defaultText, tre, tfmt, tflags;
-        bool hasDefault = false, hasTransform = false;
-        if (braced) {
-            if (j < content.size() && content[j] == ':') {
-                hasDefault = true; ++j;
-                int depth = 1;
-                size_t d = j;
-                for (; d < content.size() && depth > 0; ++d) {
-                    if (content[d] == '\\' && d + 1 < content.size()) { ++d; continue; }
-                    if (content[d] == '{') ++depth;
-                    else if (content[d] == '}') --depth;
+    std::function<void(const std::string&)> expand = [&](const std::string& src) {
+        for (size_t i = 0; i < src.size();) {
+            char c = src[i];
+            if (c == '\\' && i + 1 < src.size() && (src[i + 1] == '$' || src[i + 1] == '\\' || src[i + 1] == '}')) { emit(src[i + 1]); i += 2; continue; }
+            if (c != '$') { emit(c); ++i; continue; }
+            size_t j = i + 1;
+            bool braced = j < src.size() && src[j] == '{';
+            if (braced) ++j;
+            size_t nameStart = j;
+            while (j < src.size() && (std::isalnum(static_cast<unsigned char>(src[j])) || src[j] == '_')) ++j;
+            std::string name = src.substr(nameStart, j - nameStart);
+            if (name.empty()) { emit(c); ++i; continue; }
+            std::string defaultText, tre, tfmt, tflags;
+            bool hasDefault = false, hasTransform = false;
+            if (braced) {
+                if (j < src.size() && src[j] == ':') {
+                    hasDefault = true; ++j;
+                    int depth = 1;
+                    size_t d = j;
+                    for (; d < src.size() && depth > 0; ++d) {
+                        if (src[d] == '\\' && d + 1 < src.size()) { ++d; continue; }
+                        if (src[d] == '{') ++depth;
+                        else if (src[d] == '}') --depth;
+                    }
+                    defaultText = src.substr(j, d - j - 1);
+                    j = d;
+                } else if (j < src.size() && src[j] == '/') {
+                    size_t d = j + 1;
+                    int depth = 1;
+                    for (; d < src.size(); ++d) {
+                        if (src[d] == '\\' && d + 1 < src.size()) { ++d; continue; }
+                        if (src[d] == '{') ++depth;
+                        else if (src[d] == '}' && --depth == 0) break;
+                    }
+                    hasTransform = splitTransform(src.substr(j + 1, d - j - 1), tre, tfmt, tflags);
+                    j = d < src.size() ? d + 1 : d;
+                } else {
+                    while (j < src.size() && src[j] != '}') ++j;
+                    if (j < src.size()) ++j;
                 }
-                defaultText = content.substr(j, d - j - 1);
-                j = d;
-            } else if (j < content.size() && content[j] == '/') {
-                size_t d = j + 1;
-                int depth = 1;
-                for (; d < content.size(); ++d) {
-                    if (content[d] == '\\' && d + 1 < content.size()) { ++d; continue; }
-                    if (content[d] == '{') ++depth;
-                    else if (content[d] == '}' && --depth == 0) break;
+            }
+            if (std::isdigit(static_cast<unsigned char>(name[0]))) {
+                int index = std::atoi(name.c_str());
+                Stop stop;
+                stop.start = out.size();
+                stop.placeholder = hasDefault;
+                if (hasDefault) {
+                    size_t before = out.size();
+                    expand(defaultText);
+                    stop.len = out.size() - before;
+                } else if (!stops[index].empty()) {
+                    const Stop& first = stops[index].front();
+                    std::string mirrored = out.substr(first.start, first.len);
+                    size_t before = out.size();
+                    emitText(hasTransform ? applyTransform(mirrored, tre, tfmt, tflags) : mirrored);
+                    stop.len = out.size() - before;
                 }
-                hasTransform = splitTransform(content.substr(j + 1, d - j - 1), tre, tfmt, tflags);
-                j = d < content.size() ? d + 1 : d;
+                stop.transform = hasTransform; stop.re = tre; stop.fmt = tfmt; stop.flags = tflags;
+                stops[index].push_back(stop);
             } else {
-                while (j < content.size() && content[j] != '}') ++j;
-                if (j < content.size()) ++j;
+                auto it = vars.find(name);
+                if (it != vars.end() && hasTransform) emitText(applyTransform(it->second, tre, tfmt, tflags));
+                else if (it != vars.end() && !(it->second.empty() && hasDefault)) emitText(it->second);
+                else if (hasDefault) expand(defaultText);
             }
+            i = j;
         }
-        if (std::isdigit(static_cast<unsigned char>(name[0]))) {
-            int index = std::atoi(name.c_str());
-            Stop stop;
-            stop.start = out.size();
-            stop.placeholder = hasDefault;
-            if (hasDefault) {
-                std::string plain;
-                static const std::regex nested(R"(\$\{\d+:([^}]*)\}|\$\d+)");
-                plain = std::regex_replace(defaultText, nested, "$1");
-                size_t before = out.size();
-                emitText(plain);
-                stop.len = out.size() - before;
-            } else if (!stops[index].empty()) {
-                const Stop& first = stops[index].front();
-                std::string mirrored = out.substr(first.start, first.len);
-                size_t before = out.size();
-                emitText(hasTransform ? applyTransform(mirrored, tre, tfmt, tflags) : mirrored);
-                stop.len = out.size() - before;
-            }
-            stop.transform = hasTransform; stop.re = tre; stop.fmt = tfmt; stop.flags = tflags;
-            stops[index].push_back(stop);
-        } else {
-            auto it = vars.find(name);
-            if (it != vars.end() && hasTransform) emitText(applyTransform(it->second, tre, tfmt, tflags));
-            else if (it != vars.end() && !(it->second.empty() && hasDefault)) emitText(it->second);
-            else if (hasDefault) emitText(defaultText);
-        }
-        i = j;
-    }
+    };
+    expand(content);
     size_t base = at;
     if (sel.hasSelection()) { textBuffer.erase(sel.min(), sel.max() - sel.min()); }
     textBuffer.insert(base, out);
@@ -339,9 +340,15 @@ void Application::selectSnippetStop() {
         snippetActive_ = false;
         return;
     }
+    const size_t dead = std::string::npos;
+    // Placeholders nested inside text that was overwritten no longer exist; skip stops with nothing left.
+    while (snippetCurrent_ < snippetStops_.size() &&
+           std::all_of(snippetStops_[snippetCurrent_].begin(), snippetStops_[snippetCurrent_].end(), [&](const auto& r) { return r.first == dead; }))
+        ++snippetCurrent_;
+    if (snippetCurrent_ >= snippetStops_.size()) { selectSnippetStop(); return; }
     auto& ranges = snippetStops_[snippetCurrent_];
     selections_.clear();
-    for (auto& r : ranges) selections_.emplace_back(std::min(r.first, textBuffer.size()), std::min(r.first + r.second, textBuffer.size()));
+    for (auto& r : ranges) if (r.first != dead) selections_.emplace_back(std::min(r.first, textBuffer.size()), std::min(r.first + r.second, textBuffer.size()));
     snippetBufSize_ = textBuffer.size();
     ensureCursorVisible();
 }
@@ -359,9 +366,17 @@ bool Application::advanceSnippet(bool forward) {
     if (cursor < start || cursor > start + newLen || start + newLen > textBuffer.size()) { snippetActive_ = false; return false; }
     auto shiftAfter = [&](size_t pos, long amount, const std::pair<size_t, size_t>* skip) {
         for (auto& stop : snippetStops_)
-            for (auto& r : stop) if (&r != skip && r.first > pos) r.first = static_cast<size_t>(static_cast<long>(r.first) + amount);
+            for (auto& r : stop) if (&r != skip && r.first != std::string::npos && r.first > pos) r.first = static_cast<size_t>(static_cast<long>(r.first) + amount);
         if (snippetFinal_ > pos) snippetFinal_ = static_cast<size_t>(static_cast<long>(snippetFinal_) + amount);
     };
+    if (delta != 0) {
+        size_t oldLen = current.front().second;
+        for (auto& stop : snippetStops_) {
+            if (&stop == &current) continue;
+            for (auto& r : stop)
+                if (r.first != std::string::npos && r.first >= start && r.first + r.second <= start + oldLen) r.first = std::string::npos;
+        }
+    }
     shiftAfter(start, delta, &current.front());
     current.front().second = newLen;
     if (current.size() > 1) {

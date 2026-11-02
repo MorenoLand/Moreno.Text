@@ -482,6 +482,22 @@ int Application::runSelfTest(const std::string& resultPath) {
         fs::remove_all(base, ec);
     }
 
+    fresh("");
+    insertSnippet("a ${1:x ${2:y}} b");
+    expect("nested placeholder text", "a x y b");
+    check("outer placeholder selects its whole default", selections_[0].min() == 2 && selections_[0].max() == 5, std::to_string(selections_[0].min()) + "," + std::to_string(selections_[0].max()));
+    advanceSnippet(true);
+    check("tab moves into the nested placeholder", selections_[0].min() == 4 && selections_[0].max() == 5, std::to_string(selections_[0].min()) + "," + std::to_string(selections_[0].max()));
+    endSnippet();
+    fresh("");
+    insertSnippet("a ${1:x ${2:y}} b$0");
+    textBuffer.replace(2, 3, "Q");
+    invalidateLineIndex();
+    selections_.clear(); selections_.emplace_back(3);
+    advanceSnippet(true);
+    check("overwriting the outer placeholder drops the nested one", !snippetActive_ && selections_[0].cursor == 5, std::to_string(selections_[0].cursor));
+    endSnippet();
+
     std::ofstream out(resultPath, std::ios::binary | std::ios::trunc);
     out << report.str() << (failures ? "FAILED " : "ALL PASSED ") << failures << "\n";
     return failures ? 1 : 0;
