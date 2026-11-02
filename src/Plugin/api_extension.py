@@ -640,10 +640,13 @@ def _install_settings(m):
     def clear_on_change(self, tag): self.__dict__.setdefault('_listeners', {}).pop(tag, None)
     S.set = set_; S.erase = erase; S.setdefault = setdefault; S.update = update
     S.add_on_change = add_on_change; S.clear_on_change = clear_on_change
+    S.settings_id = property(lambda self: self.__dict__.setdefault('_settings_id', next(_settings_ids)))
     S.__contains__ = lambda self, key: self.has(key)
     S.__getitem__ = lambda self, key: self.data[key]
     S.__setitem__ = lambda self, key, value: self.set(key, value)
 
+
+_settings_ids = itertools.count(1)
 
 def _install_completions(m):
     CompletionItem, CompletionList = m.CompletionItem, m.CompletionList
