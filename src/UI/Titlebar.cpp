@@ -56,6 +56,37 @@ void Titlebar::buildMenu() {
     nestMenuItems(view, "Spell Check", "Dictionary...", "Spell Check");
     nestMenuItems(view, "Word Wrap Column: Automatic", "Word Wrap Column: 120", "Word Wrap Column");
     nestMenuItems(submenus_[0], "Reopen with Encoding...", "Revert File", "More");
+    auto leaf = [](const std::string& label, std::function<void()> fn) { TitlebarMenuItem it; it.label = label; it.action = std::move(fn); return it; };
+    auto group = [](const std::string& label, std::vector<TitlebarMenuItem> kids) { TitlebarMenuItem it; it.label = label; it.shortcut = ">"; it.children = std::move(kids); return it; };
+    auto replaceItem = [](std::vector<TitlebarMenuItem>& list, const std::string& label, TitlebarMenuItem item) {
+        for (auto& existing : list) if (existing.label == label) { existing = std::move(item); return; }
+    };
+    std::vector<TitlebarMenuItem> syntaxKids;
+    for (const std::string& name : Application::syntaxLanguageNames()) syntaxKids.push_back(leaf(name, [name] { Application::instance().setSyntaxByName(name); }));
+    replaceItem(view, "Syntax...", group("Syntax", std::move(syntaxKids)));
+    std::vector<TitlebarMenuItem> indentKids;
+    indentKids.push_back(leaf("Indent Using Spaces", [] { Application::instance().setIndentUsingSpaces(true); }));
+    indentKids.push_back(leaf("Indent Using Tabs", [] { Application::instance().setIndentUsingSpaces(false); }));
+    for (int n = 1; n <= 8; ++n) indentKids.push_back(leaf("Tab Width: " + std::to_string(n), [n] { Application::instance().setTabWidth(n); }));
+    indentKids.push_back(leaf("Guess Settings From Buffer", [] { Application::instance().detectIndentation(); }));
+    indentKids.push_back(leaf("Convert Indentation to Spaces", [] { Application::instance().convertIndentationMenu(true); }));
+    indentKids.push_back(leaf("Convert Indentation to Tabs", [] { Application::instance().convertIndentationMenu(false); }));
+    replaceItem(view, "Indentation...", group("Indentation", std::move(indentKids)));
+    for (auto& item : edit) {
+        if (item.label != "Code Folding") continue;
+        for (int level = 4; level <= 9; ++level) item.children.push_back(leaf("Fold Level " + std::to_string(level), [level] { Application::instance().foldByLevel(level); }));
+    }
+    std::vector<TitlebarMenuItem> focusKids, moveKids;
+    for (size_t g = 0; g < 4; ++g) {
+        focusKids.push_back(leaf("Group " + std::to_string(g + 1), [g] { Application::instance().focusGroup(g); }));
+        moveKids.push_back(leaf("Group " + std::to_string(g + 1), [g] { Application::instance().moveFileToGroup(g); }));
+    }
+    for (size_t i = 0; i < view.size(); ++i)
+        if (view[i].label == "Groups") {
+            view.insert(view.begin() + static_cast<std::ptrdiff_t>(i) + 1, group("Move File to Group", std::move(moveKids)));
+            view.insert(view.begin() + static_cast<std::ptrdiff_t>(i) + 1, group("Focus Group", std::move(focusKids)));
+            break;
+        }
     for (auto& list : submenus_) {
         for (size_t i = 1; i + 1 < list.size();) {
             if (list[i].separator && !list[i - 1].children.empty() && !list[i + 1].children.empty()) list.erase(list.begin() + static_cast<std::ptrdiff_t>(i));
@@ -94,6 +125,23 @@ const std::vector<TitlebarMenuItem>* Titlebar::currentFlyout() const {
         return &recentFlyout_;
     }
     return nullptr;
+}
+
+// Rows a flyout may show before it scrolls: what fits on the display the window is on.
+int Titlebar::maxFlyoutRows() {
+    SDL_Window* window = SDL_GL_GetCurrentWindow();
+    int display = window ? SDL_GetWindowDisplayIndex(window) : 0;
+    SDL_Rect bounds{};
+    if (display < 0 || SDL_GetDisplayUsableBounds(display, &bounds) != 0) return 20;
+    return std::max(6, (bounds.h - 90) / 24);
+}
+
+// First visible row of the current flyout; resets when a different item opens it.
+int Titlebar::flyoutFirstRow(size_t count) {
+    if (flyoutOwner_ != submenuHovered_) { flyoutOwner_ = submenuHovered_; flyoutScroll_ = 0; }
+    int rows = flyoutRows(count);
+    flyoutScroll_ = std::clamp(flyoutScroll_, 0, std::max(0, static_cast<int>(count) - rows));
+    return flyoutScroll_;
 }
 
 static float flyoutWidth(FontAtlas& font, const std::vector<TitlebarMenuItem>& items) {
@@ -144,7 +192,7 @@ void Titlebar::getMenuPopupBounds(FontAtlas& font, float& x, float& y, float& w,
         maxY = std::max(maxY, submenuRect.y + submenuRect.h);
         if (const auto* fly = currentFlyout()) {
             int rw = static_cast<int>(flyoutWidth(font, *fly));
-            int rh = 2 + static_cast<int>(fly->size()) * 24 + 1;
+            int rh = 2 + flyoutRows(fly->size()) * 24 + 1;
             int rx = submenuRect.x + submenuRect.w + 2;
             int ry = submenuRect.y + 2 + submenuHovered_ * 24;
             if (rx + rw > 32000 - 4) rx = submenuRect.x - rw - 2;
@@ -279,7 +327,8 @@ void Titlebar::drawMenuPopup(FontAtlas& font, float ox, float oy) {
         glDisable(GL_SCISSOR_TEST);
         if (const auto* fly = currentFlyout()) {
             float rx = sx + sw + 2.f, ry = sy + 2.f + submenuHovered_ * itemH;
-            float rw = flyoutWidth(font, *fly), rh = 2.f + static_cast<float>(fly->size()) * itemH;
+            int first = flyoutFirstRow(fly->size()), rows = flyoutRows(fly->size());
+            float rw = flyoutWidth(font, *fly), rh = 2.f + static_cast<float>(rows) * itemH;
             bool popupLocal = ox != 0.f || oy != 0.f;
             if (!popupLocal) {
                 if (rx + rw > ww - 4.f) rx = sx - rw - 2.f;
@@ -287,19 +336,26 @@ void Titlebar::drawMenuPopup(FontAtlas& font, float ox, float oy) {
             }
             lastHasRecent_ = true; lastRecentX_ = rx + ox; lastRecentY_ = ry + oy; lastRecentW_ = rw; lastRecentH_ = rh;
             if (recentHovered_ >= static_cast<int>(fly->size()) || (recentHovered_ >= 0 && (*fly)[recentHovered_].separator)) recentHovered_ = -1;
+            if (recentHovered_ >= 0 && (recentHovered_ < first || recentHovered_ >= first + rows)) recentHovered_ = -1;
             v.clear();
             ar(rx, ry, rx + rw, ry + rh, 0.17f, 0.17f, 0.20f, 0.98f);
             ar(rx, ry, rx + rw, ry + 1, 0.30f, 0.30f, 0.35f, 1.f);
             if (recentHovered_ >= 0)
-                ar(rx + 2, ry + 2 + recentHovered_ * itemH, rx + rw - 2, ry + 2 + (recentHovered_ + 1) * itemH, 0.25f, 0.30f, 0.45f, 1.f);
+                ar(rx + 2, ry + 2 + (recentHovered_ - first) * itemH, rx + rw - 2, ry + 2 + (recentHovered_ - first + 1) * itemH, 0.25f, 0.30f, 0.45f, 1.f);
             flushSolid(v);
-            for (int i = 0; i < static_cast<int>(fly->size()); ++i) {
+            for (int row = 0; row < rows; ++row) {
+                int i = first + row;
                 const auto& item = (*fly)[i];
-                if (item.separator) { v.clear(); ar(rx + 8, ry + 13.f + i * itemH, rx + rw - 8, ry + 14.f + i * itemH, 0.3f, 0.3f, 0.33f, 1.f); flushSolid(v); continue; }
+                if (item.separator) { v.clear(); ar(rx + 8, ry + 13.f + row * itemH, rx + rw - 8, ry + 14.f + row * itemH, 0.3f, 0.3f, 0.33f, 1.f); flushSolid(v); continue; }
                 float b = recentHovered_ == i ? 1.f : 0.78f;
-                if (!item.action) b = 0.42f;
-                font.drawText(item.label, rx + 12.f, ry + 6.f + i * itemH, b, b, b, 1.f);
-                if (!item.shortcut.empty()) font.drawText(item.shortcut, rx + rw - font.measureText(item.shortcut) - 12.f, ry + 6.f + i * itemH, 0.5f, 0.5f, 0.55f, 1.f);
+                if (!item.action && !opensFlyout(item)) b = 0.42f;
+                font.drawText(item.label, rx + 12.f, ry + 6.f + row * itemH, b, b, b, 1.f);
+                if (!item.shortcut.empty()) font.drawText(item.shortcut, rx + rw - font.measureText(item.shortcut) - 12.f, ry + 6.f + row * itemH, 0.5f, 0.5f, 0.55f, 1.f);
+            }
+            if (rows < static_cast<int>(fly->size())) {  // scroll bar
+                float track = rh - 4.f, thumb = std::max(16.f, track * rows / static_cast<float>(fly->size()));
+                float top = ry + 2.f + (track - thumb) * first / static_cast<float>(fly->size() - rows);
+                v.clear(); ar(rx + rw - 5, top, rx + rw - 2, top + thumb, 0.45f, 0.45f, 0.5f, 1.f); flushSolid(v);
             }
         }
     }
@@ -410,7 +466,7 @@ bool Titlebar::handleMenuEvent(const SDL_Event& e) {
         recentHovered_ = -1;
         if (lastHasRecent_ && mx >= lastRecentX_ && mx < lastRecentX_ + lastRecentW_ && my >= lastRecentY_ && my < lastRecentY_ + lastRecentH_) {
             const auto* fly = currentFlyout();
-            int idx = (int)((my - lastRecentY_ - 2.f) / itemH);
+            int idx = (fly ? flyoutFirstRow(fly->size()) : 0) + (int)((my - lastRecentY_ - 2.f) / itemH);
             if (fly && idx >= 0 && idx < static_cast<int>(fly->size()) && !(*fly)[idx].separator) recentHovered_ = idx;
             return true;
         }
@@ -428,6 +484,7 @@ bool Titlebar::handleMenuEvent(const SDL_Event& e) {
         return true;
     }
     if (e.type == SDL_MOUSEWHEEL) {
+        if (lastHasRecent_) { flyoutScroll_ -= e.wheel.y * 3; return true; }  // clamped when drawn
         menuScroll_ -= e.wheel.y;
         clampMenuScroll();
         return true;
@@ -441,7 +498,7 @@ bool Titlebar::handleMenuEvent(const SDL_Event& e) {
         float mx = (float)e.button.x, my = (float)e.button.y;
         if (lastHasRecent_ && mx >= lastRecentX_ && mx < lastRecentX_ + lastRecentW_ && my >= lastRecentY_ && my < lastRecentY_ + lastRecentH_) {
             const auto* fly = currentFlyout();
-            int idx = (int)((my - lastRecentY_ - 2.f) / itemH);
+            int idx = (fly ? flyoutFirstRow(fly->size()) : 0) + (int)((my - lastRecentY_ - 2.f) / itemH);
             if (fly && idx >= 0 && idx < static_cast<int>(fly->size()) && !(*fly)[idx].separator && (*fly)[idx].action) {
                 auto action = (*fly)[idx].action;  // closeMenu() resets the hover state the flyout depends on
                 closeMenu();

@@ -2852,6 +2852,12 @@ const char* Application::syntaxLanguages[] = {
     "SublimeRC","Swift","TCL","Textile","TOML","TypeScript","XML","YAML"
 };
 
+std::vector<std::string> Application::syntaxLanguageNames() {
+    std::vector<std::string> names;
+    for (const char* name : syntaxLanguages) names.emplace_back(name);
+    return names;
+}
+
 struct PaletteCommandDef {
     const char* label;
     const char* shortcut;

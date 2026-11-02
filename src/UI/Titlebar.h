@@ -1,6 +1,7 @@
 #pragma once
 #include <SDL2/SDL.h>
 #include <string>
+#include <algorithm>
 #include <vector>
 #include <functional>
 
@@ -71,6 +72,11 @@ private:
     void nestMenuItems(std::vector<TitlebarMenuItem>& items, const std::string& first, const std::string& last, const std::string& group);
     const std::vector<TitlebarMenuItem>* currentFlyout() const;
     mutable std::vector<TitlebarMenuItem> recentFlyout_;
+    int flyoutScroll_ = 0;
+    int flyoutOwner_ = -2;
+    static int maxFlyoutRows();
+    int flyoutRows(size_t count) const { return static_cast<int>(std::min<size_t>(count, static_cast<size_t>(maxFlyoutRows()))); }
+    int flyoutFirstRow(size_t count);
     static bool opensFlyout(const TitlebarMenuItem& item) { return !item.children.empty() || (item.label == "Open Recent"); }
     void closeMenu() { menuOpen_ = false; menuHovered_ = -1; submenuOpen_ = -1; submenuHovered_ = -1; }
     void drawMenu(class FontAtlas& font);

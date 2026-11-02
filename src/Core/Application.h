@@ -248,6 +248,12 @@ public:
     void jumpBack();
     void jumpForward();
     void openSyntaxPicker();
+    static std::vector<std::string> syntaxLanguageNames();
+    void setSyntaxByName(const std::string& name);
+    void setTabWidth(int width);
+    void setIndentUsingSpaces(bool spaces);
+    void detectIndentation();
+    void convertIndentationMenu(bool toSpaces);
     void openIndentationPicker();
     void insertLineBefore();
     void insertLineAfter();
