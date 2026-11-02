@@ -30,6 +30,10 @@ public:
     void setPluginSyntax(const std::string& syntaxPath, const std::string& colorSchemePath = "");
     void parse(const std::string& text);
     const std::string& languageName() const { return langName_; }
+    // Uses a real .sublime-syntax for highlighting; scopes are reduced to the editor's token classes.
+    void setSublimeSyntax(std::shared_ptr<class SublimeSyntax> syntax);
+    bool usesSublimeSyntax() const { return sublime_ != nullptr; }
+    static int classifyScope(const std::string& scope);
     std::vector<SyntaxToken> highlightLine(std::string_view line, size_t lineOffset) const;
     const SyntaxColor& scopeColor(int scope) const;
     int scopeStyle(int scope) const;  // 1 = bold, 2 = italic
@@ -53,6 +57,8 @@ private:
     void* tree_ = nullptr;
     const void* language_ = nullptr;
     std::shared_ptr<const std::vector<SyntaxToken>> treeTokens_;
+    std::shared_ptr<class SublimeSyntax> sublime_;
+    std::shared_ptr<class SublimeSyntax> pendingSublime_;
     mutable std::mutex tokenMutex_;
     std::thread parseWorker_;
     std::mutex parseMutex_;

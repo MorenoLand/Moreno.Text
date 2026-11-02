@@ -1,4 +1,5 @@
 #include "Syntax/SyntaxHighlighter.h"
+#include "Syntax/SublimeSyntax.h"
 #include "Theme/ThemeEngine.h"
 #include "api.h"
 #include <cctype>
@@ -29,7 +30,47 @@ extern "C" const TSLanguage *tree_sitter_c(void);
 extern "C" const TSLanguage *tree_sitter_cpp(void);
 extern "C" const TSLanguage *tree_sitter_markdown(void);
 
+// Maps a scope string (outermost first) to one of the editor's token classes.
+int SyntaxHighlighter::classifyScope(const std::string& scope) {
+    // innermost scope first; punctuation and meta scopes defer to the scope around them
+    std::vector<std::string> parts;
+    size_t pos = 0;
+    while (pos < scope.size()) {
+        size_t sp = scope.find(' ', pos);
+        if (sp == std::string::npos) sp = scope.size();
+        if (sp > pos) parts.push_back(scope.substr(pos, sp - pos));
+        pos = sp + 1;
+    }
+    auto starts = [](const std::string& s, const char* prefix) { return s.rfind(prefix, 0) == 0; };
+    for (size_t i = parts.size(); i-- > 0;) {
+        const std::string& p = parts[i];
+        if (starts(p, "comment")) return 3;
+        if (starts(p, "string") || starts(p, "constant.character")) return 2;
+        if (starts(p, "constant.numeric")) return 4;
+        if (starts(p, "constant.language") || starts(p, "constant.other")) return 4;
+        if (starts(p, "keyword.operator")) return 7;
+        if (starts(p, "keyword") || starts(p, "storage.modifier")) return 1;
+        if (starts(p, "storage.type.function")) return 1;
+        if (starts(p, "storage")) return 5;
+        if (starts(p, "entity.name.function") || starts(p, "support.function") || starts(p, "variable.function") || starts(p, "meta.function-call")) return 6;
+        if (starts(p, "entity.name") || starts(p, "support.type") || starts(p, "support.class") || starts(p, "entity.other.inherited-class")) return 5;
+        if (starts(p, "variable.language") || starts(p, "support.constant")) return 4;
+    }
+    return 0;
+}
+
+void SyntaxHighlighter::setSublimeSyntax(std::shared_ptr<SublimeSyntax> syntax) {
+    keywords_.clear(); builtins_.clear(); types_.clear();
+    { std::lock_guard<std::mutex> lock(tokenMutex_); treeTokens_ = std::make_shared<const std::vector<SyntaxToken>>(); }
+    language_ = nullptr;
+    pluginSyntaxMode_ = PluginSyntaxMode::None;
+    useLocalColors_ = false;
+    sublime_ = std::move(syntax);
+    langName_ = sublime_ ? sublime_->name() : std::string("Plain Text");
+}
+
 void SyntaxHighlighter::setLanguage(const std::string& ext) {
+    sublime_.reset();
     keywords_.clear(); builtins_.clear(); types_.clear();
     { std::lock_guard<std::mutex> lock(tokenMutex_); treeTokens_ = std::make_shared<const std::vector<SyntaxToken>>(); }
     language_ = nullptr;
@@ -37,6 +78,12 @@ void SyntaxHighlighter::setLanguage(const std::string& ext) {
     useLocalColors_ = false;
     std::string e = ext;
     std::transform(e.begin(), e.end(), e.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+    static const char* treeSitterExts[] = {"js", "jsx", "mjs", "cjs", "ts", "tsx", "py", "pyw", "c", "cpp", "cc", "cxx", "c++", "hh", "h", "hpp", "hxx", "ipp", "inl", "json", "jsonc", "md", "markdown", nullptr};
+    bool treeSitter = false;
+    for (int i = 0; treeSitterExts[i]; ++i) if (e == treeSitterExts[i]) treeSitter = true;
+    if (!treeSitter && !e.empty() && SyntaxLibrary::shared().ready()) {
+        if (auto syntax = SyntaxLibrary::shared().byExtension(e)) { setSublimeSyntax(syntax); return; }
+    }
     if (e == "js" || e == "jsx" || e == "mjs" || e == "cjs") { setupJS(); setTreeSitterLanguage("JavaScript", tree_sitter_javascript()); }
     else if (e == "ts" || e == "tsx") { setupJS(); langName_ = "TypeScript"; setTreeSitterLanguage("TypeScript", tree_sitter_javascript()); }
     else if (e == "py" || e == "pyw") { setupPython(); setTreeSitterLanguage("Python", tree_sitter_python()); }
@@ -113,6 +160,10 @@ void SyntaxHighlighter::setLanguageByName(const std::string& name) {
         {"KSP configuration","kts"},{"Rails","rb"},{"Plain Text",""},
     };
     for (auto& m : map) if (name == m.name) { setLanguage(m.ext); return; }
+    if (SyntaxLibrary::shared().ready()) {
+        if (auto syntax = SyntaxLibrary::shared().byName(name)) { setSublimeSyntax(syntax); return; }
+    }
+    sublime_.reset();
     keywords_.clear(); builtins_.clear(); types_.clear();
     { std::lock_guard<std::mutex> lock(tokenMutex_); treeTokens_ = std::make_shared<const std::vector<SyntaxToken>>(); }
     language_ = nullptr;
@@ -258,6 +309,7 @@ void loadPluginColorSchemeFile(const std::string& colorSchemePath, SyntaxColor c
 }
 
 void SyntaxHighlighter::setPluginSyntax(const std::string& syntaxPath, const std::string& colorSchemePath) {
+    sublime_.reset();
     keywords_.clear(); builtins_.clear(); types_.clear();
     { std::lock_guard<std::mutex> lock(tokenMutex_); treeTokens_ = std::make_shared<const std::vector<SyntaxToken>>(); }
     language_ = nullptr;
@@ -370,6 +422,7 @@ void SyntaxHighlighter::parseWorkerLoop() {
     for (;;) {
         std::string text;
         const void* language = nullptr;
+        std::shared_ptr<SublimeSyntax> sublime;
         uint64_t generation = 0;
         {
             std::unique_lock<std::mutex> lock(parseMutex_);
@@ -377,10 +430,20 @@ void SyntaxHighlighter::parseWorkerLoop() {
             if (parseStop_) return;
             text = std::move(pendingText_);
             language = pendingLanguage_;
+            sublime = pendingSublime_;
             generation = pendingGeneration_;
             parseRequested_ = false;
         }
-        auto parsed = std::make_shared<const std::vector<SyntaxToken>>(parseTreeTokens(text, language));
+        std::vector<SyntaxToken> tokens;
+        if (sublime) {
+            for (const ScopeSpan& span : sublime->tokenize(text, &SyntaxLibrary::shared())) {
+                int cls = classifyScope(span.scope);
+                if (cls == 0) continue;
+                if (!tokens.empty() && tokens.back().scope == cls && tokens.back().start + tokens.back().length == span.start) tokens.back().length += span.length;
+                else tokens.push_back({span.start, span.length, cls});
+            }
+        } else tokens = parseTreeTokens(text, language);
+        auto parsed = std::make_shared<const std::vector<SyntaxToken>>(std::move(tokens));
         if (generation == latestGeneration_.load()) {
             std::lock_guard<std::mutex> lock(tokenMutex_);
             treeTokens_ = std::move(parsed);
@@ -389,7 +452,7 @@ void SyntaxHighlighter::parseWorkerLoop() {
 }
 
 void SyntaxHighlighter::parse(const std::string& text) {
-    if (!language_) {
+    if (!language_ && !sublime_) {
         std::lock_guard<std::mutex> lock(tokenMutex_);
         treeTokens_ = std::make_shared<const std::vector<SyntaxToken>>();
         return;
@@ -399,6 +462,7 @@ void SyntaxHighlighter::parse(const std::string& text) {
         std::lock_guard<std::mutex> lock(parseMutex_);
         pendingText_ = text;
         pendingLanguage_ = language_;
+        pendingSublime_ = sublime_;
         pendingGeneration_++;
         latestGeneration_.store(pendingGeneration_);
         parseRequested_ = true;

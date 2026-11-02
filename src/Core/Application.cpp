@@ -12,6 +12,7 @@
 #include "UI/Minimap.h"
 #include "UI/StatusBar.h"
 #include "Syntax/SyntaxHighlighter.h"
+#include "Syntax/SublimeSyntax.h"
 #include "Platform/Platform.h"
 #include "Core/FileBackedBuffer.h"
 #include "Core/Version.h"
@@ -601,6 +602,11 @@ bool Application::init(int argc, char** argv) {
         kb.addCommandHandler("toggle_side_bar", [this](){ toggleSidebar(); });
         registerCommandHandlers();
         loadKeymaps();
+    }
+    {   // real .sublime-syntax files from the packages folders and settings, loaded in the background
+        std::vector<std::string> dirs = {paths_.dataDir + "/Packages", paths_.dataDir + "/Installed Packages", paths_.cacheDir + "/Installed Packages", paths_.installedPackagesDir};
+        for (auto& extra : SettingsManager::instance().get<std::vector<std::string>>("syntax_paths", std::vector<std::string>())) dirs.push_back(extra);
+        std::thread([dirs] { SyntaxLibrary::shared().loadPaths(dirs); SyntaxLibrary::shared().setReady(); }).detach();
     }
     startupTick("settings, keymaps loaded");
     bool detachedLaunch = argc > 2 && std::string(argv[1]) == "--detached-tab";
@@ -2875,6 +2881,16 @@ const char* Application::syntaxLanguages[] = {
 std::vector<std::string> Application::syntaxLanguageNames() {
     std::vector<std::string> names;
     for (const char* name : syntaxLanguages) names.emplace_back(name);
+    // real Sublime syntaxes that are not in the built-in list
+    if (SyntaxLibrary::shared().ready()) {
+        std::vector<std::string> extra;
+        for (auto& syn : SyntaxLibrary::shared().all()) {
+            if (syn->name().empty() || std::find(names.begin(), names.end(), syn->name()) != names.end()) continue;
+            if (std::find(extra.begin(), extra.end(), syn->name()) == extra.end()) extra.push_back(syn->name());
+        }
+        std::sort(extra.begin(), extra.end());
+        names.insert(names.end(), extra.begin(), extra.end());
+    }
     return names;
 }
 
@@ -5363,6 +5379,10 @@ void Application::notifyPluginViewClosed(int id) {
 void Application::update() {
     pollBuild();
     pollPluginStart();
+    if (!syntaxLibraryApplied_ && SyntaxLibrary::shared().ready()) {  // syntaxes finished loading: use them for the open file
+        syntaxLibraryApplied_ = true;
+        if (!warmIdle_) { detectSyntax(); syntaxDirty_ = true; }
+    }
     if (!warmIdle_) {
         uint32_t t = SDL_GetTicks();
         if (warmNextSpareCheck_ == 0) warmNextSpareCheck_ = t + 4000;  // let this window finish starting first

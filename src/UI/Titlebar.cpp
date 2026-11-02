@@ -149,6 +149,11 @@ const std::vector<TitlebarMenuItem>* Titlebar::currentFlyout() const {
     auto& list = submenus_[submenuOpen_];
     if (submenuHovered_ >= static_cast<int>(list.size())) return nullptr;
     const TitlebarMenuItem& item = list[submenuHovered_];
+    if (submenuOpen_ == 4 && item.label == "Syntax") {  // rebuilt each time so syntaxes that finished loading appear
+        recentFlyout_.clear();
+        for (const std::string& name : Application::syntaxLanguageNames()) recentFlyout_.push_back({name, "", [name] { Application::instance().setSyntaxByName(name); }});
+        return &recentFlyout_;
+    }
     if (!item.children.empty()) return &item.children;
     if (submenuOpen_ == 0 && item.label == "Open Recent") {
         recentFlyout_.clear();

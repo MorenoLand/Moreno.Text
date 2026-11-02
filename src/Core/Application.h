@@ -591,6 +591,7 @@ private:
     bool running_ = true, dirty_ = false, binaryView_ = false;
     uintmax_t binaryFileSize_ = 0, binaryLoadedBytes_ = 0;
     bool pluginHostStartPending_ = false;
+    bool syntaxLibraryApplied_ = false;
     bool syntaxDirty_ = true;
     std::string textBuffer;
     mutable bool lineIndexDirty_ = true; mutable size_t lineIndexSize_ = 0;
