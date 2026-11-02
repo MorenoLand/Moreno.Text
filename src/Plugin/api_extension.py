@@ -1308,6 +1308,27 @@ def install_plugin(p):
         _synced = None
         _key = ''
 
+        def _send_regions(self, name, regions, scope, flags, erase=False):
+            bridge = os.environ.get('MORENO_BRIDGE_DIR', '')
+            if not bridge: return
+            rid = str(uuid.uuid4())
+            tmp = os.path.join(bridge, rid + '.tmp')
+            spans = []
+            for r in regions:
+                if not hasattr(r, 'a'): r = api.Region(*r)
+                spans.append([r.begin(), r.end()])
+            with open(tmp, 'w', encoding='utf-8') as fp:
+                json.dump({'type': 'view_regions', 'key': self._key, 'name': str(name), 'regions': spans, 'scope': str(scope), 'flags': int(flags), 'erase': bool(erase)}, fp)
+            os.replace(tmp, os.path.join(bridge, rid + '.request.json'))
+
+        def add_regions(self, key, regions, scope='', icon='', flags=0, *args, **kwargs):
+            api.View.add_regions(self, key, regions, scope, icon, flags, *args, **kwargs)
+            self._send_regions(key, regions or [], scope, flags)
+
+        def erase_regions(self, key):
+            api.View.erase_regions(self, key)
+            self._send_regions(key, [], '', 0, True)
+
         # Plugin edits are sent back to the editor as one replaced range (code point offsets).
         def _emit(self, focus=False):
             old = self._synced

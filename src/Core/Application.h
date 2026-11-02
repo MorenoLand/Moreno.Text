@@ -719,6 +719,9 @@ private:
     void firePluginEvent(const char* event, const std::string& key, bool withContent);
     void firePluginEvent(const char* event, bool withContent = false);
     void pollPluginEvents();
+    struct PluginRegionSet { std::vector<std::pair<size_t, size_t>> ranges; int flags = 0; float r = 0.f, g = 0.f, b = 0.f; };
+    std::map<std::string, std::map<std::string, PluginRegionSet>> pluginRegions_;  // tab key -> region name -> regions
+    void applyPluginRegions(const nlohmann::json& j);
     int applyPluginViewEdit(const nlohmann::json& j);
     bool pluginEventsChecked_ = false, pluginEventsEnabled_ = false;
     std::string pluginActiveKey_;

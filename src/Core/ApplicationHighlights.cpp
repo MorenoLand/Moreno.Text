@@ -36,7 +36,7 @@ size_t Application::matchingBracketOf(size_t at) const {
 void Application::drawEditorHighlights(float drawTextX, float textOriginY, float lineStep, float top, float bottom, size_t firstLine, size_t lastLine,
                                        float gutterRight, float editorRight) {
     if (wordWrap_ || binaryView_ || selections_.empty()) return;
-    auto box = [&](size_t from, size_t to, float r, float g, float b, float a, bool underlineOnly) {
+    auto box = [&](size_t from, size_t to, float r, float g, float b, float a, int mode) {
         if (to <= from || to > textBuffer.size()) return;
         size_t line = lineOfPos(from);
         if (line < firstLine || line > lastLine || isFolded(line)) return;
@@ -50,11 +50,35 @@ void Application::drawEditorHighlights(float drawTextX, float textOriginY, float
         if (x1 <= x0) return;
         auto& v = solidVerts_;
         auto rect = [&](float ax, float ay, float bx, float by) { v.insert(v.end(), {ax,ay,0,0,r,g,b,a, ax,by,0,0,r,g,b,a, bx,by,0,0,r,g,b,a, ax,ay,0,0,r,g,b,a, bx,by,0,0,r,g,b,a, bx,ay,0,0,r,g,b,a}); };
-        if (underlineOnly) { rect(x0, y0 + lineStep - 2.f, x1, y0 + lineStep); return; }
+        if (mode == 1) { rect(x0, y0 + lineStep - 2.f, x1, y0 + lineStep); return; }
+        if (mode == 2) { rect(x0, y0 + 1.f, x1, y0 + 2.f); rect(x0, y0 + lineStep - 2.f, x1, y0 + lineStep - 1.f); rect(x0, y0 + 1.f, x0 + 1.f, y0 + lineStep - 1.f); rect(x1 - 1.f, y0 + 1.f, x1, y0 + lineStep - 1.f); return; }
         rect(x0, y0 + 1.f, x1, y0 + lineStep - 1.f);
     };
     size_t visibleStart = lineStartForLine(firstLine);
     size_t visibleEnd = lastLine + 1 < totalLines() ? lineStartForLine(lastLine + 1) : textBuffer.size();
+
+    // Regions a plugin added with view.add_regions
+    if (!pluginRegions_.empty()) {
+        auto found = pluginRegions_.find(pluginEventKey(activeTab_));
+        if (found != pluginRegions_.end()) {
+            for (auto& [name, set] : found->second) {
+                const int kNoFill = 32, kHidden = 128, kNoOutline = 256, kUnderline = 512 | 1024 | 2048;
+                if (set.flags & kHidden) continue;
+                bool fill = !(set.flags & kNoFill), outline = !(set.flags & kNoOutline), underline = (set.flags & kUnderline) != 0;
+                for (auto& [from, to] : set.ranges) {
+                    if (to > textBuffer.size() || from >= to || to < visibleStart || from > visibleEnd) continue;
+                    size_t line = lineOfPos(from), endLine = lineOfPos(to);
+                    for (size_t l = std::max(line, firstLine); l <= endLine && l <= lastLine; ++l) {
+                        size_t ls = lineStartForLine(l);
+                        size_t a = std::max(from, ls), b = std::min(to, lineEnd(ls));
+                        if (fill && !underline) box(a, b, set.r, set.g, set.b, 0.22f, 0);
+                        if (underline) box(a, b, set.r, set.g, set.b, 0.95f, 1);
+                        else if (outline) box(a, b, set.r, set.g, set.b, 0.7f, 2);
+                    }
+                }
+            }
+        }
+    }
 
     // Find matches
     if (find_.active && !find_.query.empty() && !find_.matches.empty()) {

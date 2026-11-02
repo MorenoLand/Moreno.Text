@@ -148,3 +148,41 @@ int Application::applyPluginViewEdit(const nlohmann::json& j) {
     }
     return 0;
 }
+
+namespace {
+// Picks a colour for add_regions from its scope name (a stand-in for looking the scope up in the colour scheme).
+void regionColor(const std::string& scope, float& r, float& g, float& b) {
+    auto has = [&](const char* word) { return scope.find(word) != std::string::npos; };
+    if (has("redish") || has("error") || has("invalid") || has("deleted")) { r = 0.90f; g = 0.30f; b = 0.30f; }
+    else if (has("orangish") || has("warn")) { r = 0.95f; g = 0.60f; b = 0.20f; }
+    else if (has("yellowish") || has("keyword") || has("comment")) { r = 0.95f; g = 0.80f; b = 0.25f; }
+    else if (has("greenish") || has("string") || has("inserted")) { r = 0.40f; g = 0.78f; b = 0.40f; }
+    else if (has("bluish") || has("entity")) { r = 0.35f; g = 0.60f; b = 0.95f; }
+    else if (has("purplish") || has("constant")) { r = 0.65f; g = 0.45f; b = 0.90f; }
+    else if (has("pinkish")) { r = 0.95f; g = 0.50f; b = 0.75f; }
+    else { r = 0.60f; g = 0.70f; b = 0.80f; }
+}
+}  // namespace
+
+// Stores a view.add_regions / erase_regions call from the plugin host; drawEditorHighlights paints them.
+void Application::applyPluginRegions(const nlohmann::json& j) {
+    std::string key = j.value("key", ""), name = j.value("name", "");
+    if (key.empty() || name.empty()) return;
+    if (j.value("erase", false)) {
+        auto it = pluginRegions_.find(key);
+        if (it != pluginRegions_.end()) it->second.erase(name);
+        return;
+    }
+    const std::string* text = nullptr;
+    for (size_t i = 0; i < tabs_.size(); ++i)
+        if (pluginEventKey(i) == key) { text = i == activeTab_ ? &textBuffer : &tabs_[i].text; break; }
+    if (!text || !j.contains("regions") || !j["regions"].is_array()) return;
+    PluginRegionSet set;
+    set.flags = j.value("flags", 0);
+    regionColor(j.value("scope", ""), set.r, set.g, set.b);
+    for (auto& r : j["regions"]) {
+        if (!r.is_array() || r.size() != 2 || set.ranges.size() >= 2000) continue;
+        set.ranges.emplace_back(cpToByte(*text, r[0].get<size_t>()), cpToByte(*text, r[1].get<size_t>()));
+    }
+    pluginRegions_[key][name] = std::move(set);
+}

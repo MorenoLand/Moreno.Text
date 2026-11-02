@@ -2161,6 +2161,7 @@ void Application::closeTabNow(size_t index) {
         std::string eventKey = pluginEventKey(index);
         if (eventKey == pluginActiveKey_) pluginActiveKey_.clear();
         pluginSeenKeys_.erase(eventKey);
+        pluginRegions_.erase(eventKey);
         firePluginEvent("on_close", eventKey, false);
     }
     if (!pluginTab && !tabs_[index].filePath.empty()) {
@@ -4893,6 +4894,11 @@ void Application::pollPluginBridge() {
             pluginStatusText_ = j.value("text", "");
             pluginStatusUntil_ = SDL_GetTicks() + 5000;
             handledPluginRequests_.insert(chosen.string());
+            return;
+        }
+        if (type == "view_regions") {
+            handledPluginRequests_.insert(chosen.string());
+            applyPluginRegions(j);
             return;
         }
         if (type == "view_edit") {

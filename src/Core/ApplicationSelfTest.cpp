@@ -424,6 +424,17 @@ int Application::runSelfTest(const std::string& resultPath) {
         expect("stale plugin edit is dropped", "h\303\251llo world");
     }
 
+    {
+        fresh("h\303\251llo world", 0);
+        std::string key = pluginEventKey(activeTab_);
+        applyPluginRegions({{"key", key}, {"name", "lint"}, {"regions", nlohmann::json::array({nlohmann::json::array({2, 5})})}, {"scope", "region.redish"}, {"flags", 0}});
+        auto it = pluginRegions_.find(key);
+        bool ok = it != pluginRegions_.end() && it->second.count("lint") && it->second["lint"].ranges.size() == 1 && it->second["lint"].ranges[0].first == 3 && it->second["lint"].ranges[0].second == 6;
+        check("plugin regions are stored as byte ranges", ok);
+        applyPluginRegions({{"key", key}, {"name", "lint"}, {"erase", true}});
+        check("plugin regions can be erased", pluginRegions_[key].count("lint") == 0);
+    }
+
     std::ofstream out(resultPath, std::ios::binary | std::ios::trunc);
     out << report.str() << (failures ? "FAILED " : "ALL PASSED ") << failures << "\n";
     return failures ? 1 : 0;
