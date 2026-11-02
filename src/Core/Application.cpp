@@ -394,10 +394,15 @@ int Application::run(int argc, char** argv) {
         }
     }
     while (running_) {
+        if (warmIdle_) {
+            handleEvents();
+            pollWarmSpare();
+            if (warmIdle_) { SDL_Delay(30); continue; }
+        }
         static int frames = 0;
         if (frames < 3) startupTick("frame start");
         handleEvents(); update(); render();
-        if (frames == 0 && window_) SDL_ShowWindow(window_);  // shown once the first frame is drawn, so it never appears blank
+        if (showWindowPending_ && window_) { SDL_ShowWindow(window_); showWindowPending_ = false; }  // shown once the first frame is drawn, so it never appears blank
         if (frames < 3) { startupTick("frame done"); ++frames; }
         if (pluginHostStartPending_) {
             pluginHostStartPending_ = false;
@@ -450,13 +455,18 @@ static void resizeRendererForWindow(SDL_Window* window) {
 
 bool Application::init(int argc, char** argv) {
     startupTick("init begin");
+    if (argc > 2 && std::string(argv[1]) == "--warm") {
+        warmIdle_ = true;
+        showWindowPending_ = false;
+        try { warmOwnerPid_ = std::stoul(argv[2]); } catch (...) {}
+    }
     initPaths();
     static ConsoleBuf coutBuf(consoleBuffer_), cerrBuf(consoleBuffer_);
     static std::streambuf* oldCout = std::cout.rdbuf(&coutBuf);
     static std::streambuf* oldCerr = std::cerr.rdbuf(&cerrBuf);
     (void)oldCout; (void)oldCerr;
     fs::create_directories(paths_.localDir);
-    {
+    if (!warmIdle_) {
         std::ofstream clearLog(fs::path(paths_.localDir) / "Console.log", std::ios::binary | std::ios::trunc);
     }
     try {
@@ -595,7 +605,7 @@ bool Application::init(int argc, char** argv) {
     startupTick("settings, keymaps loaded");
     bool detachedLaunch = argc > 2 && std::string(argv[1]) == "--detached-tab";
     (void)detachedLaunch;
-    pluginHostStartPending_ = true;  // started in the background after the first frame
+    pluginHostStartPending_ = !warmIdle_;  // started in the background after the first frame
     selections_.emplace_back(0);
     TabBuffer initTab; initTab.fileName = "untitled"; initTab.selections.emplace_back(0);
     tabs_.push_back(std::move(initTab));
@@ -694,7 +704,9 @@ bool Application::init(int argc, char** argv) {
     }
     SDL_StartTextInput();
     startupTick("window created");
-    if (detachedLaunch && fs::exists(argv[2])) {
+    if (warmIdle_) {
+        // spare window: stays empty and hidden until a tab is handed over
+    } else if (detachedLaunch && fs::exists(argv[2])) {
         tabs_.clear();
         selections_.clear();
         try {
@@ -717,6 +729,7 @@ bool Application::init(int argc, char** argv) {
     }
     else if (!loadSession()) newBuffer();
     startupTick("init done");
+    if (warmIdle_) markWarmReady();
     return true;
 }
 
@@ -777,6 +790,7 @@ void Application::loadRecentFiles() {
 }
 
 void Application::saveRecentFiles() const {
+    if (warmIdle_) return;
     try {
         fs::create_directories(paths_.localDir);
         nlohmann::json data = nlohmann::json::array();
@@ -870,6 +884,7 @@ bool Application::loadSession() {
 }
 
 void Application::saveSession() {
+    if (warmIdle_) return;
     saveCurrentTab();
     try {
         fs::create_directories(paths_.localDir);
@@ -2334,6 +2349,39 @@ bool Application::detachTabToExistingWindow(size_t index) {
     return false;
 }
 
+// Turns the idle spare window into a normal one showing the handed-over tab.
+void Application::activateWarmSpare(const std::string& handoff, int x, int y) {
+    warmIdle_ = false;
+    tabs_.clear();
+    selections_.clear();
+    try {
+        std::ifstream in(handoff, std::ios::binary);
+        nlohmann::json data;
+        in >> data;
+        in.close();
+        tabs_.push_back(tabFromDetachedJson(data));
+        activeTab_ = 0;
+        loadTab(0);
+        std::error_code ec;
+        fs::remove(handoff, ec);
+    } catch (...) {
+        newBuffer();
+    }
+#ifdef _WIN32
+    MONITORINFO monitor{sizeof(monitor)};
+    GetMonitorInfoA(MonitorFromPoint(POINT{x, y}, MONITOR_DEFAULTTONEAREST), &monitor);
+    int wx = std::clamp(x - 140, (int)monitor.rcWork.left, std::max((int)monitor.rcWork.left, (int)monitor.rcWork.right - 400));
+    int wy = std::clamp(y - 20, (int)monitor.rcWork.top, std::max((int)monitor.rcWork.top, (int)monitor.rcWork.bottom - 220));
+    SDL_SetWindowPosition(window_, wx, wy);
+#else
+    (void)x; (void)y;
+#endif
+    updateTitle();
+    showWindowPending_ = true;
+    pluginHostStartPending_ = true;
+    warmNextSpareCheck_ = SDL_GetTicks() + 1500;
+}
+
 bool Application::detachTabToNewWindow(size_t index) {
     saveCurrentTab();
     if (index >= tabs_.size()) return false;
@@ -2365,6 +2413,7 @@ bool Application::detachTabToNewWindow(size_t index) {
 #ifdef _WIN32
     int releaseX = 0, releaseY = 0;
     SDL_GetGlobalMouseState(&releaseX, &releaseY);
+    if (!claimWarmSpare(handoff.string(), releaseX, releaseY)) {
     std::string command = "\"" + exe.string() + "\" --detached-tab \"" + handoff.string() + "\" --position " + std::to_string(releaseX) + " " + std::to_string(releaseY);
     STARTUPINFOA si = {}; si.cb = sizeof(si); si.dwFlags = STARTF_USESHOWWINDOW; si.wShowWindow = SW_SHOWNORMAL;
     PROCESS_INFORMATION pi = {};
@@ -2374,6 +2423,7 @@ bool Application::detachTabToNewWindow(size_t index) {
     if (!ok) return false;
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
+    }
 #elif defined(__APPLE__) || defined(__linux__)
     std::string command = "\"" + exe.string() + "\" --detached-tab \"" + handoff.string() + "\" &";
     if (std::system(command.c_str()) != 0) return false;
@@ -5252,6 +5302,11 @@ void Application::notifyPluginViewClosed(int id) {
 void Application::update() {
     pollBuild();
     pollPluginStart();
+    if (!warmIdle_) {
+        uint32_t t = SDL_GetTicks();
+        if (warmNextSpareCheck_ == 0) warmNextSpareCheck_ = t + 4000;  // let this window finish starting first
+        else if (t >= warmNextSpareCheck_) { warmNextSpareCheck_ = t + 20000; ensureWarmSpare(); }
+    }
     pollExternalChanges();
     trackSelectionHistory();
     pollConsoleLog();
@@ -6382,9 +6437,11 @@ void Application::render() {
 
 void Application::shutdown() {
     if (pluginStartFuture_.valid()) pluginStartFuture_.wait();
+    bool idleSpare = warmIdle_;
+    removeWarmFiles();
     saveSession();
     saveRecentFiles();
-    if (window_) {
+    if (window_ && !idleSpare) {
         int x = 0, y = 0, w = 0, h = 0;
         SDL_GetWindowPosition(window_, &x, &y); SDL_GetWindowSize(window_, &w, &h);
         if (borderlessMaximized_) { x = restoreWindowX_; y = restoreWindowY_; w = restoreWindowW_; h = restoreWindowH_; }
@@ -6400,8 +6457,10 @@ void Application::shutdown() {
     if (textCursor_) { SDL_FreeCursor(textCursor_); textCursor_ = nullptr; }
     fontAtlas().destroy(); uiFontAtlas().destroy(); GLRenderer::destroy();
     SDL_StopTextInput(); SDL_GL_DeleteContext(glContext_); SDL_DestroyWindow(window_); SDL_Quit();
-    PluginHostPaths pluginPaths{paths_.exeDir, paths_.dataDir, paths_.packagesDir, paths_.installedPackagesDir, paths_.cacheDir, paths_.libDir};
-    PluginHost::stop(pluginPaths);
+    if (!idleSpare) {
+        PluginHostPaths pluginPaths{paths_.exeDir, paths_.dataDir, paths_.packagesDir, paths_.installedPackagesDir, paths_.cacheDir, paths_.libDir};
+        PluginHost::stop(pluginPaths);
+    }
 }
 
 int main(int argc, char** argv) { return Application::instance().run(argc, argv); }

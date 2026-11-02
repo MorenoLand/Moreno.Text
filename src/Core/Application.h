@@ -738,6 +738,17 @@ private:
     void firePluginEvent(const char* event, const std::string& key, bool withContent);
     void firePluginEvent(const char* event, bool withContent = false);
     void pollPluginEvents();
+    // pre-warmed spare window (see ApplicationWarm.cpp)
+    bool warmIdle_ = false;
+    bool showWindowPending_ = true;
+    unsigned long warmOwnerPid_ = 0;
+    uint32_t warmLastPoll_ = 0, warmLastOwnerCheck_ = 0, warmNextSpareCheck_ = 0;
+    void ensureWarmSpare();
+    bool claimWarmSpare(const std::string& handoff, int x, int y);
+    void pollWarmSpare();
+    void removeWarmFiles();
+    void markWarmReady();
+    void activateWarmSpare(const std::string& handoff, int x, int y);
     struct PluginStartResult { bool anyScripts = false; std::vector<PluginPaletteCommand> commands; };
     std::future<PluginStartResult> pluginStartFuture_;
     void startPluginsAsync();
