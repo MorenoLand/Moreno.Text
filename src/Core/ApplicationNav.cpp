@@ -235,6 +235,7 @@ void Application::showCompletions() {
 }
 
 void Application::setLayoutColumns(size_t columns) {
+    layoutCols_ = 0;  // plain columns; setLayoutGrid sets the grid again after calling this
     saveCurrentTab();
     size_t base = activeTab_;
     if (columns <= 1) { collapseEditorGroupsTo(base); loadTab(base); return; }

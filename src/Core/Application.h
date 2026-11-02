@@ -396,6 +396,7 @@ public:
     void applyColorScheme(const std::string& path);
     void setLayoutColumns(size_t columns);
     void setLayoutGrid(size_t cols, size_t rows);
+    void setMaxColumns(size_t columns);
     struct PaneRect { float l = 0, t = 0, r = 0, b = 0; };
     void layoutGrid(size_t groupCount, size_t& cols, size_t& rows) const;
     PaneRect paneRectFor(size_t group, size_t groupCount, float areaLeft, float areaRight, float areaTop, float areaBottom) const;
@@ -787,7 +788,15 @@ private:
     std::map<std::string, std::pair<uint32_t, bool>> pluginContextCache_;
     uint32_t pluginContextDownUntil_ = 0;
     void handlePluginRpc(const std::string& type, const nlohmann::json& j);
-    struct PluginRegionSet { std::vector<std::pair<size_t, size_t>> ranges; int flags = 0; float r = 0.f, g = 0.f, b = 0.f; };
+    struct PluginRegionSet { std::vector<std::pair<size_t, size_t>> ranges; int flags = 0; float r = 0.f, g = 0.f, b = 0.f; std::string icon; };
+    struct PluginPhantom { size_t offset = 0; std::string text; };
+    std::map<std::string, std::vector<PluginPhantom>> pluginPhantoms_;  // tab key -> phantoms
+    struct PluginPopup { bool active = false; std::string key; size_t offset = 0; std::vector<std::string> lines; uint32_t shownAt = 0; } pluginPopup_;
+    void applyPluginPhantoms(const nlohmann::json& j);
+    void applyPluginPopup(const nlohmann::json& j);
+    void drawPluginPhantoms(float drawTextX, float textOriginY, float lineStep, float top, float bottom, size_t firstLine, size_t lastLine, float clipLeft, float clipRight);
+    void drawPluginGutterIcons(float gutterRight, float textOriginY, float lineStep, float top, float bottom, size_t firstLine, size_t lastLine);
+    void drawPluginPopup(float drawTextX, float textOriginY, float lineStep, float fww, float fwh);
     std::map<std::string, std::map<std::string, PluginRegionSet>> pluginRegions_;  // tab key -> region name -> regions
     void applyPluginRegions(const nlohmann::json& j);
     int applyPluginViewEdit(const nlohmann::json& j);

@@ -3613,6 +3613,7 @@ void Application::handleEvents() {
     while (SDL_PollEvent(&e)) {
         if (e.type == SDL_QUIT) { running_ = false; return; }
         if (handleMiddleColumnSelect(e)) continue;
+        if (pluginPopup_.active && (e.type == SDL_MOUSEBUTTONDOWN || (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_ESCAPE))) pluginPopup_.active = false;
         if (e.type == SDL_DROPFILE) {
             if (e.drop.file) {
                 std::string dropped(e.drop.file);
@@ -5092,6 +5093,16 @@ void Application::pollPluginBridge() {
             applyPluginCompletions(j);
             return;
         }
+        if (type == "view_phantoms") {
+            handledPluginRequests_.insert(chosen.string());
+            applyPluginPhantoms(j);
+            return;
+        }
+        if (type == "view_popup") {
+            handledPluginRequests_.insert(chosen.string());
+            applyPluginPopup(j);
+            return;
+        }
         if (type == "view_regions") {
             handledPluginRequests_.insert(chosen.string());
             applyPluginRegions(j);
@@ -5577,6 +5588,7 @@ void Application::render() {
     flushSolid();
     gutter_->draw(fontAtlas(), lineCount, currentLine, firstVisibleLine, activePaneLeft, firstVisibleY, lineStep, fwh - sbH, tbH);
     drawModificationMarkers(gutterRight, textOriginY, lineStep, tbH, editorBottom);
+    drawPluginGutterIcons(gutterRight, textOriginY, lineStep, tbH, editorBottom, firstRenderLine, lastRenderLine);
     flushSolid();
 
     glEnable(GL_SCISSOR_TEST);
@@ -5725,6 +5737,7 @@ void Application::render() {
         ++lineIdx; lStart = lEnd + 1;
         if (lineIdx > lastRenderLine || y > fwh) break;
     }
+    drawPluginPhantoms(drawTextX, textOriginY, lineStep, tbH, editorBottom, firstRenderLine, lastRenderLine, textX, editorRight);
 
     {
         for (auto& s : selections_) {
@@ -5902,6 +5915,7 @@ void Application::render() {
         minimap_->draw(fontAtlas(), *syntax_, textBuffer, mmX, textOriginY, fwh - findPanelH, tbH, gutterW, lineStep, scrollY_, mmMaxScroll, mmOver);
     }
     if (activeRect.b < fwh - windowSbH - 0.5f) addSolid(activePaneLeft, activeRect.b - 1.f, activePaneRight, activeRect.b, 0.35f, 0.37f, 0.43f, 1.f);
+    drawPluginPopup(drawTextX, textOriginY, lineStep, fww, fwh);
     tbH = windowTbH; sbH = windowSbH; findPanelH = windowFindPanelH;
     // status bar
     std::string branch;

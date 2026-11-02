@@ -1350,22 +1350,64 @@ def install_plugin(p):
         _synced = None
         _key = ''
 
-        def _send_regions(self, name, regions, scope, flags, erase=False):
+        def _publish(self, kind, payload):
             bridge = os.environ.get('MORENO_BRIDGE_DIR', '')
             if not bridge: return
             rid = str(uuid.uuid4())
             tmp = os.path.join(bridge, rid + '.tmp')
+            body = dict(payload); body['type'] = kind; body['key'] = self._key
+            with open(tmp, 'w', encoding='utf-8') as fp: json.dump(body, fp)
+            os.replace(tmp, os.path.join(bridge, rid + '.request.json'))
+
+        def _send_regions(self, name, regions, scope, flags, erase=False, icon=''):
             spans = []
             for r in regions:
                 if not hasattr(r, 'a'): r = api.Region(*r)
                 spans.append([r.begin(), r.end()])
-            with open(tmp, 'w', encoding='utf-8') as fp:
-                json.dump({'type': 'view_regions', 'key': self._key, 'name': str(name), 'regions': spans, 'scope': str(scope), 'flags': int(flags), 'erase': bool(erase)}, fp)
-            os.replace(tmp, os.path.join(bridge, rid + '.request.json'))
+            self._publish('view_regions', {'name': str(name), 'regions': spans, 'scope': str(scope), 'flags': int(flags), 'erase': bool(erase), 'icon': str(icon or '')})
 
         def add_regions(self, key, regions, scope='', icon='', flags=0, *args, **kwargs):
             api.View.add_regions(self, key, regions, scope, icon, flags, *args, **kwargs)
-            self._send_regions(key, regions or [], scope, flags)
+            self._send_regions(key, regions or [], scope, flags, False, icon)
+
+        # Phantoms and popups are drawn by the editor as plain text (the HTML is stripped).
+        @staticmethod
+        def _plain(content):
+            text = re.sub(r'(?i)<br\s*/?>|</p>|</div>|</li>|</h\d>', '\n', str(content))
+            text = html.unescape(re.sub(r'<[^>]*>', '', text))
+            return '\n'.join(line.strip() for line in text.split('\n') if line.strip())
+
+        def _send_phantoms(self):
+            items = []
+            for pid, (pkey, region, content, layout, nav) in self.__dict__.get('_phantoms', {}).items():
+                items.append({'point': region.end(), 'text': self._plain(content), 'layout': int(layout)})
+            self._publish('view_phantoms', {'items': items})
+
+        def add_phantom(self, key, region, content, layout, on_navigate=None):
+            pid = api.View.add_phantom(self, key, region, content, layout, on_navigate)
+            self._send_phantoms()
+            return pid
+
+        def erase_phantoms(self, key):
+            api.View.erase_phantoms(self, key)
+            self._send_phantoms()
+
+        def erase_phantom_by_id(self, pid):
+            api.View.erase_phantom_by_id(self, pid)
+            self._send_phantoms()
+
+        def show_popup(self, content, flags=0, location=-1, max_width=320, max_height=240, on_navigate=None, on_hide=None):
+            api.View.show_popup(self, content, flags, location, max_width, max_height, on_navigate, on_hide)
+            point = int(location) if location is not None and int(location) >= 0 else (self._sel[0].b if len(self._sel) else 0)
+            self._publish('view_popup', {'text': self._plain(content), 'point': point})
+
+        def update_popup(self, content):
+            api.View.update_popup(self, content)
+            self._publish('view_popup', {'text': self._plain(content), 'point': self._sel[0].b if len(self._sel) else 0})
+
+        def hide_popup(self):
+            api.View.hide_popup(self)
+            self._publish('view_popup', {'hide': True})
 
         def erase_regions(self, key):
             api.View.erase_regions(self, key)

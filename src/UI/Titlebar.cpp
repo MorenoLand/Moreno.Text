@@ -105,6 +105,9 @@ void Titlebar::buildMenu() {
     }
     replaceItem(submenus_[0], "Reopen with Encoding...", group("Reopen with Encoding", std::move(reopenKids)));
     replaceItem(submenus_[0], "Save with Encoding...", group("Save with Encoding", std::move(saveKids)));
+    std::vector<TitlebarMenuItem> maxColKids;
+    maxColKids.push_back(leaf("Unlimited", [] { Application::instance().setMaxColumns(0); }));
+    for (size_t n = 1; n <= 5; ++n) maxColKids.push_back(leaf("Max Columns: " + std::to_string(n), [n] { Application::instance().setMaxColumns(n); }));
     std::vector<TitlebarMenuItem> focusKids, moveKids;
     for (size_t g = 0; g < 4; ++g) {
         focusKids.push_back(leaf("Group " + std::to_string(g + 1), [g] { Application::instance().focusGroup(g); }));
@@ -112,6 +115,7 @@ void Titlebar::buildMenu() {
     }
     for (size_t i = 0; i < view.size(); ++i)
         if (view[i].label == "Groups") {
+            view.insert(view.begin() + static_cast<std::ptrdiff_t>(i) + 1, group("Max Columns", std::move(maxColKids)));
             view.insert(view.begin() + static_cast<std::ptrdiff_t>(i) + 1, group("Move File to Group", std::move(moveKids)));
             view.insert(view.begin() + static_cast<std::ptrdiff_t>(i) + 1, group("Focus Group", std::move(focusKids)));
             break;

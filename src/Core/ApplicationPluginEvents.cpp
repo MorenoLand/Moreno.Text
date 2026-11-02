@@ -2,6 +2,9 @@
 #include "Core/Application.h"
 #include "Plugin/PluginHost.h"
 #include "UI/Titlebar.h"
+#include "Renderer/FontAtlas.h"
+#include "Renderer/GLRenderer.h"
+#include <GL/glew.h>
 #include <SDL2/SDL.h>
 #include <nlohmann/json.hpp>
 #include <filesystem>
@@ -13,6 +16,9 @@
 #endif
 
 namespace fs = std::filesystem;
+
+extern GLuint gl_vao();
+extern GLuint gl_vbo();
 
 namespace {
 constexpr size_t kMaxEventText = 4u * 1024u * 1024u;
@@ -214,6 +220,7 @@ void Application::applyPluginRegions(const nlohmann::json& j) {
     if (!text || !j.contains("regions") || !j["regions"].is_array()) return;
     PluginRegionSet set;
     set.flags = j.value("flags", 0);
+    set.icon = j.value("icon", "");
     regionColor(j.value("scope", ""), set.r, set.g, set.b);
     for (auto& r : j["regions"]) {
         if (!r.is_array() || r.size() != 2 || set.ranges.size() >= 2000) continue;
@@ -342,4 +349,125 @@ void Application::firePluginWindowEvent(const char* event) {
         std::error_code ec;
         fs::rename(tmp, bridge / (stem + ".request.json"), ec);
     } catch (...) {}
+}
+
+namespace {
+void solidRect(std::vector<float>& v, float x0, float y0, float x1, float y1, float r, float g, float b, float a) {
+    v.insert(v.end(), {x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
+}
+void flushNow(std::vector<float>& v) {
+    if (v.empty()) return;
+    GLRenderer::setDrawMode(2);
+    glBindVertexArray(gl_vao());
+    glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
+    glBufferData(GL_ARRAY_BUFFER, v.size() * sizeof(float), v.data(), GL_DYNAMIC_DRAW);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(v.size() / 8));
+    glBindVertexArray(0);
+    GLRenderer::setDrawMode(0);
+    v.clear();
+}
+std::string oneLine(const std::string& text, size_t maxLen) {
+    std::string out = text.substr(0, text.find('\n'));
+    if (out.size() > maxLen) out = out.substr(0, maxLen) + "...";
+    return out;
+}
+}  // namespace
+
+// view.add_phantom: the editor shows the phantom's text after the end of its line.
+void Application::applyPluginPhantoms(const nlohmann::json& j) {
+    std::string key = j.value("key", "");
+    const std::string* text = nullptr;
+    for (size_t i = 0; i < tabs_.size(); ++i)
+        if (pluginEventKey(i) == key) { text = i == activeTab_ ? &textBuffer : &tabs_[i].text; break; }
+    if (!text) return;
+    std::vector<PluginPhantom> list;
+    if (j.contains("items") && j["items"].is_array())
+        for (auto& it : j["items"]) {
+            if (!it.is_object() || list.size() >= 500) continue;
+            list.push_back({cpToByte(*text, it.value("point", static_cast<size_t>(0))), it.value("text", "")});
+        }
+    if (list.empty()) pluginPhantoms_.erase(key); else pluginPhantoms_[key] = std::move(list);
+}
+
+void Application::drawPluginPhantoms(float drawTextX, float textOriginY, float lineStep, float top, float bottom, size_t firstLine, size_t lastLine, float clipLeft, float clipRight) {
+    if (pluginPhantoms_.empty()) return;
+    auto found = pluginPhantoms_.find(pluginEventKey(activeTab_));
+    if (found == pluginPhantoms_.end()) return;
+    for (auto& phantom : found->second) {
+        if (phantom.offset > textBuffer.size() || phantom.text.empty()) continue;
+        size_t line = lineOfPos(phantom.offset);
+        if (line < firstLine || line > lastLine || isFolded(line)) continue;
+        float y = textOriginY + line * lineStep - scrollY_;
+        if (y + lineStep < top || y > bottom) continue;
+        size_t ls = lineStartForLine(line), le = lineEnd(ls);
+        float x = drawTextX + fontAtlas().measureText(std::string_view(textBuffer.data() + ls, le - ls)) + 3.f * fontAtlas().measureText(" ");
+        std::string text = oneLine(phantom.text, 160);
+        fontAtlas().drawTextItalic(text, x, y, 1.f, 0.55f, 0.72f, 0.95f, 0.9f);
+        (void)clipLeft; (void)clipRight;
+    }
+}
+
+// add_regions with an icon: a small marker in the gutter on the region's first line.
+void Application::drawPluginGutterIcons(float gutterRight, float textOriginY, float lineStep, float top, float bottom, size_t firstLine, size_t lastLine) {
+    if (pluginRegions_.empty()) return;
+    auto found = pluginRegions_.find(pluginEventKey(activeTab_));
+    if (found == pluginRegions_.end()) return;
+    for (auto& [name, set] : found->second) {
+        if (set.icon.empty() || set.icon == "none" || (set.flags & 128)) continue;
+        for (auto& range : set.ranges) {
+            if (range.first > textBuffer.size()) continue;
+            size_t line = lineOfPos(range.first);
+            if (line < firstLine || line > lastLine) continue;
+            float y = textOriginY + line * lineStep - scrollY_;
+            if (y + lineStep < top || y > bottom) continue;
+            float cy = y + lineStep / 2.f, r = std::max(2.5f, lineStep * 0.2f), cx = gutterRight - 8.f;
+            bool square = set.icon == "bookmark" || set.icon == "square";
+            float rx = square ? r : r * 0.8f;
+            solidRect(solidVerts_, cx - rx, cy - r, cx + rx, cy + r, set.r, set.g, set.b, 0.95f);
+        }
+    }
+}
+
+// view.show_popup: a small box near the point showing the popup's text. It closes on a click, Escape or after a while.
+void Application::applyPluginPopup(const nlohmann::json& j) {
+    if (j.value("hide", false)) { pluginPopup_.active = false; return; }
+    std::string key = j.value("key", "");
+    if (key != pluginEventKey(activeTab_)) return;
+    std::string text = j.value("text", "");
+    pluginPopup_.lines.clear();
+    size_t pos = 0;
+    while (pos <= text.size() && pluginPopup_.lines.size() < 20) {
+        size_t nlPos = text.find('\n', pos);
+        if (nlPos == std::string::npos) nlPos = text.size();
+        pluginPopup_.lines.push_back(text.substr(pos, nlPos - pos));
+        if (nlPos >= text.size()) break;
+        pos = nlPos + 1;
+    }
+    pluginPopup_.key = key;
+    pluginPopup_.offset = cpToByte(textBuffer, j.value("point", static_cast<size_t>(0)));
+    pluginPopup_.shownAt = SDL_GetTicks();
+    pluginPopup_.active = !pluginPopup_.lines.empty();
+}
+
+void Application::drawPluginPopup(float drawTextX, float textOriginY, float lineStep, float fww, float fwh) {
+    if (!pluginPopup_.active) return;
+    if (pluginPopup_.key != pluginEventKey(activeTab_) || SDL_GetTicks() - pluginPopup_.shownAt > 15000) { pluginPopup_.active = false; return; }
+    size_t offset = std::min(pluginPopup_.offset, textBuffer.size());
+    size_t line = lineOfPos(offset);
+    size_t ls = lineStartForLine(line);
+    float x = drawTextX + fontAtlas().measureText(std::string_view(textBuffer.data() + ls, offset - ls));
+    float y = textOriginY + line * lineStep - scrollY_ + lineStep;
+    float w = 40.f;
+    for (auto& l : pluginPopup_.lines) w = std::max(w, fontAtlas().measureText(oneLine(l, 120)) + 20.f);
+    float h = static_cast<float>(pluginPopup_.lines.size()) * lineStep + 12.f;
+    if (x + w > fww - 8.f) x = std::max(8.f, fww - w - 8.f);
+    if (y + h > fwh - 40.f) y = std::max(40.f, y - lineStep - h);
+    glDisable(GL_SCISSOR_TEST);
+    std::vector<float> box;
+    solidRect(box, x - 1.f, y - 1.f, x + w + 1.f, y + h + 1.f, 0.35f, 0.38f, 0.45f, 1.f);
+    solidRect(box, x, y, x + w, y + h, 0.15f, 0.16f, 0.19f, 1.f);
+    flushNow(box);
+    for (size_t i = 0; i < pluginPopup_.lines.size(); ++i)
+        fontAtlas().drawText(oneLine(pluginPopup_.lines[i], 120), x + 10.f, y + 6.f + static_cast<float>(i) * lineStep, 0.85f, 0.87f, 0.9f, 1.f);
 }
