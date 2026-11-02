@@ -470,24 +470,35 @@ static std::vector<ProjectSymbol> scanProjectSymbols(const std::string& root) {
     return out;
 }
 
+static std::vector<ProjectSymbol> scanRoots(const std::vector<std::string>& roots) {
+    std::vector<ProjectSymbol> all;
+    for (auto& root : roots) { auto part = scanProjectSymbols(root); all.insert(all.end(), part.begin(), part.end()); }
+    return all;
+}
+
 void Application::updateProjectSymbolResults(const std::string& pattern) {
     if (sidebarRoot_.empty()) return;
     uint32_t now = SDL_GetTicks();
-    if (projectSymbolNames_.empty() || now - projectSymbolsBuiltAt_ > 15000 || projectSymbolsRoot_ != sidebarRoot_) {
+    std::string rootsKey;
+    for (auto& root : projectRoots()) rootsKey += root + "|";
+    if (projectSymbolNames_.empty() || now - projectSymbolsBuiltAt_ > 15000 || projectSymbolsRoot_ != rootsKey) {
         projectSymbolNames_.clear(); projectSymbolPaths_.clear(); projectSymbolLines_.clear();
-        for (auto& sym : scanProjectSymbols(sidebarRoot_)) {
+        for (auto& sym : scanRoots(projectRoots())) {
             projectSymbolNames_.push_back(sym.name + "  (" + sym.kind + ")");
             projectSymbolPaths_.push_back(sym.path);
             projectSymbolLines_.push_back(sym.line);
         }
-        projectSymbolsBuiltAt_ = now; projectSymbolsRoot_ = sidebarRoot_;
+        projectSymbolsBuiltAt_ = now; projectSymbolsRoot_ = rootsKey;
     }
     std::string needle = lowered(pattern);
     std::error_code ec;
     for (size_t i = 0; i < projectSymbolNames_.size() && goto_.items.size() < 200; ++i) {
         if (!needle.empty() && lowered(projectSymbolNames_[i]).find(needle) == std::string::npos) continue;
         goto_.items.push_back(projectSymbolNames_[i]);
-        goto_.subtexts.push_back(fs::relative(projectSymbolPaths_[i], sidebarRoot_, ec).generic_string() + ":" + std::to_string(projectSymbolLines_[i]));
+        std::string shown = fs::relative(projectSymbolPaths_[i], sidebarRoot_, ec).generic_string();
+        if (ec || shown.rfind("..", 0) == 0) shown = projectSymbolPaths_[i];
+        ec.clear();
+        goto_.subtexts.push_back(shown + ":" + std::to_string(projectSymbolLines_[i]));
         goto_.data.push_back(projectSymbolPaths_[i] + "|" + std::to_string(projectSymbolLines_[i]));
     }
 }
@@ -516,7 +527,7 @@ void Application::gotoDefinition() {
     std::string word = wordOrSelectionAtCursor();
     if (word.empty()) return;
     if (sidebarRoot_.empty()) { pluginStatusText_ = "Goto Definition needs an open folder"; pluginStatusUntil_ = SDL_GetTicks() + 3000; return; }
-    auto symbols = scanProjectSymbols(sidebarRoot_);
+    auto symbols = scanRoots(projectRoots());
     std::vector<const ProjectSymbol*> hits;
     for (auto& s : symbols) if (s.name == word) hits.push_back(&s);
     if (hits.size() == 1) { openLocation(hits[0]->path, hits[0]->line); return; }

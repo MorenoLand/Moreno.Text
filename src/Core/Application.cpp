@@ -839,6 +839,8 @@ bool Application::loadSession() {
         loadTab(restoreActive);
         std::string root = data.value("sidebar_root", "");
         if (!root.empty() && fs::exists(root)) loadFolder(root);
+        if (data.contains("extra_folders") && data["extra_folders"].is_array())
+            for (auto& extra : data["extra_folders"]) if (extra.is_string()) addFolderToProject(extra.get<std::string>());
         return true;
     } catch (...) {
         return false;
@@ -852,6 +854,7 @@ void Application::saveSession() {
         nlohmann::json data;
         data["active_tab"] = 0;
         if (!sidebarRoot_.empty()) data["sidebar_root"] = sidebarRoot_;
+        if (!extraFolders_.empty()) { data["extra_folders"] = nlohmann::json::array(); for (auto& extra : extraFolders_) data["extra_folders"].push_back(extra.path); }
         data["tabs"] = nlohmann::json::array();
         for (size_t i = 0; i < tabs_.size(); ++i) {
             auto& tab = tabs_[i];
