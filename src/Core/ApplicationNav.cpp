@@ -296,3 +296,40 @@ void Application::closeGroup() {
     if (activeGroup_ >= editorGroups_.size()) activeGroup_ = editorGroups_.size() - 1;
     loadTab(editorGroups_[activeGroup_].tab);
 }
+
+void Application::selectTabRange(size_t from, size_t to) {
+    if (tabs_.empty()) return;
+    from = std::min(from, tabs_.size() - 1);
+    to = std::min(to, tabs_.size() - 1);
+    if (from > to) std::swap(from, to);
+    selectedTabs_.clear();
+    for (size_t i = from; i <= to; ++i) selectedTabs_.insert(i);
+}
+
+// The Tab Selection submenu of Selection: arrange which tabs are selected, or move focus between the selected ones.
+void Application::tabSelectionAction(int action, int arg) {
+    if (tabs_.empty()) return;
+    for (auto it = selectedTabs_.begin(); it != selectedTabs_.end();) it = *it >= tabs_.size() ? selectedTabs_.erase(it) : std::next(it);
+    selectedTabs_.insert(activeTab_);
+    switch (action) {
+        case 0: selectedTabs_ = {activeTab_}; break;
+        case 1: for (auto it = selectedTabs_.begin(); it != selectedTabs_.end();) it = *it < activeTab_ ? selectedTabs_.erase(it) : std::next(it); break;
+        case 2: for (auto it = selectedTabs_.begin(); it != selectedTabs_.end();) it = *it > activeTab_ ? selectedTabs_.erase(it) : std::next(it); break;
+        case 3: if (selectedTabs_.size() > 1) { selectedTabs_.erase(activeTab_); switchToTab(*selectedTabs_.begin()); } break;
+        case 4: for (size_t i = 0; i < activeTab_; ++i) selectedTabs_.insert(i); break;
+        case 5: for (size_t i = activeTab_ + 1; i < tabs_.size(); ++i) selectedTabs_.insert(i); break;
+        case 6: case 7: {
+            std::vector<size_t> order(selectedTabs_.begin(), selectedTabs_.end());
+            size_t pos = static_cast<size_t>(std::find(order.begin(), order.end(), activeTab_) - order.begin());
+            if (action == 6 && pos > 0) switchToTab(order[pos - 1]);
+            if (action == 7 && pos + 1 < order.size()) switchToTab(order[pos + 1]);
+            break;
+        }
+        case 8: {
+            std::vector<size_t> order(selectedTabs_.begin(), selectedTabs_.end());
+            if (arg >= 1 && static_cast<size_t>(arg) <= order.size()) switchToTab(order[static_cast<size_t>(arg) - 1]);
+            break;
+        }
+        default: break;
+    }
+}

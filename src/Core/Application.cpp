@@ -2532,7 +2532,9 @@ void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
         if (tx > menuX) break;
         bool groupedTab = false;
         for (auto& group : editorGroups_) if (group.tab == i) { groupedTab = true; break; }
-        if (i != activeTab_ && groupedTab) {
+        if (i != activeTab_ && selectedTabs_.count(i)) {
+            roundedTab(tx, tx + tw, 0.27f, 0.33f, 0.46f, 0.85f, false);
+        } else if (i != activeTab_ && groupedTab) {
             roundedTab(tx, tx + tw, 0.23f, 0.24f, 0.27f, 0.75f, false);
         } else if (i != activeTab_ && i == tabHoverIndex_) {
             roundedTab(tx, tx + tw, 0.24f, 0.25f, 0.28f, 0.55f, false);
@@ -2797,7 +2799,12 @@ bool Application::handleTabBarEvent(const SDL_Event& e, float windowW, float tit
             float popH = 4.f + itemCount * itemH;
             if (mx >= tabContextX_ && mx <= tabContextX_ + popW && my >= tabContextY_ && my <= tabContextY_ + popH) {
                 int idx = (int)((my - tabContextY_ - 2.f) / itemH);
-                if (idx == 0) closeTab(tabContextIndex_);
+                if (idx == 0 && selectedTabs_.size() > 1 && selectedTabs_.count(tabContextIndex_)) {
+                    std::vector<size_t> doomed(selectedTabs_.begin(), selectedTabs_.end());
+                    selectedTabs_.clear();
+                    for (size_t k = doomed.size(); k-- > 0;) if (doomed[k] < tabs_.size()) closeTab(doomed[k]);
+                }
+                else if (idx == 0) closeTab(tabContextIndex_);
                 else if (idx == 1) { for (size_t i = tabs_.size(); i-- > 0;) if (i != tabContextIndex_) { if (tabs_[i].dirty) closeTab(i); else closeTabNow(i); if (closeConfirmOpen_) break; } }
                 else if (idx == 2 && tabContextIndex_ < tabs_.size() - 1) { for (size_t i = tabs_.size(); i-- > tabContextIndex_ + 1;) { if (tabs_[i].dirty) closeTab(i); else closeTabNow(i); if (closeConfirmOpen_) break; } }
                 else if (idx == 3 && tabContextIndex_ > 0) { for (size_t i = tabContextIndex_; i-- > 0;) { if (tabs_[i].dirty) closeTab(i); else closeTabNow(i); if (closeConfirmOpen_) break; } }
@@ -2850,6 +2857,8 @@ bool Application::handleTabBarEvent(const SDL_Event& e, float windowW, float tit
                 float actionCenter = tx + tw - tabActionPadR - tabActionW * 0.5f;
                 if (e.button.button == 2 || (mx >= actionCenter - 12.f && mx <= actionCenter + 12.f)) { closeTab(i); return true; }
                 bool ctrlClick = (SDL_GetModState() & KMOD_CTRL) != 0;
+                if ((SDL_GetModState() & KMOD_SHIFT) && e.button.button == 1) { selectTabRange(activeTab_, i); return true; }
+                if (!ctrlClick) selectedTabs_.clear();
                 if (ctrlClick) {
                     addEditorGroupForTab(i);
                 } else {

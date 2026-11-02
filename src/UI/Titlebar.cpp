@@ -98,6 +98,13 @@ void Titlebar::buildMenu() {
             submenus_[3].insert(submenus_[3].begin() + static_cast<std::ptrdiff_t>(i) + 1, leaf("Cancel Find in Files", [] { Application::instance().cancelFindInFiles(); }));
             break;
         }
+    {
+        std::vector<TitlebarMenuItem> tabKids;
+        const char* names[] = {"Unselect Others", "Unselect to Left", "Unselect to Right", "Unselect Current", "Select to Left", "Select to Right", "Focus to Left", "Focus to Right"};
+        for (int a = 0; a < 8; ++a) tabKids.push_back(leaf(names[a], [a] { Application::instance().tabSelectionAction(a); }));
+        for (int n = 1; n <= 10; ++n) tabKids.push_back(leaf("Focus Selected Tab " + std::to_string(n), [n] { Application::instance().tabSelectionAction(8, n); }));
+        submenus_[2].push_back(group("Tab Selection", std::move(tabKids)));
+    }
     std::vector<TitlebarMenuItem> reopenKids, saveKids;
     for (const std::string& name : Application::encodingNames()) {
         reopenKids.push_back(leaf(name, [name] { Application::instance().reopenWithEncoding(name); }));

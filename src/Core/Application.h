@@ -185,6 +185,11 @@ public:
     void closeTab(size_t index);
     void closeCurrentTab() { closeTab(activeTab_); }
     void reopenClosedTab();
+    // Tab selection: several tabs selected at once (Shift+click selects a range)
+    std::set<size_t> selectedTabs_;
+    void selectTabRange(size_t from, size_t to);
+    void tabSelectionAction(int action, int arg = 0);  // 0 unselect others, 1 unselect to left, 2 right, 3 unselect current, 4 select to left, 5 right, 6 focus left, 7 right, 8 focus nth
+    bool tabIsSelected(size_t index) const { return selectedTabs_.count(index) > 0; }
     void clearRecentFiles();
     void cancelFindInFiles();
     bool detachTabToNewWindow(size_t index);
