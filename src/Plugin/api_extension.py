@@ -1464,6 +1464,20 @@ def install_plugin(p):
         os.replace(tmp, os.path.join(bridge, rid + '.request.json'))
 
     ns['handle_completion_query'] = handle_completion_query
+
+    def handle_query_context(data):
+        view = _mirror_views.get(str(data.get('key', '')))
+        result = False
+        if view is not None and view.is_valid():
+            try: result = bool(on_query_context(view.id, str(data.get('context', '')), str(data.get('operator', 'equal')), data.get('operand'), bool(data.get('match_all', False))))
+            except Exception as e: print('[on_query_context-error]', e)
+        response = data.get('response')
+        if response:
+            tmp = response + '.tmp'
+            with open(tmp, 'w', encoding='utf-8') as fp: json.dump({'result': result}, fp)
+            os.replace(tmp, response)
+
+    ns['handle_query_context'] = handle_query_context
     ns['pending_on_activated_async_lock'] = threading.Lock()
     class ZipResourceReader:
         def __init__(self, loader, fullname): self.loader = loader; self.fullname = fullname

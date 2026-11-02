@@ -31,7 +31,7 @@ bool Application::evaluateKeyContext(const std::string& key, const std::string& 
     else if (key == "read_only") values.push_back(binaryView_ || largeFileGuarded_);
     else if (key == "auto_complete_visible" || key == "popup_visible" || key == "has_snippet") values.push_back(false);
     else if (key.rfind("setting.", 0) == 0) values.push_back(SettingsManager::instance().get<json>(key.substr(8), json(nullptr)));
-    else return false;  // scopes (selector) and plugin keys are not available here
+    else return pluginQueryContext(key, op, operand, matchAll);  // keys defined by plugins' on_query_context
     if (values.empty()) return false;
     bool isSelector = key == "selector" || key == "eol_selector";
     auto test = [&](const json& v) {

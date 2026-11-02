@@ -246,3 +246,47 @@ void Application::applyPluginCompletions(const nlohmann::json& j) {
     acActive_ = true;
     if (!wasActive || acSelected_ >= static_cast<int>(acItems_.size())) acSelected_ = 0;
 }
+
+// Asks plugins' on_query_context about a keymap context key we don't know. Waits briefly for the host; answers are
+// cached for a moment and the host is skipped for a few seconds after it fails to answer in time.
+bool Application::pluginQueryContext(const std::string& key, const std::string& op, const nlohmann::json& operand, bool matchAll) {
+    if (!pluginEventsEnabled_) return false;
+    std::string viewKey = pluginEventKey(activeTab_);
+    if (viewKey.empty()) return false;
+    uint32_t now = SDL_GetTicks();
+    std::string cacheKey = key + "|" + op + "|" + operand.dump() + "|" + std::to_string(matchAll) + "|" + viewKey;
+    auto cached = pluginContextCache_.find(cacheKey);
+    if (cached != pluginContextCache_.end() && now - cached->second.first < 400) return cached->second.second;
+    if (now < pluginContextDownUntil_) return false;
+    bool result = false;
+    try {
+        fs::path bridge = fs::path(paths_.localDir) / "PluginBridge";
+        fs::create_directories(bridge);
+        std::string stem = std::to_string(now) + "-" + std::to_string(pluginEventSeq_++) + "-query_context";
+        fs::path response = bridge / (stem + ".response.json");
+        nlohmann::json j = {{"type", "query_context"}, {"key", viewKey}, {"context", key}, {"operator", op}, {"operand", operand},
+                            {"match_all", matchAll}, {"response", response.string()}};
+        fs::path tmp = bridge / (stem + ".tmp");
+        {
+            std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+            if (!f) return false;
+            f << j.dump();
+        }
+        std::error_code ec;
+        fs::rename(tmp, bridge / (stem + ".request.json"), ec);
+        bool answered = false;
+        for (int i = 0; i < 40 && !answered; ++i) {
+            if (fs::exists(response, ec)) {
+                std::ifstream in(response, std::ios::binary);
+                auto parsed = nlohmann::json::parse(in, nullptr, false);
+                if (parsed.is_object()) { result = parsed.value("result", false); answered = true; }
+            }
+            if (!answered) SDL_Delay(2);
+        }
+        fs::remove(response, ec);
+        if (!answered) pluginContextDownUntil_ = SDL_GetTicks() + 5000;
+    } catch (...) {}
+    pluginContextCache_[cacheKey] = {SDL_GetTicks(), result};
+    if (pluginContextCache_.size() > 200) pluginContextCache_.clear();
+    return result;
+}

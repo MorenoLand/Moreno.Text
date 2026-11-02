@@ -737,6 +737,9 @@ private:
     void firePluginEvent(const char* event, const std::string& key, bool withContent);
     void firePluginEvent(const char* event, bool withContent = false);
     void pollPluginEvents();
+    bool pluginQueryContext(const std::string& key, const std::string& op, const nlohmann::json& operand, bool matchAll);
+    std::map<std::string, std::pair<uint32_t, bool>> pluginContextCache_;
+    uint32_t pluginContextDownUntil_ = 0;
     void handlePluginRpc(const std::string& type, const nlohmann::json& j);
     struct PluginRegionSet { std::vector<std::pair<size_t, size_t>> ranges; int flags = 0; float r = 0.f, g = 0.f, b = 0.f; };
     std::map<std::string, std::map<std::string, PluginRegionSet>> pluginRegions_;  // tab key -> region name -> regions
