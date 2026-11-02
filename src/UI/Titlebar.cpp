@@ -36,6 +36,74 @@ void Titlebar::buildMenu() {
         {{"Open Project...","",[]{ Application::instance().openProject(); }},{"Switch Project...","Alt+Shift+P",[]{ Application::instance().openRecentProjectPicker(); }},{"Save Project As...","",[]{ Application::instance().saveProjectAs(); }},{"Close Project","",[]{ Application::instance().closeProject(); }},{"Edit Project","",[]{ Application::instance().editProject(); }},{"","",nullptr,true},{"Add Folder to Project...","",[]{ Application::instance().addFolderDialog(); }},{"Remove all Folders from Project","",[]{ Application::instance().closeFolder(); }},{"Refresh Folders","",[]{ Application::instance().refreshFolder(); }}},
         {{"Documentation","",[]{ Application::instance().openDocumentation(); }},{"Report a Bug","",[]{ Application::instance().reportBug(); }},{"","",nullptr,true},{"About Moreno Text","",[]{ Application::instance().showAbout(); }}},
     };
+    // Group long menus into flyouts the way Sublime does, then drop separators that end up between two flyouts.
+    auto& edit = submenus_[1];
+    nestMenuItems(edit, "Swap Line Up", "Join Lines", "Line");
+    nestMenuItems(edit, "Insert Line Before", "Transpose", "Text");
+    nestMenuItems(edit, "Sort Lines", "Unique Lines", "Permute Lines");
+    nestMenuItems(edit, "Fold", "Fold Level 3", "Code Folding");
+    nestMenuItems(edit, "Set Mark", "Yank", "Mark");
+    nestMenuItems(edit, "Wrap Paragraph", "Wrap Paragraph at 120 Characters", "Wrap");
+    nestMenuItems(edit, "Toggle Line Comment", "Toggle Block Comment", "Comment");
+    nestMenuItems(edit, "Upper Case", "kebab-case", "Convert Case");
+    nestMenuItems(edit, "Undo Selection", "Close Tag", "More");
+    nestMenuItems(edit, "Shuffle Lines", "Selections: Shuffle", "Permute Selections");
+    auto& view = submenus_[4];
+    nestMenuItems(view, "Layout: Single", "Layout: Columns 4", "Layout");
+    nestMenuItems(view, "New Group", "Move File to Previous Group", "Groups");
+    nestMenuItems(view, "Line Endings: Windows", "Line Endings: Unix", "Line Endings");
+    nestMenuItems(view, "Ruler: None", "Ruler: 120", "Ruler");
+    nestMenuItems(view, "Spell Check", "Dictionary...", "Spell Check");
+    nestMenuItems(view, "Word Wrap Column: Automatic", "Word Wrap Column: 120", "Word Wrap Column");
+    nestMenuItems(submenus_[0], "Reopen with Encoding...", "Revert File", "More");
+    for (auto& list : submenus_) {
+        for (size_t i = 1; i + 1 < list.size();) {
+            if (list[i].separator && !list[i - 1].children.empty() && !list[i + 1].children.empty()) list.erase(list.begin() + static_cast<std::ptrdiff_t>(i));
+            else ++i;
+        }
+    }
+}
+
+// Replaces the run of items from the one labelled `first` to the one labelled `last` with a single flyout item.
+void Titlebar::nestMenuItems(std::vector<TitlebarMenuItem>& items, const std::string& first, const std::string& last, const std::string& group) {
+    size_t a = items.size(), b = items.size();
+    for (size_t i = 0; i < items.size(); ++i) {
+        if (a == items.size() && items[i].label == first) a = i;
+        if (a != items.size() && items[i].label == last) { b = i; break; }
+    }
+    if (a == items.size() || b == items.size() || b < a) return;
+    TitlebarMenuItem flyout;
+    flyout.label = group;
+    flyout.shortcut = ">";
+    flyout.children.assign(items.begin() + static_cast<std::ptrdiff_t>(a), items.begin() + static_cast<std::ptrdiff_t>(b) + 1);
+    items.erase(items.begin() + static_cast<std::ptrdiff_t>(a), items.begin() + static_cast<std::ptrdiff_t>(b) + 1);
+    items.insert(items.begin() + static_cast<std::ptrdiff_t>(a), std::move(flyout));
+}
+
+const std::vector<TitlebarMenuItem>* Titlebar::currentFlyout() const {
+    if (submenuOpen_ < 0 || submenuOpen_ >= static_cast<int>(submenus_.size()) || submenuHovered_ < 0) return nullptr;
+    auto& list = submenus_[submenuOpen_];
+    if (submenuHovered_ >= static_cast<int>(list.size())) return nullptr;
+    const TitlebarMenuItem& item = list[submenuHovered_];
+    if (!item.children.empty()) return &item.children;
+    if (submenuOpen_ == 0 && item.label == "Open Recent") {
+        recentFlyout_.clear();
+        auto& recent = Application::instance().recentFiles();
+        for (size_t i = 0; i < recent.size(); ++i) recentFlyout_.push_back({recent[i], "", [i] { Application::instance().openRecentFile(i); }});
+        if (recentFlyout_.empty()) recentFlyout_.push_back({"(Empty)", "", nullptr});
+        return &recentFlyout_;
+    }
+    return nullptr;
+}
+
+static float flyoutWidth(FontAtlas& font, const std::vector<TitlebarMenuItem>& items) {
+    float w = 180.f;
+    for (auto& item : items) {
+        float iw = font.measureText(item.label) + 48.f;
+        if (!item.shortcut.empty()) iw += font.measureText(item.shortcut) + 36.f;
+        w = std::max(w, iw);
+    }
+    return w;
 }
 
 static void flushSolid(std::vector<float>& v) {
@@ -74,14 +142,11 @@ void Titlebar::getMenuPopupBounds(FontAtlas& font, float& x, float& y, float& w,
         minY = std::min(minY, submenuRect.y);
         maxX = std::max(maxX, submenuRect.x + submenuRect.w);
         maxY = std::max(maxY, submenuRect.y + submenuRect.h);
-        if (submenuOpen_ == 0 && submenuHovered_ == 3) {
-            auto& recent = Application::instance().recentFiles();
-            int count = std::max(1, static_cast<int>(recent.size()));
-            int rw = 360;
-            for (auto& path : recent) rw = std::max(rw, static_cast<int>(font.measureText(path) + 28.f));
-            int rh = 2 + count * 24 + 1;
+        if (const auto* fly = currentFlyout()) {
+            int rw = static_cast<int>(flyoutWidth(font, *fly));
+            int rh = 2 + static_cast<int>(fly->size()) * 24 + 1;
             int rx = submenuRect.x + submenuRect.w + 2;
-            int ry = submenuRect.y + 2 + 3 * 24;
+            int ry = submenuRect.y + 2 + submenuHovered_ * 24;
             if (rx + rw > 32000 - 4) rx = submenuRect.x - rw - 2;
             minX = std::min(minX, rx);
             minY = std::min(minY, ry);
@@ -207,32 +272,34 @@ void Titlebar::drawMenuPopup(FontAtlas& font, float ox, float oy) {
             float iy = sy + 6.f + i * itemH;
             if (item.separator) { v.clear(); ar(sx + 8, sy + 13.f + i * itemH, sx + sw - 8, sy + 14.f + i * itemH, 0.3f, 0.3f, 0.33f, 1.f); flushSolid(v); continue; }
             float b = (submenuHovered_ == i) ? 1.f : 0.78f;
-            if (!item.action && !item.separator) b = 0.4f;
+            if (!item.action && !item.separator && !opensFlyout(item)) b = 0.4f;
             font.drawText(item.label, sx + 12.f, iy, b, b, b, 1.f);
             if (!item.shortcut.empty()) font.drawText(item.shortcut, sx + sw - font.measureText(item.shortcut) - 12.f, iy, 0.5f, 0.5f, 0.55f, 1.f);
         }
         glDisable(GL_SCISSOR_TEST);
-        if (submenuOpen_ == 0 && submenuHovered_ == 3) {
-            auto& recent = Application::instance().recentFiles();
-            int count = std::max(1, static_cast<int>(recent.size()));
-            float rx = sx + sw + 2.f, ry = sy + 2.f + 3.f * itemH;
-            float rw = 360.f, rh = 2.f + count * itemH;
-            for (auto& path : recent) rw = std::max(rw, font.measureText(path) + 28.f);
+        if (const auto* fly = currentFlyout()) {
+            float rx = sx + sw + 2.f, ry = sy + 2.f + submenuHovered_ * itemH;
+            float rw = flyoutWidth(font, *fly), rh = 2.f + static_cast<float>(fly->size()) * itemH;
             bool popupLocal = ox != 0.f || oy != 0.f;
-            if (!popupLocal && rx + rw > ww - 4.f) rx = sx - rw - 2.f;
+            if (!popupLocal) {
+                if (rx + rw > ww - 4.f) rx = sx - rw - 2.f;
+                if (ry + rh > wh - 8.f) ry = std::max(2.f, wh - rh - 8.f);
+            }
             lastHasRecent_ = true; lastRecentX_ = rx + ox; lastRecentY_ = ry + oy; lastRecentW_ = rw; lastRecentH_ = rh;
+            if (recentHovered_ >= static_cast<int>(fly->size()) || (recentHovered_ >= 0 && (*fly)[recentHovered_].separator)) recentHovered_ = -1;
             v.clear();
             ar(rx, ry, rx + rw, ry + rh, 0.17f, 0.17f, 0.20f, 0.98f);
-            if (recentHovered_ >= 0 && recentHovered_ < static_cast<int>(recent.size()))
+            ar(rx, ry, rx + rw, ry + 1, 0.30f, 0.30f, 0.35f, 1.f);
+            if (recentHovered_ >= 0)
                 ar(rx + 2, ry + 2 + recentHovered_ * itemH, rx + rw - 2, ry + 2 + (recentHovered_ + 1) * itemH, 0.25f, 0.30f, 0.45f, 1.f);
             flushSolid(v);
-            if (recent.empty()) {
-                font.drawText("(Empty)", rx + 12.f, ry + 6.f, 0.42f, 0.42f, 0.46f, 1.f);
-            } else {
-                for (int i = 0; i < static_cast<int>(recent.size()); ++i) {
-                    float b = recentHovered_ == i ? 1.f : 0.78f;
-                    font.drawText(recent[i], rx + 12.f, ry + 6.f + i * itemH, b, b, b, 1.f);
-                }
+            for (int i = 0; i < static_cast<int>(fly->size()); ++i) {
+                const auto& item = (*fly)[i];
+                if (item.separator) { v.clear(); ar(rx + 8, ry + 13.f + i * itemH, rx + rw - 8, ry + 14.f + i * itemH, 0.3f, 0.3f, 0.33f, 1.f); flushSolid(v); continue; }
+                float b = recentHovered_ == i ? 1.f : 0.78f;
+                if (!item.action) b = 0.42f;
+                font.drawText(item.label, rx + 12.f, ry + 6.f + i * itemH, b, b, b, 1.f);
+                if (!item.shortcut.empty()) font.drawText(item.shortcut, rx + rw - font.measureText(item.shortcut) - 12.f, ry + 6.f + i * itemH, 0.5f, 0.5f, 0.55f, 1.f);
             }
         }
     }
@@ -342,9 +409,9 @@ bool Titlebar::handleMenuEvent(const SDL_Event& e) {
         menuHovered_ = -1;
         recentHovered_ = -1;
         if (lastHasRecent_ && mx >= lastRecentX_ && mx < lastRecentX_ + lastRecentW_ && my >= lastRecentY_ && my < lastRecentY_ + lastRecentH_) {
-            auto& recent = Application::instance().recentFiles();
+            const auto* fly = currentFlyout();
             int idx = (int)((my - lastRecentY_ - 2.f) / itemH);
-            if (idx >= 0 && idx < static_cast<int>(recent.size())) recentHovered_ = idx;
+            if (fly && idx >= 0 && idx < static_cast<int>(fly->size()) && !(*fly)[idx].separator) recentHovered_ = idx;
             return true;
         }
         if (mx >= ddX && mx < ddX + ddW && my >= ddY && my < ddY + ddH) {
@@ -373,11 +440,12 @@ bool Titlebar::handleMenuEvent(const SDL_Event& e) {
     if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == 1) {
         float mx = (float)e.button.x, my = (float)e.button.y;
         if (lastHasRecent_ && mx >= lastRecentX_ && mx < lastRecentX_ + lastRecentW_ && my >= lastRecentY_ && my < lastRecentY_ + lastRecentH_) {
-            auto& recent = Application::instance().recentFiles();
+            const auto* fly = currentFlyout();
             int idx = (int)((my - lastRecentY_ - 2.f) / itemH);
-            if (idx >= 0 && idx < static_cast<int>(recent.size())) {
-                Application::instance().openRecentFile(static_cast<size_t>(idx));
+            if (fly && idx >= 0 && idx < static_cast<int>(fly->size()) && !(*fly)[idx].separator && (*fly)[idx].action) {
+                auto action = (*fly)[idx].action;  // closeMenu() resets the hover state the flyout depends on
                 closeMenu();
+                action();
             }
             return true;
         }
@@ -386,7 +454,7 @@ bool Titlebar::handleMenuEvent(const SDL_Event& e) {
             if (mx >= sx && mx < sx + sw && my >= sy + 2.f && my < sy + 2.f + submenus_[submenuOpen_].size() * itemH) {
                 int idx = (int)((my - sy - 2.f) / itemH);
                 auto& sm = submenus_[submenuOpen_];
-                if (submenuOpen_ == 0 && idx == 3) return true;
+                if (idx >= 0 && idx < (int)sm.size() && opensFlyout(sm[idx])) return true;
                 if (idx >= 0 && idx < (int)sm.size() && !sm[idx].separator && sm[idx].action) { sm[idx].action(); closeMenu(); submenuOpen_ = -1; return true; }
                 return true;
             }

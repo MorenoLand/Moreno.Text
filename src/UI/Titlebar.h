@@ -10,6 +10,7 @@ struct TitlebarMenuItem {
     std::function<void()> action;
     bool separator = false;
     int submenu = -1;
+    std::vector<TitlebarMenuItem> children;  // a nested flyout; the item itself has no action
 };
 
 struct TitlebarButton {
@@ -67,6 +68,10 @@ private:
     std::vector<TitlebarMenuItem> menuItems_;
     std::vector<std::vector<TitlebarMenuItem>> submenus_;
     void buildMenu();
+    void nestMenuItems(std::vector<TitlebarMenuItem>& items, const std::string& first, const std::string& last, const std::string& group);
+    const std::vector<TitlebarMenuItem>* currentFlyout() const;
+    mutable std::vector<TitlebarMenuItem> recentFlyout_;
+    static bool opensFlyout(const TitlebarMenuItem& item) { return !item.children.empty() || (item.label == "Open Recent"); }
     void closeMenu() { menuOpen_ = false; menuHovered_ = -1; submenuOpen_ = -1; submenuHovered_ = -1; }
     void drawMenu(class FontAtlas& font);
     bool handleMenuEvent(const SDL_Event& e);
