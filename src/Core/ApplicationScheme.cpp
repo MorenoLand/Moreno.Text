@@ -1,8 +1,16 @@
 // Color scheme discovery and switching.
 #include "Core/Application.h"
+#include "Theme/UiTheme.h"
 #include "Settings/SettingsManager.h"
 #include "Theme/ThemeEngine.h"
 #include <SDL2/SDL.h>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <commdlg.h>
+#endif
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
@@ -72,6 +80,7 @@ void Application::applyColorScheme(const std::string& path) {
     auto& settings = SettingsManager::instance();
     settings.set("color_scheme", path);
     settings.save();
+    applyUiThemeSetting();  // a chrome that follows the scheme changes with it
     syntaxDirty_ = true;
     pluginStatusText_ = "Color scheme: " + (ThemeEngine::instance().name().empty() ? fs::path(path).stem().string() : ThemeEngine::instance().name());
     pluginStatusUntil_ = SDL_GetTicks() + 3000;
@@ -93,4 +102,64 @@ void Application::loadSavedColorScheme() {
     if (!fs::exists(defaultDir + "/Moreno Monokai.moreno-color-scheme")) theme.writeMonokai(defaultDir + "/Moreno Monokai.moreno-color-scheme");
     std::string saved = SettingsManager::instance().get<std::string>("color_scheme", "");
     if (!saved.empty() && fs::exists(saved)) theme.load(saved);
+    applyUiThemeSetting();
+}
+
+// The "theme" setting: "Default.sublime-theme" (the built-in look), "follow_color_scheme", or a .sublime-theme file
+// (a path, or a name found under the Packages folder).
+void Application::applyUiThemeSetting() {
+    std::string value = SettingsManager::instance().get<std::string>("theme", "Default.sublime-theme");
+    UiTheme& ui = UiTheme::instance();
+    if (value == "follow_color_scheme") {
+        ui.followColorScheme(ThemeEngine::instance().bgColor(), ThemeEngine::instance().gutterColor());
+        return;
+    }
+    ui.reset();
+    if (value.empty() || value == "Default.sublime-theme") return;
+    std::error_code ec;
+    std::string path = value;
+    if (!fs::exists(path, ec)) {
+        path.clear();
+        for (fs::recursive_directory_iterator it(paths_.dataDir + "/Packages", fs::directory_options::skip_permission_denied, ec), end; it != end; it.increment(ec)) {
+            if (ec) break;
+            if (it->is_regular_file(ec) && it->path().filename() == value) { path = it->path().string(); break; }
+        }
+    }
+    if (!path.empty()) ui.load(path);
+}
+
+void Application::setUiTheme(const std::string& value) {
+    auto& settings = SettingsManager::instance();
+    settings.set("theme", value);
+    settings.save();
+    applyUiThemeSetting();
+    pluginStatusText_ = "UI theme: " + UiTheme::instance().name;
+    pluginStatusUntil_ = SDL_GetTicks() + 3000;
+}
+
+void Application::chooseUiThemeFile() {
+#ifdef _WIN32
+    closeAllPopups();
+    char buf[MAX_PATH] = {};
+    OPENFILENAMEA ofn = {};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.lpstrFilter = "Sublime Theme\0*.sublime-theme\0All Files\0*.*\0";
+    ofn.lpstrFile = buf; ofn.nMaxFile = MAX_PATH; ofn.Flags = OFN_FILEMUSTEXIST;
+    inOsDialog_ = true;
+    bool picked = GetOpenFileNameA(&ofn) != 0;
+    inOsDialog_ = false;
+    if (picked) setUiTheme(buf);
+#endif
+}
+
+// Opens Packages/User/Default.sublime-theme for editing, creating a small example the first time.
+void Application::customizeUiTheme() {
+    fs::path file = fs::path(paths_.dataDir) / "Packages" / "User" / "Default.sublime-theme";
+    std::error_code ec;
+    fs::create_directories(file.parent_path(), ec);
+    if (!fs::exists(file, ec)) {
+        std::ofstream out(file);
+        out << "[\n\t// Colors for the window chrome. Values are [r, g, b] from 0 to 255.\n\t{ \"class\": \"title_bar\", \"layer0.tint\": [40, 40, 48] },\n\t{ \"class\": \"tabset_control\", \"layer0.tint\": [58, 58, 66] },\n\t{ \"class\": \"sidebar_tree\", \"layer0.tint\": [26, 29, 34] },\n\t{ \"class\": \"status_bar\", \"layer0.tint\": [38, 38, 46] }\n]\n";
+    }
+    openFile(file.string());
 }

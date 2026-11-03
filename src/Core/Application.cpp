@@ -13,6 +13,7 @@
 #include "UI/StatusBar.h"
 #include "Syntax/SyntaxHighlighter.h"
 #include "Syntax/SublimeSyntax.h"
+#include "Theme/UiTheme.h"
 #include "Platform/Platform.h"
 #include "Core/FileBackedBuffer.h"
 #include "Core/Version.h"
@@ -1543,8 +1544,8 @@ static void addSolidRect(std::vector<float>& v, float x0, float y0, float x1, fl
 void Application::drawSidebar(FontAtlas& font, float windowH, float titlebarH, float statusbarH) {
     if (!sidebarVisible_) return;
     std::vector<float> v;
-    addSolidRect(v, 0, titlebarH, sidebarWidth_, windowH - statusbarH, 0.105f, 0.115f, 0.135f, 1.f);
-    addSolidRect(v, sidebarWidth_ - 1.f, titlebarH, sidebarWidth_, windowH - statusbarH, 0.06f, 0.07f, 0.085f, 1.f);
+    addSolidRect(v, 0, titlebarH, sidebarWidth_, windowH - statusbarH, UiTheme::instance().sideBar.r, UiTheme::instance().sideBar.g, UiTheme::instance().sideBar.b, 1.f);
+    addSolidRect(v, sidebarWidth_ - 1.f, titlebarH, sidebarWidth_, windowH - statusbarH, UiTheme::instance().sideBarEdge.r, UiTheme::instance().sideBarEdge.g, UiTheme::instance().sideBarEdge.b, 1.f);
     float sidebarScale = std::clamp((float)sidebarFontSize_ / 14.f, 0.5f, 1.5f);
     struct SidebarTextDraw { std::string text; float x, y, scale, r, g, b; };
     std::vector<SidebarTextDraw> textDraws;
@@ -2477,7 +2478,7 @@ void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
     constexpr float allFilesW = 28.f;
     float menuX = std::max(tabStripInset, windowW - allFilesW);
     float initialVisibleW = std::max(0.f, menuX - tabStripInset);
-    ar(0, barY, windowW, barY + tabBarH_, 0.25f, 0.25f, 0.28f, 1.f);
+    ar(0, barY, windowW, barY + tabBarH_, UiTheme::instance().tabBar.r, UiTheme::instance().tabBar.g, UiTheme::instance().tabBar.b, 1.f);
     constexpr float tabTextPadL = 10.f;
     constexpr float tabActionPadR = 8.f;
     constexpr float tabActionW = 26.f;
@@ -2575,7 +2576,7 @@ void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
     }
     for (auto& label : labels) {
         float lx = label.x;
-        float textBright = (label.index == activeTab_) ? 0.85f : 0.55f;
+        float textBright = UiTheme::instance().text((label.index == activeTab_) ? 0.85f : 0.55f);
         float textY = tabTextY;
         float tw = tabWidthForLabel(label.text);
         float actionCenterX = lx + tw - tabActionPadR - tabActionW * 0.5f;
@@ -3638,6 +3639,7 @@ void Application::handleEvents() {
     while (SDL_PollEvent(&e)) {
         if (e.type == SDL_QUIT) { running_ = false; return; }
         if (handleMiddleColumnSelect(e)) continue;
+        if (pluginPopup_.active && e.type == SDL_MOUSEBUTTONDOWN && e.button.button == 1 && handlePopupClick(static_cast<float>(e.button.x), static_cast<float>(e.button.y))) continue;
         if (pluginPopup_.active && (e.type == SDL_MOUSEBUTTONDOWN || (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_ESCAPE))) pluginPopup_.active = false;
         if (e.type == SDL_DROPFILE) {
             if (e.drop.file) {

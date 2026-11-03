@@ -1,3 +1,4 @@
+#include "Theme/UiTheme.h"
 #include "UI/StatusBar.h"
 #include "Renderer/FontAtlas.h"
 #include "Renderer/GLRenderer.h"
@@ -16,7 +17,7 @@ void StatusBar::appendSolidRects(FontAtlas& font, std::vector<float>& verts, flo
                                  size_t line, size_t col, const std::string& branch) {
     if (!visible_) return;
     float barY = windowH - height_;
-    addStatusRect(verts, 0, barY, windowW, windowH, 0.15f, 0.15f, 0.18f, 1.f);
+    addStatusRect(verts, 0, barY, windowW, windowH, UiTheme::instance().statusBar.r, UiTheme::instance().statusBar.g, UiTheme::instance().statusBar.b, 1.f);
 
     if (!branch.empty()) {
         char buf[64];
@@ -37,7 +38,7 @@ void StatusBar::drawText(FontAtlas& font, float windowW, float windowH,
     float barY = windowH - height_;
     char buf[64];
     snprintf(buf, sizeof(buf), "Line %zu, Col %zu", line + 1, col + 1);
-    font.drawText(buf, 12.f, barY + 3.f, 0.7f, 0.7f, 0.7f, 1.f);
+    { float tg = UiTheme::instance().text(0.7f); font.drawText(buf, 12.f, barY + 3.f, tg, tg, tg, 1.f); }
 
     if (!branch.empty()) {
         float branchX = 12.f + font.measureText(buf) + 24.f;
@@ -53,9 +54,9 @@ void StatusBar::drawText(FontAtlas& font, float windowW, float windowH,
     syntaxLabelW_ = synW + 6.f;
     indentLabelX_ = syntaxLabelX_ - indW - 24.f;
     indentLabelW_ = indW + 6.f;
-    font.drawText(indentBuf, indentLabelX_ + 3.f, barY + 3.f, 0.65f, 0.65f, 0.68f, 1.f);
+    { float tg = UiTheme::instance().text(0.65f); font.drawText(indentBuf, indentLabelX_ + 3.f, barY + 3.f, tg, tg, tg, 1.f); }
     font.drawText("|", indentLabelX_ + indW + 10.f, barY + 3.f, 0.3f, 0.3f, 0.33f, 1.f);
-    font.drawText(syntaxName, syntaxLabelX_ + 3.f, barY + 3.f, 0.65f, 0.65f, 0.68f, 1.f);
+    { float tg = UiTheme::instance().text(0.65f); font.drawText(syntaxName, syntaxLabelX_ + 3.f, barY + 3.f, tg, tg, tg, 1.f); }
 }
 
 void StatusBar::draw(FontAtlas& font, float windowW, float windowH, float,

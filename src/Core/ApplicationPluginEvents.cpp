@@ -444,6 +444,9 @@ void Application::applyPluginPopup(const nlohmann::json& j) {
         if (nlPos >= text.size()) break;
         pos = nlPos + 1;
     }
+    pluginPopup_.links.clear();
+    if (j.contains("links") && j["links"].is_array())
+        for (auto& l : j["links"]) if (l.is_object() && pluginPopup_.links.size() < 40) pluginPopup_.links.push_back({l.value("text", ""), l.value("href", "")});
     pluginPopup_.key = key;
     pluginPopup_.offset = cpToByte(textBuffer, j.value("point", static_cast<size_t>(0)));
     pluginPopup_.shownAt = SDL_GetTicks();
@@ -468,6 +471,45 @@ void Application::drawPluginPopup(float drawTextX, float textOriginY, float line
     solidRect(box, x - 1.f, y - 1.f, x + w + 1.f, y + h + 1.f, 0.35f, 0.38f, 0.45f, 1.f);
     solidRect(box, x, y, x + w, y + h, 0.15f, 0.16f, 0.19f, 1.f);
     flushNow(box);
-    for (size_t i = 0; i < pluginPopup_.lines.size(); ++i)
-        fontAtlas().drawText(oneLine(pluginPopup_.lines[i], 120), x + 10.f, y + 6.f + static_cast<float>(i) * lineStep, 0.85f, 0.87f, 0.9f, 1.f);
+    for (auto& link : pluginPopup_.links) link.x1 = link.x0;  // rectangles are rebuilt below
+    std::vector<bool> used(pluginPopup_.links.size(), false);
+    for (size_t i = 0; i < pluginPopup_.lines.size(); ++i) {
+        std::string text = oneLine(pluginPopup_.lines[i], 120);
+        float ty = y + 6.f + static_cast<float>(i) * lineStep;
+        fontAtlas().drawText(text, x + 10.f, ty, 0.85f, 0.87f, 0.9f, 1.f);
+        for (size_t k = 0; k < pluginPopup_.links.size(); ++k) {
+            PopupLink& link = pluginPopup_.links[k];
+            if (used[k] || link.text.empty()) continue;
+            size_t at = text.find(link.text);
+            if (at == std::string::npos) continue;
+            used[k] = true;
+            float lx = x + 10.f + fontAtlas().measureText(std::string_view(text.data(), at));
+            float lw = fontAtlas().measureText(link.text);
+            fontAtlas().drawText(link.text, lx, ty, 0.45f, 0.70f, 1.0f, 1.f);
+            std::vector<float> underline;
+            solidRect(underline, lx, ty + lineStep - 4.f, lx + lw, ty + lineStep - 3.f, 0.45f, 0.70f, 1.0f, 1.f);
+            flushNow(underline);
+            link.x0 = lx; link.x1 = lx + lw; link.y0 = ty; link.y1 = ty + lineStep;
+        }
+    }
+}
+
+// A click on a link in a popup goes to the plugin's on_navigate callback and leaves the popup open.
+bool Application::handlePopupClick(float x, float y) {
+    for (auto& link : pluginPopup_.links) {
+        if (link.x1 <= link.x0 || x < link.x0 || x >= link.x1 || y < link.y0 || y >= link.y1) continue;
+        try {
+            nlohmann::json j = {{"type", "view_event"}, {"event", "popup_navigate"}, {"key", pluginPopup_.key}, {"href", link.href}, {"name", openFile_}, {"dirty", dirty_}, {"sel", nlohmann::json::array()}};
+            if (pluginPopup_.key.rfind("untitled:", 0) != 0) j["path"] = pluginPopup_.key;
+            fs::path bridge = fs::path(paths_.localDir) / "PluginBridge";
+            fs::create_directories(bridge);
+            std::string stem = std::to_string(SDL_GetTicks()) + "-" + std::to_string(pluginEventSeq_++) + "-view_event";
+            fs::path tmp = bridge / (stem + ".tmp");
+            { std::ofstream f(tmp, std::ios::binary | std::ios::trunc); if (!f) return true; f << j.dump(); }
+            std::error_code ec;
+            fs::rename(tmp, bridge / (stem + ".request.json"), ec);
+        } catch (...) {}
+        return true;
+    }
+    return false;
 }

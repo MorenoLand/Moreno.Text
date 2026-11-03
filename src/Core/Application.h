@@ -398,6 +398,10 @@ public:
     void endSnippet() { snippetActive_ = false; }
     void openColorSchemePicker();
     void customizeColorScheme();
+    void applyUiThemeSetting();
+    void setUiTheme(const std::string& value);
+    void chooseUiThemeFile();
+    void customizeUiTheme();
     void applyColorScheme(const std::string& path);
     void setLayoutColumns(size_t columns);
     void setLayoutGrid(size_t cols, size_t rows);
@@ -797,7 +801,9 @@ private:
     struct PluginRegionSet { std::vector<std::pair<size_t, size_t>> ranges; int flags = 0; float r = 0.f, g = 0.f, b = 0.f; std::string icon; };
     struct PluginPhantom { size_t offset = 0; std::string text; };
     std::map<std::string, std::vector<PluginPhantom>> pluginPhantoms_;  // tab key -> phantoms
-    struct PluginPopup { bool active = false; std::string key; size_t offset = 0; std::vector<std::string> lines; uint32_t shownAt = 0; } pluginPopup_;
+    struct PopupLink { std::string text, href; float x0 = 0, y0 = 0, x1 = 0, y1 = 0; };
+    struct PluginPopup { bool active = false; std::string key; size_t offset = 0; std::vector<std::string> lines; uint32_t shownAt = 0; std::vector<PopupLink> links; } pluginPopup_;
+    bool handlePopupClick(float x, float y);
     void applyPluginPhantoms(const nlohmann::json& j);
     void applyPluginPopup(const nlohmann::json& j);
     void drawPluginPhantoms(float drawTextX, float textOriginY, float lineStep, float top, float bottom, size_t firstLine, size_t lastLine, float clipLeft, float clipRight);

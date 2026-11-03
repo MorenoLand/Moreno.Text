@@ -1372,6 +1372,11 @@ def install_plugin(p):
 
         # Phantoms and popups are drawn by the editor as plain text (the HTML is stripped).
         @staticmethod
+        def _links(content):
+            return [{'text': html.unescape(re.sub(r'<[^>]*>', '', m.group(2))).strip(), 'href': html.unescape(m.group(1))}
+                    for m in re.finditer(r'(?is)<a\s[^>]*href=["\']([^"\']*)["\'][^>]*>(.*?)</a>', str(content))]
+
+        @staticmethod
         def _plain(content):
             text = re.sub(r'(?i)<br\s*/?>|</p>|</div>|</li>|</h\d>', '\n', str(content))
             text = html.unescape(re.sub(r'<[^>]*>', '', text))
@@ -1399,11 +1404,11 @@ def install_plugin(p):
         def show_popup(self, content, flags=0, location=-1, max_width=320, max_height=240, on_navigate=None, on_hide=None):
             api.View.show_popup(self, content, flags, location, max_width, max_height, on_navigate, on_hide)
             point = int(location) if location is not None and int(location) >= 0 else (self._sel[0].b if len(self._sel) else 0)
-            self._publish('view_popup', {'text': self._plain(content), 'point': point})
+            self._publish('view_popup', {'text': self._plain(content), 'point': point, 'links': self._links(content)})
 
         def update_popup(self, content):
             api.View.update_popup(self, content)
-            self._publish('view_popup', {'text': self._plain(content), 'point': self._sel[0].b if len(self._sel) else 0})
+            self._publish('view_popup', {'text': self._plain(content), 'point': self._sel[0].b if len(self._sel) else 0, 'links': self._links(content)})
 
         def hide_popup(self):
             api.View.hide_popup(self)
@@ -1471,6 +1476,12 @@ def install_plugin(p):
         for a, b in data.get('sel') or [[0, 0]]: view._sel.add(api.Region(int(a), int(b)))
         if created: check_view_event_listeners(view)
         if event == 'on_activated': window._active_view = view
+        if event == 'popup_navigate':
+            nav = (view.__dict__.get('_popup') or {}).get('on_navigate')
+            if nav:
+                try: nav(str(data.get('href', '')))
+                except Exception as e: print('[on_navigate-error]', e)
+            return
         if event == 'on_hover':
             for name in ('on_hover', 'on_hover_async'):
                 _call(name, view, int(data.get('point', 0)), int(data.get('zone', 1)))

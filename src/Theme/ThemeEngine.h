@@ -105,6 +105,7 @@ public:
             }
         }
     }
+    ThemeColor parseColorPublic(const std::string& s) const { return parseColor(s); }
     const std::string& name() const { return name_; }
     const std::string& path() const { return path_; }
     ThemeColor colorForScope(const std::string& scope) const {

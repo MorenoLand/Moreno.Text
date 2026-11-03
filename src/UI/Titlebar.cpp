@@ -3,6 +3,7 @@
 #include "Renderer/FontAtlas.h"
 #include "Renderer/GLRenderer.h"
 #include "icon_data.h"
+#include "Theme/UiTheme.h"
 #include <GL/glew.h>
 #include <algorithm>
 #include <cstdio>
@@ -104,6 +105,14 @@ void Titlebar::buildMenu() {
         for (int a = 0; a < 8; ++a) tabKids.push_back(leaf(names[a], [a] { Application::instance().tabSelectionAction(a); }));
         for (int n = 1; n <= 10; ++n) tabKids.push_back(leaf("Focus Selected Tab " + std::to_string(n), [n] { Application::instance().tabSelectionAction(8, n); }));
         submenus_[2].push_back(group("Tab Selection", std::move(tabKids)));
+    }
+    {
+        std::vector<TitlebarMenuItem> themeKids;
+        themeKids.push_back(leaf("Default", [] { Application::instance().setUiTheme("Default.sublime-theme"); }));
+        themeKids.push_back(leaf("Follow Color Scheme", [] { Application::instance().setUiTheme("follow_color_scheme"); }));
+        themeKids.push_back(leaf("Open Theme File...", [] { Application::instance().chooseUiThemeFile(); }));
+        submenus_[7].push_back(group("UI Theme", std::move(themeKids)));
+        submenus_[7].push_back(leaf("Customize Theme", [] { Application::instance().customizeUiTheme(); }));
     }
     std::vector<TitlebarMenuItem> reopenKids, saveKids;
     for (const std::string& name : Application::encodingNames()) {
@@ -451,7 +460,7 @@ void Titlebar::appendSolidRects(std::vector<float>& v) {
     auto ar = [&](float x0,float y0,float x1,float y1,float cr,float cg,float cb,float ca) {
         v.insert(v.end(),{x0,y0,0,0,cr,cg,cb,ca, x0,y1,0,0,cr,cg,cb,ca, x1,y1,0,0,cr,cg,cb,ca, x0,y0,0,0,cr,cg,cb,ca, x1,y1,0,0,cr,cg,cb,ca, x1,y0,0,0,cr,cg,cb,ca});
     };
-    ar(0, 0, buttons_[1].x, height_, 0.16f, 0.16f, 0.19f, 1.f);
+    ar(0, 0, buttons_[1].x, height_, UiTheme::instance().titleBar.r, UiTheme::instance().titleBar.g, UiTheme::instance().titleBar.b, 1.f);
     for (int i = 1; i < 4; ++i) {
         auto& btn = buttons_[i];
         if (btn.type == TitlebarButton::CLOSE) {
@@ -483,7 +492,7 @@ void Titlebar::drawForeground(FontAtlas& font) {
     float titleX = (titleLeft + titleRight) / 2.f - titleW / 2.f;
     if (titleX < titleLeft) titleX = titleLeft;
     float titleY = 8.f;
-    font.drawText(title_, titleX, titleY, 0.7f, 0.7f, 0.7f, 1.f);
+    { float tg = UiTheme::instance().text(0.7f); font.drawText(title_, titleX, titleY, tg, tg, tg, 1.f); }
     float mid = height_ / 2.f;
     std::vector<float> iconRects;
     auto ar = [&](float x0,float y0,float x1,float y1,float cr,float cg,float cb,float ca) {
