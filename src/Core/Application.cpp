@@ -1542,6 +1542,7 @@ static void addSolidRect(std::vector<float>& v, float x0, float y0, float x1, fl
 }
 
 void Application::drawSidebar(FontAtlas& font, float windowH, float titlebarH, float statusbarH) {
+    UiTheme::ChromeScope chromeScope;
     if (!sidebarVisible_) return;
     std::vector<float> v;
     addSolidRect(v, 0, titlebarH, sidebarWidth_, windowH - statusbarH, UiTheme::instance().sideBar.r, UiTheme::instance().sideBar.g, UiTheme::instance().sideBar.b, 1.f);
@@ -1566,7 +1567,7 @@ void Application::drawSidebar(FontAtlas& font, float windowH, float titlebarH, f
             return;
         }
         addSolidRect(v, x, rowY + 2.f, x + 10.f, rowY + 16.f, 0.64f, 0.67f, 0.71f, 1.f);
-        addSolidRect(v, x + 1.f, rowY + 3.f, x + 9.f, rowY + 15.f, 0.105f, 0.115f, 0.135f, 1.f);
+        addSolidRect(v, x + 1.f, rowY + 3.f, x + 9.f, rowY + 15.f, UIC(0.105f, 0.115f, 0.135f), 1.f);
         if (kind == 1) {
             addSolidRect(v, x + 2.f, rowY + 6.f, x + 6.f, rowY + 7.f, r, g, b, 1.f);
             addSolidRect(v, x + 2.f, rowY + 9.f, x + 6.f, rowY + 10.f, r, g, b, 1.f);
@@ -1614,13 +1615,13 @@ void Application::drawSidebar(FontAtlas& font, float windowH, float titlebarH, f
     float viewH = windowH - statusbarH - titlebarH - 26.f - hScrollH;
     float maxScroll = std::max(0.f, sidebarContentH_ - viewH);
     if (sidebarScrollY_ > maxScroll) sidebarScrollY_ = maxScroll;
-    addSolidRect(v, 0.f, titlebarH, sidebarWidth_ - 1.f, titlebarH + 20.f, 0.095f, 0.105f, 0.125f, 1.f);
-    addSolidRect(v, 0.f, titlebarH + 19.f, sidebarWidth_ - 1.f, titlebarH + 20.f, 0.17f, 0.19f, 0.22f, 1.f);
+    addSolidRect(v, 0.f, titlebarH, sidebarWidth_ - 1.f, titlebarH + 20.f, UIC(0.095f, 0.105f, 0.125f), 1.f);
+    addSolidRect(v, 0.f, titlebarH + 19.f, sidebarWidth_ - 1.f, titlebarH + 20.f, UIC(0.17f, 0.19f, 0.22f), 1.f);
     textDraws.push_back({"FOLDERS", 10.f, titlebarH + 3.f, sidebarScale, 0.78f, 0.80f, 0.84f});
     auto drawRootHeader = [&](SidebarNode& rt) {
         if (!rt.name.empty() && y + rowH >= titlebarH + 20.f && y <= windowH - statusbarH) {
-            addSolidRect(v, 0.f, y - 3.f, sidebarWidth_ - 1.f, y + rowH - 3.f, 0.14f, 0.155f, 0.18f, 1.f);
-            addSolidRect(v, 0.f, y + rowH - 4.f, sidebarWidth_ - 1.f, y + rowH - 3.f, 0.20f, 0.22f, 0.26f, 1.f);
+            addSolidRect(v, 0.f, y - 3.f, sidebarWidth_ - 1.f, y + rowH - 3.f, UIC(0.14f, 0.155f, 0.18f), 1.f);
+            addSolidRect(v, 0.f, y + rowH - 4.f, sidebarWidth_ - 1.f, y + rowH - 3.f, UIC(0.20f, 0.22f, 0.26f), 1.f);
             addDisclosure(8.f - sidebarScrollX_, y, rt.expanded);
             addFolderIcon(20.f - sidebarScrollX_, y);
             textDraws.push_back({rt.name, 38.f - sidebarScrollX_, y + 4.f, sidebarScale, 0.88f, 0.88f, 0.91f});
@@ -1635,7 +1636,7 @@ void Application::drawSidebar(FontAtlas& font, float windowH, float titlebarH, f
                 float x = 8.f + node.depth * 14.f - sidebarScrollX_;
                 bool active = !node.folder && !openFilePath_.empty() && fs::absolute(node.path).string() == fs::absolute(openFilePath_).string();
                 if (active) {
-                    addSolidRect(v, 0.f, rowY - 3.f, sidebarWidth_ - 1.f, rowY + rowH - 3.f, 0.18f, 0.22f, 0.31f, 1.f);
+                    addSolidRect(v, 0.f, rowY - 3.f, sidebarWidth_ - 1.f, rowY + rowH - 3.f, UIC(0.18f, 0.22f, 0.31f), 1.f);
                     addSolidRect(v, 0.f, rowY - 3.f, 3.f, rowY + rowH - 3.f, 0.35f, 0.58f, 0.88f, 1.f);
                 }
                 float ir = 0.48f, ig = 0.52f, ib = 0.56f;
@@ -1685,8 +1686,8 @@ void Application::drawSidebar(FontAtlas& font, float windowH, float titlebarH, f
         float thumbY = titlebarH + (sidebarScrollY_ / maxScroll) * (viewH - thumbH);
         float trackLeft = sidebarWidth_ - 8.f;
         float thumbX = trackLeft + 2.f;
-        addSolidRect(v, trackLeft, titlebarH, sidebarWidth_ - 1.f, titlebarH + viewH, 0.105f, 0.105f, 0.125f, 1.f);
-        addSolidRect(v, thumbX, thumbY, thumbX + 4.f, thumbY + thumbH, 0.37f, 0.37f, 0.37f, 1.f);
+        addSolidRect(v, trackLeft, titlebarH, sidebarWidth_ - 1.f, titlebarH + viewH, UIC(0.105f, 0.105f, 0.125f), 1.f);
+        addSolidRect(v, thumbX, thumbY, thumbX + 4.f, thumbY + thumbH, UIC(0.37f, 0.37f, 0.37f), 1.f);
     }
     glEnable(GL_SCISSOR_TEST); GLRenderer::scissor(0, (int)(statusbarH + hScrollH), (int)sidebarWidth_, (int)(windowH - titlebarH - statusbarH - hScrollH));
     if (!v.empty()) {
@@ -1704,8 +1705,8 @@ void Application::drawSidebar(FontAtlas& font, float windowH, float titlebarH, f
         float thumbW = std::max(24.f, trackW * (trackW / sidebarContentW_));
         float thumbX = maxScrollX > 0.f ? (sidebarScrollX_ / maxScrollX) * (trackW - thumbW) : 0.f;
         std::vector<float> scrollbar;
-        addSolidRect(scrollbar, 0.f, trackY, trackW, trackY + hScrollH, 0.105f, 0.105f, 0.125f, 1.f);
-        addSolidRect(scrollbar, thumbX, trackY + 3.f, thumbX + thumbW, trackY + 9.f, 0.37f, 0.37f, 0.37f, 1.f);
+        addSolidRect(scrollbar, 0.f, trackY, trackW, trackY + hScrollH, UIC(0.105f, 0.105f, 0.125f), 1.f);
+        addSolidRect(scrollbar, thumbX, trackY + 3.f, thumbX + thumbW, trackY + 9.f, UIC(0.37f, 0.37f, 0.37f), 1.f);
         GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
         glBufferData(GL_ARRAY_BUFFER, scrollbar.size()*sizeof(float), scrollbar.data(), GL_DYNAMIC_DRAW);
         glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(scrollbar.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0);
@@ -2466,6 +2467,7 @@ bool Application::detachTabToNewWindow(size_t index) {
 }
 
 void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
+    UiTheme::ChromeScope chromeScope;
     if (!tabsVisible_) return;
     float tabScale = std::clamp((float)tabFontSize_ / 14.f, 0.5f, 1.5f);
     auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
@@ -2534,11 +2536,11 @@ void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
         bool groupedTab = false;
         for (auto& group : editorGroups_) if (group.tab == i) { groupedTab = true; break; }
         if (i != activeTab_ && selectedTabs_.count(i)) {
-            roundedTab(tx, tx + tw, 0.27f, 0.33f, 0.46f, 0.85f, false);
+            roundedTab(tx, tx + tw, UIC(0.27f, 0.33f, 0.46f), 0.85f, false);
         } else if (i != activeTab_ && groupedTab) {
-            roundedTab(tx, tx + tw, 0.23f, 0.24f, 0.27f, 0.75f, false);
+            roundedTab(tx, tx + tw, UIC(0.23f, 0.24f, 0.27f), 0.75f, false);
         } else if (i != activeTab_ && i == tabHoverIndex_) {
-            roundedTab(tx, tx + tw, 0.24f, 0.25f, 0.28f, 0.55f, false);
+            roundedTab(tx, tx + tw, UIC(0.24f, 0.25f, 0.28f), 0.55f, false);
         }
         labels.push_back({i, tx, label});
         tx += tw;
@@ -2552,7 +2554,7 @@ void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
     if (hasOverflow) {
         for (int i = 0; i < 2; ++i) {
             float x = scrollAreaX + i * scrollBtnW;
-            ar(x, barY, x + scrollBtnW, barY + tabBarH_, 0.21f, 0.21f, 0.24f, 1.f);
+            ar(x, barY, x + scrollBtnW, barY + tabBarH_, UIC(0.21f, 0.21f, 0.24f), 1.f);
         }
     }
     auto flushTabSolids = [&] {
@@ -2576,7 +2578,7 @@ void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
     }
     for (auto& label : labels) {
         float lx = label.x;
-        float textBright = UiTheme::instance().text((label.index == activeTab_) ? 0.85f : 0.55f);
+        float textBright = (label.index == activeTab_) ? 0.85f : 0.55f;
         float textY = tabTextY;
         float tw = tabWidthForLabel(label.text);
         float actionCenterX = lx + tw - tabActionPadR - tabActionW * 0.5f;
@@ -2607,9 +2609,10 @@ void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
     }
     bool allFilesHover = mouseX_ >= (int)menuX && mouseX_ < (int)windowW && mouseY_ >= (int)barY && mouseY_ < (int)(barY + tabBarH_);
     ar(menuX + 3.f, barY + 5.f, windowW - 3.f, barY + tabBarH_ - 5.f,
-       allFilesHover || tabDropdownOpen_ ? 0.31f : 0.25f, allFilesHover || tabDropdownOpen_ ? 0.34f : 0.25f, allFilesHover || tabDropdownOpen_ ? 0.40f : 0.28f, 1.f);
+       UIC(allFilesHover || tabDropdownOpen_ ? 0.31f : 0.25f, allFilesHover || tabDropdownOpen_ ? 0.34f : 0.25f, allFilesHover || tabDropdownOpen_ ? 0.40f : 0.28f), 1.f);
     float arrowX = menuX + allFilesW * 0.5f;
-    solidVerts_.insert(solidVerts_.end(), {arrowX - 5.f,controlY + 3.f,0,0,0.76f,0.79f,0.85f,1, arrowX + 5.f,controlY + 3.f,0,0,0.76f,0.79f,0.85f,1, arrowX,controlY + 8.f,0,0,0.76f,0.79f,0.85f,1});
+    ThemeColor arrowC = UiTheme::instance().m(0.76f, 0.79f, 0.85f);
+    solidVerts_.insert(solidVerts_.end(), {arrowX - 5.f,controlY + 3.f,0,0,arrowC.r,arrowC.g,arrowC.b,1, arrowX + 5.f,controlY + 3.f,0,0,arrowC.r,arrowC.g,arrowC.b,1, arrowX,controlY + 8.f,0,0,arrowC.r,arrowC.g,arrowC.b,1});
     flushTabSolids();
     if (!tabDropdownOpen_ && mouseX_ >= (int)menuX && mouseX_ < (int)windowW && mouseY_ >= (int)barY && mouseY_ < (int)(barY + tabBarH_)) {
         std::string tip = "All Files";
@@ -2617,7 +2620,7 @@ void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
         float tipH = 24.f;
         float tipX = std::clamp(menuX - tipW + allFilesW, 4.f, std::max(4.f, windowW - tipW - 4.f));
         float tipY = barY + tabBarH_ + 4.f;
-        ar(tipX, tipY, tipX + tipW, tipY + tipH, 0.12f, 0.12f, 0.14f, 0.96f);
+        ar(tipX, tipY, tipX + tipW, tipY + tipH, UIC(0.12f, 0.12f, 0.14f), 0.96f);
         flushTabSolids();
         font.drawTextScaled(tip, tipX + 9.f, tipY + 5.f, tabScale, 0.84f, 0.84f, 0.87f, 1.f);
     }
@@ -2627,9 +2630,9 @@ void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
         auto pr = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
             pv.insert(pv.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
         };
-        pr(popX, popY, popX + popW, popY + popH, 0.17f, 0.17f, 0.20f, 0.98f);
+        pr(popX, popY, popX + popW, popY + popH, UIC(0.17f, 0.17f, 0.20f), 0.98f);
         if (tabDropdownHover_ >= 0 && tabDropdownHover_ < (int)tabs_.size())
-            pr(popX + 2, popY + 2 + tabDropdownHover_ * itemH, popX + popW - 2, popY + 2 + (tabDropdownHover_ + 1) * itemH, 0.25f, 0.30f, 0.45f, 1.f);
+            pr(popX + 2, popY + 2 + tabDropdownHover_ * itemH, popX + popW - 2, popY + 2 + (tabDropdownHover_ + 1) * itemH, UIC(0.25f, 0.30f, 0.45f), 1.f);
         GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
         glBufferData(GL_ARRAY_BUFFER, pv.size()*sizeof(float), pv.data(), GL_DYNAMIC_DRAW);
         glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(pv.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0);
@@ -2647,13 +2650,13 @@ void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
         auto cr = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
             cv.insert(cv.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
         };
-        cr(tabContextX_, tabContextY_, tabContextX_ + popW, tabContextY_ + popH, 0.17f, 0.17f, 0.20f, 0.98f);
-        if (tabContextHover_ >= 0 && kTabContextItems[tabContextHover_][0]) cr(tabContextX_ + 2, tabContextY_ + 2 + tabContextHover_ * itemH, tabContextX_ + popW - 2, tabContextY_ + 2 + (tabContextHover_ + 1) * itemH, 0.25f, 0.30f, 0.45f, 1.f);
+        cr(tabContextX_, tabContextY_, tabContextX_ + popW, tabContextY_ + popH, UIC(0.17f, 0.17f, 0.20f), 0.98f);
+        if (tabContextHover_ >= 0 && kTabContextItems[tabContextHover_][0]) cr(tabContextX_ + 2, tabContextY_ + 2 + tabContextHover_ * itemH, tabContextX_ + popW - 2, tabContextY_ + 2 + (tabContextHover_ + 1) * itemH, UIC(0.25f, 0.30f, 0.45f), 1.f);
         GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
         glBufferData(GL_ARRAY_BUFFER, cv.size()*sizeof(float), cv.data(), GL_DYNAMIC_DRAW);
         glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(cv.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0);
         for (int i = 0; i < itemCount; ++i) {
-            if (!kTabContextItems[i][0]) { std::vector<float> sv; cr(tabContextX_ + 8.f, tabContextY_ + 13.f + i * itemH, tabContextX_ + popW - 8.f, tabContextY_ + 14.f + i * itemH, 0.3f, 0.3f, 0.33f, 1.f); continue; }
+            if (!kTabContextItems[i][0]) { std::vector<float> sv; cr(tabContextX_ + 8.f, tabContextY_ + 13.f + i * itemH, tabContextX_ + popW - 8.f, tabContextY_ + 14.f + i * itemH, UIC(0.3f, 0.3f, 0.33f), 1.f); continue; }
             bool greyed = (i == 2 && tabContextIndex_ >= tabs_.size() - 1) || (i == 3 && tabContextIndex_ == 0);
             float alpha = greyed ? 0.4f : 1.f;
             font.drawText(kTabContextItems[i], tabContextX_ + 10.f, tabContextY_ + 6.f + i * itemH, 0.78f * alpha, 0.78f * alpha, 0.82f * alpha, alpha);
@@ -4714,11 +4717,11 @@ void Application::handleEvents() {
                 float indentX = editorRight - indentW - synW - 32.f - 12.f;
                 float synX = editorRight - synW - 12.f;
                 if (mx >= indentX && mx <= indentX + indentW + 10.f) {
-                    statusPopup_ = StatusPopup::Indent; popupX_ = indentX; popupY_ = fwh - sbH - 8 * 24.f - 4.f; popupSelected_ = 0; popupScroll_ = 0; continue;
+                    statusPopup_ = StatusPopup::Indent; popupX_ = indentX; popupY_ = fwh - sbH - 8 * 24.f - 4.f; popupSelected_ = 0; popupScroll_ = 0; popupX_ = std::max(0.f, std::min(popupX_, (float)fww - statusPopupWidth() - 2.f)); continue;
                 }
                 if (mx >= synX && mx <= synX + synW + 10.f) {
                     int visibleLangs = std::min(syntaxLangCount, 18);
-                    statusPopup_ = StatusPopup::Syntax; popupX_ = synX; popupY_ = fwh - sbH - visibleLangs * 24.f - 4.f; popupSelected_ = 0; popupScroll_ = 0; continue;
+                    statusPopup_ = StatusPopup::Syntax; popupX_ = synX; popupY_ = fwh - sbH - visibleLangs * 24.f - 4.f; popupSelected_ = 0; popupScroll_ = 0; popupX_ = std::max(0.f, std::min(popupX_, (float)fww - statusPopupWidth() - 2.f)); continue;
                 }
             }
             // find/replace button clicks
@@ -5918,8 +5921,9 @@ void Application::render() {
         };
         float thumbW = 4.f;
         float thumbX = sbX + (scrollbarW - thumbW) / 2.f;
-        float c = scrollbarDragging_ ? 0.416f : (scrollbarHovered_ ? 0.353f : 0.290f);
-        ar(thumbX, thumbY, thumbX + thumbW, thumbY + thumbH, c, c, c, 1.f);
+        ThemeColor sbFg = ThemeEngine::instance().fgColor(), sbBg = ThemeEngine::instance().bgColor();
+        float mixT = scrollbarDragging_ ? 0.45f : (scrollbarHovered_ ? 0.35f : 0.25f);
+        ar(thumbX, thumbY, thumbX + thumbW, thumbY + thumbH, sbBg.r + (sbFg.r - sbBg.r) * mixT, sbBg.g + (sbFg.g - sbBg.g) * mixT, sbBg.b + (sbFg.b - sbBg.b) * mixT, 1.f);
         if (!sv.empty()) { GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo()); glBufferData(GL_ARRAY_BUFFER, sv.size()*sizeof(float), sv.data(), GL_DYNAMIC_DRAW); glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(sv.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0); }
     }
     if (horizontalScrollbarVisible) {
@@ -5928,9 +5932,10 @@ void Application::render() {
         float thumbW = std::max(20.f, regionW * (regionW / maxLineWidth_));
         if (thumbW > regionW) thumbW = regionW;
         float thumbX = textX + (maxScrollX > 0.f ? (scrollX_ / maxScrollX) * (regionW - thumbW) : 0.f);
-        float c = horizontalScrollbarDragging_ ? 0.416f : (horizontalScrollbarHovered_ ? 0.353f : 0.290f);
-        addSolid(textX, trackY, textX + regionW, trackY + hScrollbarH, 0.105f, 0.105f, 0.125f, 1.f);
-        addSolid(thumbX, trackY + 3.f, thumbX + thumbW, trackY + 9.f, c + 0.08f, c + 0.08f, c + 0.08f, 1.f);
+        ThemeColor hsFg = ThemeEngine::instance().fgColor(), hsBg = ThemeEngine::instance().bgColor(), hsGutter = ThemeEngine::instance().gutterColor();
+        float mixT = horizontalScrollbarDragging_ ? 0.5f : (horizontalScrollbarHovered_ ? 0.4f : 0.3f);
+        addSolid(textX, trackY, textX + regionW, trackY + hScrollbarH, hsGutter.r, hsGutter.g, hsGutter.b, 1.f);
+        addSolid(thumbX, trackY + 3.f, thumbX + thumbW, trackY + 9.f, hsBg.r + (hsFg.r - hsBg.r) * mixT, hsBg.g + (hsFg.g - hsBg.g) * mixT, hsBg.b + (hsFg.b - hsBg.b) * mixT, 1.f);
         flushSolid();
     }
     // minimap
@@ -5948,12 +5953,13 @@ void Application::render() {
     if (activeRect.b < fwh - windowSbH - 0.5f) addSolid(activePaneLeft, activeRect.b - 1.f, activePaneRight, activeRect.b, 0.35f, 0.37f, 0.43f, 1.f);
     drawPluginPopup(drawTextX, textOriginY, lineStep, fww, fwh);
     tbH = windowTbH; sbH = windowSbH; findPanelH = windowFindPanelH;
+    UiTheme::ChromeScope chromeScope;  // chrome text is inverted on a light theme from here on
     // status bar
     std::string branch;
     if (consoleOpen_) {
         float consoleY = fwh - sbH - consoleH_;
-        addSolid(0, consoleY, fww, consoleY + consoleH_, 0.08f, 0.08f, 0.10f, 0.95f);
-        addSolid(0, consoleY, fww, consoleY + 1, 0.30f, 0.30f, 0.35f, 1.f);
+        addSolid(0, consoleY, fww, consoleY + consoleH_, UIC(0.08f, 0.08f, 0.10f), 0.95f);
+        addSolid(0, consoleY, fww, consoleY + 1, UIC(0.30f, 0.30f, 0.35f), 1.f);
         addSolid(0, consoleY + consoleH_ - 2, fww, consoleY + consoleH_, 0.325f, 0.545f, 1.f, 0.6f);
         flushSolid();
         glEnable(GL_SCISSOR_TEST);
@@ -6001,9 +6007,9 @@ void Application::render() {
         if (!branch.empty()) statusX += 16.f + uiFontAtlas().measureText(branch) + 24.f;
         float statusRight = fww - 12.f - uiFontAtlas().measureText(syntax_->languageName()) - uiFontAtlas().measureText(indent) - 48.f;
         if (statusRight - statusX >= 72.f) {
-            addSolid(statusX - 7.f, fwh - sbH + 2.f, statusRight + 7.f, fwh - 2.f, 0.115f, 0.125f, 0.15f, 1.f);
-            addSolid(statusX - 7.f, fwh - sbH + 2.f, statusX - 6.f, fwh - 2.f, 0.28f, 0.34f, 0.46f, 1.f);
-            addSolid(statusRight + 6.f, fwh - sbH + 2.f, statusRight + 7.f, fwh - 2.f, 0.28f, 0.34f, 0.46f, 1.f);
+            addSolid(statusX - 7.f, fwh - sbH + 2.f, statusRight + 7.f, fwh - 2.f, UIC(0.115f, 0.125f, 0.15f), 1.f);
+            addSolid(statusX - 7.f, fwh - sbH + 2.f, statusX - 6.f, fwh - 2.f, UIC(0.28f, 0.34f, 0.46f), 1.f);
+            addSolid(statusRight + 6.f, fwh - sbH + 2.f, statusRight + 7.f, fwh - 2.f, UIC(0.28f, 0.34f, 0.46f), 1.f);
             flushSolid();
             uiFontAtlas().drawTextClipped(pluginStatusText_, statusX, fwh - sbH + 3.f, statusX, statusRight, 0.72f, 0.78f, 0.92f, 1.f);
         }
@@ -6016,9 +6022,9 @@ void Application::render() {
         auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
             addSolid(x0, y0, x1, y1, r, g, b, a);
         };
-        ar(0, barY, barW, barY + barH, 0.18f, 0.21f, 0.25f, 1.f);
-        ar(0, barY, barW, barY + 1, 0.27f, 0.30f, 0.35f, 1.f);
-        if (find_.replaceActive) ar(0, barY + rowH, barW, barY + rowH + 1.f, 0.25f, 0.28f, 0.32f, 1.f);
+        ar(0, barY, barW, barY + barH, UIC(0.18f, 0.21f, 0.25f), 1.f);
+        ar(0, barY, barW, barY + 1, UIC(0.27f, 0.30f, 0.35f), 1.f);
+        if (find_.replaceActive) ar(0, barY + rowH, barW, barY + rowH + 1.f, UIC(0.25f, 0.28f, 0.32f), 1.f);
         float fieldH = 24.f;
         float toggleX = 18.f;
         float findLabelX = find_.replaceActive ? 186.f : 154.f;
@@ -6038,49 +6044,55 @@ void Application::render() {
         float fieldW = std::max(150.f, closeButtonX - fieldX - actionW - 10.f);
         float fy = barY + 2.f;
         auto button = [&](float x, float y, float w, bool active = false) {
-            ar(x, y, x + w, y + fieldH, active ? 0.28f : 0.19f, active ? 0.35f : 0.22f, active ? 0.45f : 0.26f, 1.f);
+            ar(x, y, x + w, y + fieldH, UIC(active ? 0.28f : 0.19f, active ? 0.35f : 0.22f, active ? 0.45f : 0.26f), 1.f);
         };
         auto centeredText = [&](const char* text, float x, float y, float w) {
             float textW = fontAtlas().measureText(text);
             fontAtlas().drawText(text, x + (w - textW) * 0.5f, y + 5.f, 0.82f, 0.84f, 0.88f, 1.f);
         };
+        struct TC { float r, g, b; };
+        auto toggleTextRaw = [&](bool on, float r, float g, float b) -> TC {
+            if (!on) return {0.58f, 0.58f, 0.62f};
+            ThemeColor c = UiTheme::instance().m(r, g, b);
+            return {c.r, c.g, c.b};
+        };
         auto toggleBtn = [&](bool active, float x, float y) {
             button(x, y, 28.f, active);
         };
-        ar(toggleX - 4.f, fy - 1.f, toggleX + 100.f, fy + fieldH + 1.f, 0.14f, 0.16f, 0.19f, 1.f);
+        ar(toggleX - 4.f, fy - 1.f, toggleX + 100.f, fy + fieldH + 1.f, UIC(0.14f, 0.16f, 0.19f), 1.f);
         toggleBtn(find_.regex, toggleX, fy);
         toggleBtn(find_.caseSensitive, toggleX + 34.f, fy);
         toggleBtn(find_.wholeWord, toggleX + 68.f, fy);
-        ar(fieldX - 1.f, fy - 1.f, fieldX + fieldW + 1.f, fy + fieldH + 1.f, 0.13f, 0.15f, 0.18f, 1.f);
-        ar(fieldX, fy, fieldX + fieldW, fy + fieldH, 0.27f, 0.31f, 0.36f, 1.f);
+        ar(fieldX - 1.f, fy - 1.f, fieldX + fieldW + 1.f, fy + fieldH + 1.f, UIC(0.13f, 0.15f, 0.18f), 1.f);
+        ar(fieldX, fy, fieldX + fieldW, fy + fieldH, UIC(0.27f, 0.31f, 0.36f), 1.f);
         float findButtonX = fieldX + fieldW + 8.f;
-        ar(findButtonX - 1.f, fy - 1.f, closeButtonX - 5.f, fy + fieldH + 1.f, 0.14f, 0.16f, 0.19f, 1.f);
+        ar(findButtonX - 1.f, fy - 1.f, closeButtonX - 5.f, fy + fieldH + 1.f, UIC(0.14f, 0.16f, 0.19f), 1.f);
         button(findButtonX, fy, find_.replaceActive ? replaceLeftW : findW);
         button(findButtonX + (find_.replaceActive ? replaceLeftW : findW) + gap, fy, find_.replaceActive ? replaceColumnW : findPrevW);
         if (!find_.replaceActive) button(findButtonX + findW + gap + findPrevW + gap, fy, findAllW);
-        ar(closeButtonX, fy, closeButtonX + closeButtonW, fy + fieldH, 0.18f, 0.21f, 0.25f, 1.f);
+        ar(closeButtonX, fy, closeButtonX + closeButtonW, fy + fieldH, UIC(0.18f, 0.21f, 0.25f), 1.f);
         float replaceFieldY = 0.f;
         float replaceButtonX = 0.f;
         float replaceAllButtonX = 0.f;
         if (find_.replaceActive) {
             float rfy = barY + rowH + 2.f;
             replaceFieldY = rfy;
-            ar(toggleX - 4.f, rfy - 1.f, toggleX + 66.f, rfy + fieldH + 1.f, 0.14f, 0.16f, 0.19f, 1.f);
+            ar(toggleX - 4.f, rfy - 1.f, toggleX + 66.f, rfy + fieldH + 1.f, UIC(0.14f, 0.16f, 0.19f), 1.f);
             button(toggleX, rfy, 28.f);
             button(toggleX + 34.f, rfy, 28.f);
-            ar(fieldX - 1.f, rfy - 1.f, fieldX + fieldW + 1.f, rfy + fieldH + 1.f, 0.13f, 0.15f, 0.18f, 1.f);
-            ar(fieldX, rfy, fieldX + fieldW, rfy + fieldH, 0.27f, 0.31f, 0.36f, 1.f);
+            ar(fieldX - 1.f, rfy - 1.f, fieldX + fieldW + 1.f, rfy + fieldH + 1.f, UIC(0.13f, 0.15f, 0.18f), 1.f);
+            ar(fieldX, rfy, fieldX + fieldW, rfy + fieldH, UIC(0.27f, 0.31f, 0.36f), 1.f);
             replaceButtonX = findButtonX;
             replaceAllButtonX = replaceButtonX + replaceLeftW + gap;
-            ar(replaceButtonX - 1.f, rfy - 1.f, closeButtonX - 5.f, rfy + fieldH + 1.f, 0.14f, 0.16f, 0.19f, 1.f);
+            ar(replaceButtonX - 1.f, rfy - 1.f, closeButtonX - 5.f, rfy + fieldH + 1.f, UIC(0.14f, 0.16f, 0.19f), 1.f);
             button(replaceButtonX, rfy, replaceLeftW);
             button(replaceAllButtonX, rfy, replaceColumnW);
         }
         flushSolid();
         std::string findText = find_.query + (findFocus_ == 0 ? "|" : "");
-        fontAtlas().drawText(".*", toggleX + 6.f, fy + 5.f, find_.regex ? 0.95f : 0.58f, find_.regex ? 0.86f : 0.58f, find_.regex ? 0.95f : 0.62f, 1.f);
-        fontAtlas().drawText("Aa", toggleX + 39.f, fy + 5.f, find_.caseSensitive ? 0.95f : 0.58f, find_.caseSensitive ? 0.86f : 0.58f, find_.caseSensitive ? 0.95f : 0.62f, 1.f);
-        fontAtlas().drawText("\\b", toggleX + 73.f, fy + 5.f, find_.wholeWord ? 0.95f : 0.58f, find_.wholeWord ? 0.86f : 0.58f, find_.wholeWord ? 0.95f : 0.62f, 1.f);
+        fontAtlas().drawText(".*", toggleX + 6.f, fy + 5.f, toggleTextRaw(find_.regex, 0.95f, 0.86f, 0.95f).r, toggleTextRaw(find_.regex, 0.95f, 0.86f, 0.95f).g, toggleTextRaw(find_.regex, 0.95f, 0.86f, 0.95f).b, 1.f);
+        fontAtlas().drawText("Aa", toggleX + 39.f, fy + 5.f, toggleTextRaw(find_.caseSensitive, 0.95f, 0.86f, 0.95f).r, toggleTextRaw(find_.caseSensitive, 0.95f, 0.86f, 0.95f).g, toggleTextRaw(find_.caseSensitive, 0.95f, 0.86f, 0.95f).b, 1.f);
+        fontAtlas().drawText("\\b", toggleX + 73.f, fy + 5.f, toggleTextRaw(find_.wholeWord, 0.95f, 0.86f, 0.95f).r, toggleTextRaw(find_.wholeWord, 0.95f, 0.86f, 0.95f).g, toggleTextRaw(find_.wholeWord, 0.95f, 0.86f, 0.95f).b, 1.f);
         fontAtlas().drawText("Find:", findLabelX, fy + 5.f, 0.78f, 0.78f, 0.82f, 1.f);
         fontAtlas().drawText(findText, fieldX + 6.f, fy + 4.f, 0.85f, 0.85f, 0.88f, 1.f);
         if (!find_.matches.empty()) {
@@ -6111,21 +6123,21 @@ void Application::render() {
         auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
             addSolid(x0, y0, x1, y1, r, g, b, a);
         };
-        ar(ox, oy, ox + ow, oy + oh, 0.15f, 0.15f, 0.18f, 0.97f);
-        ar(ox, oy, ox + ow, oy + 28, 0.12f, 0.12f, 0.14f, 1.f);
+        ar(ox, oy, ox + ow, oy + oh, UIC(0.15f, 0.15f, 0.18f), 0.97f);
+        ar(ox, oy, ox + ow, oy + 28, UIC(0.12f, 0.12f, 0.14f), 1.f);
         // selected item highlight
         if (goto_.selected >= 0 && goto_.selected < (int)goto_.items.size())
-            ar(ox, oy + 28 + goto_.selected * 22, ox + ow, oy + 28 + (goto_.selected + 1) * 22, 0.22f, 0.28f, 0.42f, 1.f);
+            ar(ox, oy + 28 + goto_.selected * 22, ox + ow, oy + 28 + (goto_.selected + 1) * 22, UIC(0.22f, 0.28f, 0.42f), 1.f);
         flushSolid();
         fontAtlas().drawText("Goto: " + goto_.query + "|", ox + 8, oy + 6, 0.8f, 0.8f, 0.8f, 1.f);
         const char* modeLabel = promptActive_ ? promptCaption_.c_str() : gotoMode_ == Symbols ? "Symbols" : gotoMode_ == Lines ? "Go to Line" : gotoMode_ == Words ? "Words" : gotoMode_ == ProjectSymbols ? "Project Symbols" : gotoMode_ == Builds ? "Build" : gotoMode_ == ColorSchemes ? "Color Scheme" : gotoMode_ == Snippets ? "Snippets" : gotoMode_ == PasteHistory ? "Paste History" : gotoMode_ == Encodings ? "Encoding" : gotoMode_ == Projects ? "Projects" : gotoMode_ == PackageFiles ? "Package Files" : gotoMode_ == SpellSuggest ? "Spelling" : gotoMode_ == Dictionaries ? "Dictionary" : "Files";
         float mlW = fontAtlas().measureText(modeLabel);
-        fontAtlas().drawText(modeLabel, ox + ow - mlW - 12, oy + 6, 0.45f, 0.45f, 0.5f, 1.f);
+        fontAtlas().drawText(modeLabel, ox + ow - mlW - 12, oy + 6, UIC(0.45f, 0.45f, 0.5f), 1.f);
         for (int i = 0; i < (int)goto_.items.size() && i < 10; ++i) {
             float ib = (i == goto_.selected) ? 1.f : 0.7f;
             fontAtlas().drawText(goto_.items[i], ox + 8, oy + 30 + i * 22, ib, ib, ib, 1.f);
             if (i < (int)goto_.subtexts.size() && !goto_.subtexts[i].empty())
-                fontAtlas().drawText(goto_.subtexts[i], ox + 200, oy + 30 + i * 22, 0.4f, 0.4f, 0.45f, 1.f);
+                fontAtlas().drawText(goto_.subtexts[i], ox + 200, oy + 30 + i * 22, UIC(0.4f, 0.4f, 0.45f), 1.f);
         }
     }
     if (commandPalette_.active) {
@@ -6139,18 +6151,18 @@ void Application::render() {
         auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
             addSolid(x0, y0, x1, y1, r, g, b, a);
         };
-        ar(ox, oy, ox + ow, oy + oh, 0.15f, 0.15f, 0.18f, 0.98f);
-        ar(ox, oy, ox + ow, oy + headerH, 0.12f, 0.12f, 0.14f, 1.f);
+        ar(ox, oy, ox + ow, oy + oh, UIC(0.15f, 0.15f, 0.18f), 0.98f);
+        ar(ox, oy, ox + ow, oy + headerH, UIC(0.12f, 0.12f, 0.14f), 1.f);
         int selectedRow = commandPalette_.selected - commandPalette_.scroll;
         if (selectedRow >= 0 && selectedRow < visible)
-            ar(ox + 2.f, oy + headerH + selectedRow * rowH, ox + ow - 8.f, oy + headerH + (selectedRow + 1) * rowH, 0.25f, 0.30f, 0.45f, 1.f);
+            ar(ox + 2.f, oy + headerH + selectedRow * rowH, ox + ow - 8.f, oy + headerH + (selectedRow + 1) * rowH, UIC(0.25f, 0.30f, 0.45f), 1.f);
         if (total > 12) {
             float trackX = ox + ow - 6.f;
             float listH = 12.f * rowH;
             float thumbH = std::max(20.f, listH * (12.f / (float)total));
             float maxScroll = (float)std::max(1, total - 12);
             float thumbY = oy + headerH + ((float)commandPalette_.scroll / maxScroll) * (listH - thumbH);
-            ar(trackX, thumbY, trackX + 4.f, thumbY + thumbH, 0.32f, 0.32f, 0.35f, 1.f);
+            ar(trackX, thumbY, trackX + 4.f, thumbY + thumbH, UIC(0.32f, 0.32f, 0.35f), 1.f);
         }
         flushSolid();
         fontAtlas().drawText(">", ox + 12.f, oy + 9.f, 0.70f, 0.72f, 0.78f, 1.f);
@@ -6165,7 +6177,7 @@ void Application::render() {
         flushSolid();
         std::string count = std::to_string(total) + " commands";
         float countW = fontAtlas().measureText(count);
-        fontAtlas().drawText(count, ox + ow - countW - 14.f, oy + 8.f, 0.46f, 0.46f, 0.50f, 1.f);
+        fontAtlas().drawText(count, ox + ow - countW - 14.f, oy + 8.f, UIC(0.46f, 0.46f, 0.50f), 1.f);
         int builtinCount = paletteBuiltinTotal();
         for (int row = 0; row < visible; ++row) {
             int resultIndex = commandPalette_.scroll + row;
@@ -6195,26 +6207,26 @@ void Application::render() {
             addSolid(x0, y0, x1, y1, r, g, b, a);
         };
         if (rich) {
-            ar(mainX + 4.f, mainY, mainX + mainW - 4.f, mainY + mainH, 0.15f, 0.15f, 0.18f, 0.98f);
-            ar(mainX, mainY + 4.f, mainX + mainW, mainY + mainH - 4.f, 0.15f, 0.15f, 0.18f, 0.98f);
-        } else ar(mainX, mainY, mainX + mainW, mainY + mainH, 0.15f, 0.15f, 0.18f, 0.98f);
+            ar(mainX + 4.f, mainY, mainX + mainW - 4.f, mainY + mainH, UIC(0.15f, 0.15f, 0.18f), 0.98f);
+            ar(mainX, mainY + 4.f, mainX + mainW, mainY + mainH - 4.f, UIC(0.15f, 0.15f, 0.18f), 0.98f);
+        } else ar(mainX, mainY, mainX + mainW, mainY + mainH, UIC(0.15f, 0.15f, 0.18f), 0.98f);
         int selectedRow = pluginQuickPanel_.selected - pluginQuickPanel_.scroll;
         if (selectedRow >= 0 && selectedRow < visible) {
             float selectedY = mainY + headerH + selectedRow * rowH;
-            if (rich) ar(mainX + 4.f, selectedY + 1.f, mainX + mainW - 11.f, selectedY + rowH - 1.f, 0.25f, 0.30f, 0.45f, 1.f);
-            else ar(mainX + 2.f, selectedY, mainX + mainW - 8.f, selectedY + rowH, 0.25f, 0.30f, 0.45f, 1.f);
+            if (rich) ar(mainX + 4.f, selectedY + 1.f, mainX + mainW - 11.f, selectedY + rowH - 1.f, UIC(0.25f, 0.30f, 0.45f), 1.f);
+            else ar(mainX + 2.f, selectedY, mainX + mainW - 8.f, selectedY + rowH, UIC(0.25f, 0.30f, 0.45f), 1.f);
         }
         if (total > maxRows) {
             float trackX = mainX + mainW - 6.f;
             float listH = maxRows * rowH;
-            if (rich) ar(trackX - 1.f, mainY + headerH + 3.f, trackX + 4.f, mainY + headerH + listH - 3.f, 0.12f, 0.12f, 0.14f, 1.f);
+            if (rich) ar(trackX - 1.f, mainY + headerH + 3.f, trackX + 4.f, mainY + headerH + listH - 3.f, UIC(0.12f, 0.12f, 0.14f), 1.f);
             float thumbH = std::max(20.f, listH * (maxRows / (float)total));
             float maxScroll = (float)std::max(1, total - maxRows);
             float thumbY = mainY + headerH + ((float)pluginQuickPanel_.scroll / maxScroll) * (listH - thumbH);
-            ar(trackX, thumbY, trackX + 3.f, thumbY + thumbH, 0.32f, 0.32f, 0.35f, 1.f);
+            ar(trackX, thumbY, trackX + 3.f, thumbY + thumbH, UIC(0.32f, 0.32f, 0.35f), 1.f);
         }
         flushSolid();
-        if (rich) { addSolid(mainX + 14.f, mainY + 10.f, mainX + 35.f, mainY + 32.f, 0.28f, 0.30f, 0.35f, 1.f); flushSolid(); }
+        if (rich) { addSolid(mainX + 14.f, mainY + 10.f, mainX + 35.f, mainY + 32.f, UIC(0.28f, 0.30f, 0.35f), 1.f); flushSolid(); }
         uiFontAtlas().drawText(">", rich ? mainX + 21.f : mainX + 12.f, mainY + (rich ? 12.f : 9.f), 0.86f, 0.88f, 0.93f, 1.f);
         uiFontAtlas().drawText(pluginQuickPanel_.query + "|", rich ? mainX + 43.f : mainX + 32.f, mainY + (rich ? 12.f : 8.f), 0.88f, 0.89f, 0.92f, 1.f);
         glEnable(GL_SCISSOR_TEST);
@@ -6254,8 +6266,8 @@ void Application::render() {
         auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
             addSolid(x0, y0, x1, y1, r, g, b, a);
         };
-        ar(mainX, mainY, mainX + mainW, mainY + mainH, 0.15f, 0.15f, 0.18f, 0.98f);
-        ar(mainX + 10.f, mainY + 42.f, mainX + mainW - 10.f, mainY + 68.f, 0.10f, 0.11f, 0.14f, 1.f);
+        ar(mainX, mainY, mainX + mainW, mainY + mainH, UIC(0.15f, 0.15f, 0.18f), 0.98f);
+        ar(mainX + 10.f, mainY + 42.f, mainX + mainW - 10.f, mainY + 68.f, UIC(0.10f, 0.11f, 0.14f), 1.f);
         flushSolid();
         std::string caption = pluginInputPanel_.caption.empty() ? "Input:" : pluginInputPanel_.caption;
         fontAtlas().drawText(caption, mainX + 12.f, mainY + 14.f, 0.88f, 0.88f, 0.90f, 1.f);
@@ -6277,9 +6289,9 @@ void Application::render() {
         auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
             addSolid(x0, y0, x1, y1, r, g, b, a);
         };
-        ar(cx, cy, cx + acW, cy + acH, 0.17f, 0.19f, 0.23f, 0.98f);
+        ar(cx, cy, cx + acW, cy + acH, UIC(0.17f, 0.19f, 0.23f), 0.98f);
         if (acSelected_ >= 0 && acSelected_ < (int)acItems_.size())
-            ar(cx + 2, cy + 2 + acSelected_ * itemH, cx + acW - 2, cy + 2 + (acSelected_ + 1) * itemH, 0.24f, 0.27f, 0.32f, 1.f);
+            ar(cx + 2, cy + 2 + acSelected_ * itemH, cx + acW - 2, cy + 2 + (acSelected_ + 1) * itemH, UIC(0.24f, 0.27f, 0.32f), 1.f);
         flushSolid();
         for (int i = 0; i < (int)acItems_.size(); ++i) {
             float b = (i == acSelected_) ? 1.f : 0.7f;
@@ -6303,10 +6315,10 @@ void Application::render() {
         auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
             pv.insert(pv.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
         };
-        ar(popupX_, popupY_, popupX_ + popW, popupY_ + popH, 0.18f, 0.18f, 0.21f, 0.98f);
-        ar(popupX_, popupY_, popupX_ + popW, popupY_ + 1, 0.3f, 0.3f, 0.35f, 1.f);
+        ar(popupX_, popupY_, popupX_ + popW, popupY_ + popH, UIC(0.18f, 0.18f, 0.21f), 0.98f);
+        ar(popupX_, popupY_, popupX_ + popW, popupY_ + 1, UIC(0.3f, 0.3f, 0.35f), 1.f);
         if (popupSelected_ >= 0 && popupSelected_ < itemCount)
-            ar(popupX_ + 2, popupY_ + 2 + popupSelected_ * 24.f, popupX_ + popW - 2, popupY_ + 2 + (popupSelected_ + 1) * 24.f, 0.25f, 0.30f, 0.45f, 1.f);
+            ar(popupX_ + 2, popupY_ + 2 + popupSelected_ * 24.f, popupX_ + popW - 2, popupY_ + 2 + (popupSelected_ + 1) * 24.f, UIC(0.25f, 0.30f, 0.45f), 1.f);
         GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo()); glBufferData(GL_ARRAY_BUFFER, pv.size()*sizeof(float), pv.data(), GL_DYNAMIC_DRAW); glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(pv.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0);
         glEnable(GL_SCISSOR_TEST);
         GLRenderer::scissor((int)popupX_, wh - (int)(popupY_ + popH + 2), (int)popW + 2, (int)popH + 2);
@@ -6342,11 +6354,11 @@ void Application::render() {
         auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
             mv.insert(mv.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
         };
-        ar(dlg.mx, dlg.my, dlg.mx + dlg.mw, dlg.my + dlg.mh, 0.17f, 0.17f, 0.20f, 0.98f);
-        ar(dlg.mx, dlg.my, dlg.mx + dlg.mw, dlg.my + 1.f, 0.35f, 0.35f, 0.40f, 1.f);
-        ar(dlg.saveX, dlg.by, dlg.saveX + dlg.saveW, dlg.by + dlg.bh, 0.24f, 0.28f, 0.34f, 1.f);
-        ar(dlg.dontSaveX, dlg.by, dlg.dontSaveX + dlg.dontSaveW, dlg.by + dlg.bh, 0.24f, 0.28f, 0.34f, 1.f);
-        ar(dlg.cancelX, dlg.by, dlg.cancelX + dlg.cancelW, dlg.by + dlg.bh, 0.24f, 0.28f, 0.34f, 1.f);
+        ar(dlg.mx, dlg.my, dlg.mx + dlg.mw, dlg.my + dlg.mh, UIC(0.17f, 0.17f, 0.20f), 0.98f);
+        ar(dlg.mx, dlg.my, dlg.mx + dlg.mw, dlg.my + 1.f, UIC(0.35f, 0.35f, 0.40f), 1.f);
+        ar(dlg.saveX, dlg.by, dlg.saveX + dlg.saveW, dlg.by + dlg.bh, UIC(0.24f, 0.28f, 0.34f), 1.f);
+        ar(dlg.dontSaveX, dlg.by, dlg.dontSaveX + dlg.dontSaveW, dlg.by + dlg.bh, UIC(0.24f, 0.28f, 0.34f), 1.f);
+        ar(dlg.cancelX, dlg.by, dlg.cancelX + dlg.cancelW, dlg.by + dlg.bh, UIC(0.24f, 0.28f, 0.34f), 1.f);
         GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo());
         glBufferData(GL_ARRAY_BUFFER, mv.size()*sizeof(float), mv.data(), GL_DYNAMIC_DRAW);
         glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(mv.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0);
@@ -6369,7 +6381,7 @@ void Application::render() {
         float w = fontAtlas().measureText(fpsBuf) + pad * 2.f;
         float x = fww - w - 10.f;
         float fpsY = titlebar_->height() + tabBarH_ + 8.f;
-        addSolid(x, fpsY, x + w, fpsY + 22.f, 0.05f, 0.05f, 0.06f, 0.82f);
+        addSolid(x, fpsY, x + w, fpsY + 22.f, UIC(0.05f, 0.05f, 0.06f), 0.82f);
         flushSolid();
         fontAtlas().drawText(fpsBuf, x + pad, fpsY + 4.f, 0.75f, 0.95f, 0.75f, 1.f);
     }
@@ -6398,7 +6410,7 @@ void Application::render() {
         };
 
         std::vector<float> gv;
-        drawRect(gv, 0.f, 0.f, static_cast<float>(ghostW), static_cast<float>(ghostH), 0.18f, 0.18f, 0.21f, 0.98f);
+        drawRect(gv, 0.f, 0.f, static_cast<float>(ghostW), static_cast<float>(ghostH), UIC(0.18f, 0.18f, 0.21f), 0.98f);
         drawRect(gv, 0.f, static_cast<float>(ghostH) - 2.f, static_cast<float>(ghostW), static_cast<float>(ghostH), 0.28f, 0.78f, 0.74f, 1.f);
         if (tabs_[tabDragIndex_].dirty)
             drawRect(gv, static_cast<float>(ghostW) - 20.f, 13.f, static_cast<float>(ghostW) - 14.f, 19.f, 0.85f, 0.66f, 0.22f, 1.f);
@@ -6470,9 +6482,9 @@ void Application::render() {
         } else if (popupKind == PopupKind::TabDropdown) {
             std::vector<float> pv;
             float itemH = 24.f;
-            drawRect(pv, 0, 0, mainW, mainH, 0.17f, 0.17f, 0.20f, 0.98f);
+            drawRect(pv, 0, 0, mainW, mainH, UIC(0.17f, 0.17f, 0.20f), 0.98f);
             if (tabDropdownHover_ >= 0 && tabDropdownHover_ < (int)tabs_.size())
-                drawRect(pv, 2, 2 + tabDropdownHover_ * itemH, mainW - 2, 2 + (tabDropdownHover_ + 1) * itemH, 0.25f, 0.30f, 0.45f, 1.f);
+                drawRect(pv, 2, 2 + tabDropdownHover_ * itemH, mainW - 2, 2 + (tabDropdownHover_ + 1) * itemH, UIC(0.25f, 0.30f, 0.45f), 1.f);
             flush(pv);
             for (size_t i = 0; i < tabs_.size(); ++i) {
                 std::string label = tabs_[i].fileName.empty() ? "untitled" : tabs_[i].fileName;
@@ -6483,9 +6495,9 @@ void Application::render() {
         } else if (popupKind == PopupKind::TabContext) {
             std::vector<float> cv; float itemH = 24.f;
             int itemCount = tabContextIndex_ != activeTab_ ? 14 : 13;
-            drawRect(cv, 0, 0, mainW, mainH, 0.17f, 0.17f, 0.20f, 0.98f);
-            for (int i = 0; i < itemCount; ++i) if (!kTabContextItems[i][0]) drawRect(cv, 8.f, 13.f + i * itemH, mainW - 8.f, 14.f + i * itemH, 0.3f, 0.3f, 0.33f, 1.f);
-            if (tabContextHover_ >= 0 && tabContextHover_ < itemCount && kTabContextItems[tabContextHover_][0]) drawRect(cv, 2, 2 + tabContextHover_ * itemH, mainW - 2, 2 + (tabContextHover_ + 1) * itemH, 0.25f, 0.30f, 0.45f, 1.f);
+            drawRect(cv, 0, 0, mainW, mainH, UIC(0.17f, 0.17f, 0.20f), 0.98f);
+            for (int i = 0; i < itemCount; ++i) if (!kTabContextItems[i][0]) drawRect(cv, 8.f, 13.f + i * itemH, mainW - 8.f, 14.f + i * itemH, UIC(0.3f, 0.3f, 0.33f), 1.f);
+            if (tabContextHover_ >= 0 && tabContextHover_ < itemCount && kTabContextItems[tabContextHover_][0]) drawRect(cv, 2, 2 + tabContextHover_ * itemH, mainW - 2, 2 + (tabContextHover_ + 1) * itemH, UIC(0.25f, 0.30f, 0.45f), 1.f);
             flush(cv);
             for (int i = 0; i < itemCount; ++i) if (kTabContextItems[i][0]) {
                 bool greyed = (i == 2 && tabContextIndex_ >= tabs_.size() - 1) || (i == 3 && tabContextIndex_ == 0);
@@ -6494,22 +6506,22 @@ void Application::render() {
             }
         } else if (popupKind == PopupKind::SidebarContext) {
             std::vector<float> cv; float itemH = 24.f;
-            drawRect(cv, 0, 0, mainW, mainH, 0.17f, 0.17f, 0.20f, 0.98f);
+            drawRect(cv, 0, 0, mainW, mainH, UIC(0.17f, 0.17f, 0.20f), 0.98f);
             for (int i = 0; i < (int)sidebarContextItems_.size(); ++i) {
-                if (sidebarContextItems_[i].separator) drawRect(cv, 8.f, 13.f + i * itemH, mainW - 8.f, 14.f + i * itemH, 0.3f, 0.3f, 0.33f, 1.f);
+                if (sidebarContextItems_[i].separator) drawRect(cv, 8.f, 13.f + i * itemH, mainW - 8.f, 14.f + i * itemH, UIC(0.3f, 0.3f, 0.33f), 1.f);
             }
             if (sidebarContextHover_ >= 0 && sidebarContextHover_ < (int)sidebarContextItems_.size())
-                drawRect(cv, 2, 2 + sidebarContextHover_ * itemH, mainW - 2, 2 + (sidebarContextHover_ + 1) * itemH, 0.25f, 0.30f, 0.45f, 1.f);
+                drawRect(cv, 2, 2 + sidebarContextHover_ * itemH, mainW - 2, 2 + (sidebarContextHover_ + 1) * itemH, UIC(0.25f, 0.30f, 0.45f), 1.f);
             flush(cv);
             for (int i = 0; i < (int)sidebarContextItems_.size(); ++i)
                 if (!sidebarContextItems_[i].separator) fontAtlas().drawText(sidebarContextItems_[i].label, 10.f, 6.f + i * itemH, 0.78f, 0.78f, 0.82f, 1.f);
         } else if (popupKind == PopupKind::Status) {
             int itemCount = (statusPopup_ == StatusPopup::Indent) ? 8 : std::min(syntaxLangCount, 18);
             std::vector<float> pv;
-            drawRect(pv, 0, 0, mainW, mainH, 0.18f, 0.18f, 0.21f, 0.98f);
-            drawRect(pv, 0, 0, mainW, 1, 0.3f, 0.3f, 0.35f, 1.f);
+            drawRect(pv, 0, 0, mainW, mainH, UIC(0.18f, 0.18f, 0.21f), 0.98f);
+            drawRect(pv, 0, 0, mainW, 1, UIC(0.3f, 0.3f, 0.35f), 1.f);
             if (popupSelected_ >= 0 && popupSelected_ < itemCount)
-                drawRect(pv, 2, 2 + popupSelected_ * 24.f, mainW - 2, 2 + (popupSelected_ + 1) * 24.f, 0.25f, 0.30f, 0.45f, 1.f);
+                drawRect(pv, 2, 2 + popupSelected_ * 24.f, mainW - 2, 2 + (popupSelected_ + 1) * 24.f, UIC(0.25f, 0.30f, 0.45f), 1.f);
             flush(pv);
             if (statusPopup_ == StatusPopup::Indent) {
                 const char* indentItems[] = {"Indent Using Spaces","Indent Using Tabs","Tab Width: 2","Tab Width: 4","Tab Width: 8","Convert Indentation to Spaces","Convert Indentation to Tabs","Detect Indentation"};
@@ -6530,9 +6542,9 @@ void Application::render() {
             }
         } else if (popupKind == PopupKind::Autocomplete) {
             std::vector<float> av; float itemH = 22.f;
-            drawRect(av, 0, 0, mainW, mainH, 0.17f, 0.19f, 0.23f, 0.98f);
+            drawRect(av, 0, 0, mainW, mainH, UIC(0.17f, 0.19f, 0.23f), 0.98f);
             if (acSelected_ >= 0 && acSelected_ < (int)acItems_.size())
-                drawRect(av, 2, 2 + acSelected_ * itemH, mainW - 2, 2 + (acSelected_ + 1) * itemH, 0.24f, 0.27f, 0.32f, 1.f);
+                drawRect(av, 2, 2 + acSelected_ * itemH, mainW - 2, 2 + (acSelected_ + 1) * itemH, UIC(0.24f, 0.27f, 0.32f), 1.f);
             flush(av);
             for (int i = 0; i < (int)acItems_.size(); ++i) {
                 float b = (i == acSelected_) ? 1.f : 0.7f;

@@ -1,4 +1,5 @@
 #include "UI/Minimap.h"
+#include "Theme/ThemeEngine.h"
 #include "Renderer/FontAtlas.h"
 #include "Renderer/GLRenderer.h"
 #include "Syntax/SyntaxHighlighter.h"
@@ -99,9 +100,10 @@ void Minimap::draw(FontAtlas& font, SyntaxHighlighter& syntax, const std::string
         if (vpTop < top) vpTop = top;
         if (vpTop + vpH > bottom) vpTop = bottom - vpH;
         float a = hoverFade_;
-        addRect(originX, vpTop, originX + width_, vpTop + vpH, 0.267f, 0.267f, 0.267f, a);
-        addRect(originX, vpTop, originX + width_, vpTop + 1, 0.34f, 0.34f, 0.34f, a);
-        addRect(originX, vpTop + vpH - 1, originX + width_, vpTop + vpH, 0.34f, 0.34f, 0.34f, a);
+        ThemeColor vp = ThemeEngine::instance().fgColor();
+        addRect(originX, vpTop, originX + width_, vpTop + vpH, vp.r, vp.g, vp.b, a * 0.6f);
+        addRect(originX, vpTop, originX + width_, vpTop + 1, vp.r, vp.g, vp.b, a);
+        addRect(originX, vpTop + vpH - 1, originX + width_, vpTop + vpH, vp.r, vp.g, vp.b, a);
     }
     flushSolid();
 }

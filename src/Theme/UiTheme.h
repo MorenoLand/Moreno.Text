@@ -18,6 +18,46 @@ public:
     std::string name = "Default";
 
     void reset() { *this = UiTheme(); }
+
+    // Dark chrome colors in the source (panels, hover rows, borders) become light ones on a light chrome: the
+    // lightness is mirrored and the hue kept, so a blue hover row stays a blue hover row.
+    ThemeColor m(float r, float g, float b) const {
+        if (!isLight()) return {r, g, b, 1.f};
+        float mx = r > g ? (r > b ? r : b) : (g > b ? g : b), mn = r < g ? (r < b ? r : b) : (g < b ? g : b);
+        float l = (mx + mn) / 2.f, d = mx - mn;
+        float newL = 1.f - l;
+        if (d < 0.0001f) return {newL, newL, newL, 1.f};
+        float sat = d / (1.f - (l * 2.f - 1.f < 0.f ? -(l * 2.f - 1.f) : (l * 2.f - 1.f)));
+        float h;
+        if (mx == r) h = (g - b) / d + (g < b ? 6.f : 0.f);
+        else if (mx == g) h = (b - r) / d + 2.f;
+        else h = (r - g) / d + 4.f;
+        float q = newL < 0.5f ? newL * (1.f + sat) : newL + sat - newL * sat, p = 2.f * newL - q;
+        auto hue = [&](float t) {
+            if (t < 0.f) t += 1.f;
+            if (t > 1.f) t -= 1.f;
+            if (t < 1.f / 6.f) return p + (q - p) * 6.f * t;
+            if (t < 0.5f) return q;
+            if (t < 2.f / 3.f) return p + (q - p) * (2.f / 3.f - t) * 6.f;
+            return p;
+        };
+        h /= 6.f;
+        return {hue(h + 1.f / 3.f), hue(h), hue(h - 1.f / 3.f), 1.f};
+    }
+
+    // True while chrome is being drawn; text colors that are plain grays are then inverted on a light chrome.
+    static bool& chromeText() { static bool flag = false; return flag; }
+    struct ChromeScope {
+        bool previous;
+        ChromeScope() : previous(chromeText()) { chromeText() = UiTheme::instance().isLight(); }
+        ~ChromeScope() { chromeText() = previous; }
+    };
+    static void textColor(float& r, float& g, float& b) {
+        if (!chromeText()) return;
+        float mx = r > g ? (r > b ? r : b) : (g > b ? g : b), mn = r < g ? (r < b ? r : b) : (g < b ? g : b);
+        if (mx - mn > 0.16f) return;  // accents (links, branch names) keep their color
+        r = 1.f - r; g = 1.f - g; b = 1.f - b;
+    }
     // Chrome text is dark on a light chrome: callers pass a light-on-dark gray and get the matching one back.
     bool isLight() const { return (tabBar.r + tabBar.g + tabBar.b) / 3.f > 0.6f; }
     float text(float darkThemeGray) const { return isLight() ? 1.f - darkThemeGray : darkThemeGray; }
@@ -75,3 +115,6 @@ private:
         return false;
     }
 };
+
+// Expands to r, g, b of a dark chrome color after the theme remap: ar(x0, y0, x1, y1, UIC(0.17f, 0.17f, 0.20f), 0.98f)
+#define UIC(cr_, cg_, cb_) UiTheme::instance().m(cr_, cg_, cb_).r, UiTheme::instance().m(cr_, cg_, cb_).g, UiTheme::instance().m(cr_, cg_, cb_).b

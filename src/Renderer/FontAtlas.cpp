@@ -1,4 +1,5 @@
 #include "Renderer/FontAtlas.h"
+#include "Theme/UiTheme.h"
 #include "Renderer/GLRenderer.h"
 #include <GL/glew.h>
 #include <cstdio>
@@ -174,6 +175,7 @@ static uint32_t decodeUtf8(std::string_view text, size_t& i) {
 }
 
 void FontAtlas::drawText(std::string_view text, float x, float y, float r, float g, float b, float a) {
+    UiTheme::textColor(r, g, b);
     if (text.empty()) return;
     std::vector<float> verts;
     verts.reserve(text.size() * 6 * 8);
@@ -203,6 +205,7 @@ void FontAtlas::drawText(std::string_view text, float x, float y, float r, float
 }
 
 void FontAtlas::drawTextClipped(std::string_view text, float x, float y, float clipLeft, float clipRight, float r, float g, float b, float a) {
+    UiTheme::textColor(r, g, b);
     if (text.empty() || clipRight <= clipLeft) return;
     float spaceAdv = getGlyph(' ').advance;
     std::vector<float> verts;
@@ -235,6 +238,7 @@ void FontAtlas::drawTextClipped(std::string_view text, float x, float y, float c
 }
 
 void FontAtlas::drawTextScaled(std::string_view text, float x, float y, float scale, float r, float g, float b, float a) {
+    UiTheme::textColor(r, g, b);
     if (text.empty() || scale <= 0.f) return;
     std::vector<float> verts;
     verts.reserve(text.size() * 6 * 8);
@@ -264,6 +268,7 @@ void FontAtlas::drawTextScaled(std::string_view text, float x, float y, float sc
 }
 
 void FontAtlas::drawTextItalic(std::string_view text, float x, float y, float scale, float r, float g, float b, float a) {
+    UiTheme::textColor(r, g, b);
     if (text.empty() || scale <= 0.f) return;
     std::vector<float> verts;
     verts.reserve(text.size() * 6 * 8);
@@ -290,6 +295,7 @@ void FontAtlas::drawTextItalic(std::string_view text, float x, float y, float sc
 }
 
 void FontAtlas::drawTextScaledClipped(std::string_view text, float x, float y, float scale, float clipLeft, float clipRight, float r, float g, float b, float a) {
+    UiTheme::textColor(r, g, b);
     if (text.empty() || scale <= 0.f || clipRight <= clipLeft) return;
     float spaceAdv = getGlyph(' ').advance;
     std::vector<float> verts;

@@ -1,6 +1,7 @@
 #include "UI/Gutter.h"
 #include "Renderer/FontAtlas.h"
 #include "Renderer/GLRenderer.h"
+#include "Theme/ThemeEngine.h"
 #include <GL/glew.h>
 #include <cstdio>
 #include <string>
@@ -27,8 +28,11 @@ void Gutter::draw(FontAtlas& font, size_t totalLines, size_t currentLine,
         verts.insert(verts.end(), { x1,y1, 0,0, r,g,b,a });
         verts.insert(verts.end(), { x1,y0, 0,0, r,g,b,a });
     };
-    addRect(originX, titlebarH, borderX, windowH, 0.11f, 0.11f, 0.13f, 1.f);
-    addRect(borderX - 1, titlebarH, borderX, windowH, 0.08f, 0.08f, 0.10f, 1.f);
+    auto& themeEngine = ThemeEngine::instance();
+    ThemeColor gbg = themeEngine.gutterColor(), gfg = themeEngine.gutterFg(), cur = themeEngine.fgColor();
+    float lum = (gbg.r + gbg.g + gbg.b) / 3.f, edge = lum < 0.5f ? -0.03f : -0.08f;
+    addRect(originX, titlebarH, borderX, windowH, gbg.r, gbg.g, gbg.b, 1.f);
+    addRect(borderX - 1, titlebarH, borderX, windowH, gbg.r + edge, gbg.g + edge, gbg.b + edge, 1.f);
     if (!verts.empty()) {
         GLRenderer::setDrawMode(2);
         glBindVertexArray(gl_vao());
@@ -48,8 +52,8 @@ void Gutter::draw(FontAtlas& font, size_t totalLines, size_t currentLine,
             float numW = font.measureText(num);
             float nx = borderX - padding_ - numW;
             bool isCurrent = (line == currentLine);
-            float brightness = isCurrent ? 0.85f : 0.34f;
-            font.drawText(num, nx, y, brightness, brightness, brightness, 1.f);
+            ThemeColor nc = isCurrent ? cur : gfg;
+            font.drawText(num, nx, y, nc.r, nc.g, nc.b, 1.f);
         }
         y += lineStep;
     }

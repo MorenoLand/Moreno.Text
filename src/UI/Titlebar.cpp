@@ -310,6 +310,7 @@ void Titlebar::drawMenu(FontAtlas& font) {
 }
 
 void Titlebar::drawMenuPopup(FontAtlas& font, float ox, float oy) {
+    UiTheme::ChromeScope chromeScope;
     if (!menuOpen_) return;
     SDL_Window* window = SDL_GL_GetCurrentWindow();
     int ww = 1280, wh = 720;
@@ -332,10 +333,10 @@ void Titlebar::drawMenuPopup(FontAtlas& font, float ox, float oy) {
     auto ar = [&](float x0,float y0,float x1,float y1,float r,float g,float b,float a) {
         v.insert(v.end(),{x0,y0,0,0,r,g,b,a, x0,y1,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x1,y0,0,0,r,g,b,a});
     };
-    ar(ddX, ddY, ddX + ddW, ddY + ddH, 0.17f, 0.17f, 0.20f, 0.98f);
-    ar(ddX, ddY, ddX + ddW, ddY + 1, 0.30f, 0.30f, 0.35f, 1.f);
+    ar(ddX, ddY, ddX + ddW, ddY + ddH, UIC(0.17f, 0.17f, 0.20f), 0.98f);
+    ar(ddX, ddY, ddX + ddW, ddY + 1, UIC(0.30f, 0.30f, 0.35f), 1.f);
     if (menuHovered_ >= menuScroll_ && menuHovered_ < menuScroll_ + visibleCount && !menuItems_[menuHovered_].separator)
-        ar(ddX + 2, ddY + arrowH + 2 + (menuHovered_ - menuScroll_) * itemH, ddX + ddW - 2, ddY + arrowH + 2 + (menuHovered_ - menuScroll_ + 1) * itemH, 0.25f, 0.30f, 0.45f, 1.f);
+        ar(ddX + 2, ddY + arrowH + 2 + (menuHovered_ - menuScroll_) * itemH, ddX + ddW - 2, ddY + arrowH + 2 + (menuHovered_ - menuScroll_ + 1) * itemH, UIC(0.25f, 0.30f, 0.45f), 1.f);
     flushSolid(v);
     glEnable(GL_SCISSOR_TEST);
     GLRenderer::scissor((int)ddX, wh - (int)(ddY + ddH + 4), (int)ddW, (int)(ddH + 4));
@@ -344,7 +345,7 @@ void Titlebar::drawMenuPopup(FontAtlas& font, float ox, float oy) {
         float rowY = ddY + arrowH + 2 + (i - menuScroll_) * itemH;
         float iy = rowY + 4.f;
         if (item.separator) {
-            ar(ddX + 8, rowY + 11, ddX + ddW - 8, rowY + 12, 0.3f, 0.3f, 0.33f, 1.f);
+            ar(ddX + 8, rowY + 11, ddX + ddW - 8, rowY + 12, UIC(0.3f, 0.3f, 0.33f), 1.f);
             flushSolid(v);
             continue;
         }
@@ -374,18 +375,18 @@ void Titlebar::drawMenuPopup(FontAtlas& font, float ox, float oy) {
         }
         lastHasSubmenu_ = true; lastSubmenuX_ = sx + ox; lastSubmenuY_ = sy + oy; lastSubmenuW_ = sw; lastSubmenuH_ = sh;
         v.clear();
-        ar(sx, sy, sx + sw, sy + sh, 0.17f, 0.17f, 0.20f, 0.98f);
+        ar(sx, sy, sx + sw, sy + sh, UIC(0.17f, 0.17f, 0.20f), 0.98f);
         if (submenuHovered_ >= (int)sm.size() || (submenuHovered_ >= 0 && sm[submenuHovered_].separator))
             submenuHovered_ = -1;
         if (submenuHovered_ >= 0 && submenuHovered_ < (int)sm.size())
-            ar(sx + 2, sy + 2 + submenuHovered_ * itemH, sx + sw - 2, sy + 2 + (submenuHovered_ + 1) * itemH, 0.25f, 0.30f, 0.45f, 1.f);
+            ar(sx + 2, sy + 2 + submenuHovered_ * itemH, sx + sw - 2, sy + 2 + (submenuHovered_ + 1) * itemH, UIC(0.25f, 0.30f, 0.45f), 1.f);
         flushSolid(v);
         glEnable(GL_SCISSOR_TEST);
         GLRenderer::scissor((int)sx, wh - (int)(sy + sh), (int)sw, (int)sh);
         for (int i = 0; i < (int)sm.size(); ++i) {
             auto& item = sm[i];
             float iy = sy + 6.f + i * itemH;
-            if (item.separator) { v.clear(); ar(sx + 8, sy + 13.f + i * itemH, sx + sw - 8, sy + 14.f + i * itemH, 0.3f, 0.3f, 0.33f, 1.f); flushSolid(v); continue; }
+            if (item.separator) { v.clear(); ar(sx + 8, sy + 13.f + i * itemH, sx + sw - 8, sy + 14.f + i * itemH, UIC(0.3f, 0.3f, 0.33f), 1.f); flushSolid(v); continue; }
             float b = (submenuHovered_ == i) ? 1.f : 0.78f;
             if (!item.action && !item.separator && !opensFlyout(item)) b = 0.4f;
             font.drawText(item.label, sx + 12.f, iy, b, b, b, 1.f);
@@ -405,15 +406,15 @@ void Titlebar::drawMenuPopup(FontAtlas& font, float ox, float oy) {
             if (recentHovered_ >= static_cast<int>(fly->size()) || (recentHovered_ >= 0 && (*fly)[recentHovered_].separator)) recentHovered_ = -1;
             if (recentHovered_ >= 0 && (recentHovered_ < first || recentHovered_ >= first + rows)) recentHovered_ = -1;
             v.clear();
-            ar(rx, ry, rx + rw, ry + rh, 0.17f, 0.17f, 0.20f, 0.98f);
-            ar(rx, ry, rx + rw, ry + 1, 0.30f, 0.30f, 0.35f, 1.f);
+            ar(rx, ry, rx + rw, ry + rh, UIC(0.17f, 0.17f, 0.20f), 0.98f);
+            ar(rx, ry, rx + rw, ry + 1, UIC(0.30f, 0.30f, 0.35f), 1.f);
             if (recentHovered_ >= 0)
-                ar(rx + 2, ry + 2 + (recentHovered_ - first) * itemH, rx + rw - 2, ry + 2 + (recentHovered_ - first + 1) * itemH, 0.25f, 0.30f, 0.45f, 1.f);
+                ar(rx + 2, ry + 2 + (recentHovered_ - first) * itemH, rx + rw - 2, ry + 2 + (recentHovered_ - first + 1) * itemH, UIC(0.25f, 0.30f, 0.45f), 1.f);
             flushSolid(v);
             for (int row = 0; row < rows; ++row) {
                 int i = first + row;
                 const auto& item = (*fly)[i];
-                if (item.separator) { v.clear(); ar(rx + 8, ry + 13.f + row * itemH, rx + rw - 8, ry + 14.f + row * itemH, 0.3f, 0.3f, 0.33f, 1.f); flushSolid(v); continue; }
+                if (item.separator) { v.clear(); ar(rx + 8, ry + 13.f + row * itemH, rx + rw - 8, ry + 14.f + row * itemH, UIC(0.3f, 0.3f, 0.33f), 1.f); flushSolid(v); continue; }
                 float b = recentHovered_ == i ? 1.f : 0.78f;
                 if (!item.action && !opensFlyout(item)) b = 0.42f;
                 font.drawText(item.label, rx + 12.f, ry + 6.f + row * itemH, b, b, b, 1.f);
@@ -422,7 +423,7 @@ void Titlebar::drawMenuPopup(FontAtlas& font, float ox, float oy) {
             if (rows < static_cast<int>(fly->size())) {  // scroll bar
                 float track = rh - 4.f, thumb = std::max(16.f, track * rows / static_cast<float>(fly->size()));
                 float top = ry + 2.f + (track - thumb) * first / static_cast<float>(fly->size() - rows);
-                v.clear(); ar(rx + rw - 5, top, rx + rw - 2, top + thumb, 0.45f, 0.45f, 0.5f, 1.f); flushSolid(v);
+                v.clear(); ar(rx + rw - 5, top, rx + rw - 2, top + thumb, UIC(0.45f, 0.45f, 0.5f), 1.f); flushSolid(v);
             }
         }
     }
@@ -464,19 +465,20 @@ void Titlebar::appendSolidRects(std::vector<float>& v) {
     for (int i = 1; i < 4; ++i) {
         auto& btn = buttons_[i];
         if (btn.type == TitlebarButton::CLOSE) {
-            float br = btn.hovered ? 0.85f : 0.35f;
-            ar(btn.x, btn.y, btn.x+btn.w, btn.y+btn.h, br, btn.hovered?0.15f:0.15f, btn.hovered?0.15f:0.18f, 1.f);
+            if (btn.hovered) ar(btn.x, btn.y, btn.x+btn.w, btn.y+btn.h, 0.85f, 0.15f, 0.15f, 1.f);
+            else ar(btn.x, btn.y, btn.x+btn.w, btn.y+btn.h, UIC(0.35f, 0.15f, 0.18f), 1.f);
         } else {
             float br = btn.hovered ? 0.28f : 0.2f;
-            ar(btn.x, btn.y, btn.x+btn.w, btn.y+btn.h, br, br, br+0.03f, 1.f);
+            ar(btn.x, btn.y, btn.x+btn.w, btn.y+btn.h, UIC(br, br, br+0.03f), 1.f);
         }
     }
     auto& mb = buttons_[0];
     float mbr = (mb.hovered || menuOpen_) ? 0.28f : 0.16f;
-    ar(mb.x, mb.y, mb.x+mb.w, mb.y+mb.h, mbr, mbr, mbr+0.03f, 1.f);
+    ar(mb.x, mb.y, mb.x+mb.w, mb.y+mb.h, UIC(mbr, mbr, mbr+0.03f), 1.f);
 }
 
 void Titlebar::drawForeground(FontAtlas& font) {
+    UiTheme::ChromeScope chromeScope;
     if (iconTex_) {
         GLRenderer::setDrawMode(1);
         float padX = 8.f;
@@ -492,13 +494,13 @@ void Titlebar::drawForeground(FontAtlas& font) {
     float titleX = (titleLeft + titleRight) / 2.f - titleW / 2.f;
     if (titleX < titleLeft) titleX = titleLeft;
     float titleY = 8.f;
-    { float tg = UiTheme::instance().text(0.7f); font.drawText(title_, titleX, titleY, tg, tg, tg, 1.f); }
+    font.drawText(title_, titleX, titleY, 0.7f, 0.7f, 0.7f, 1.f);
     float mid = height_ / 2.f;
     std::vector<float> iconRects;
     auto ar = [&](float x0,float y0,float x1,float y1,float cr,float cg,float cb,float ca) {
         iconRects.insert(iconRects.end(),{x0,y0,0,0,cr,cg,cb,ca, x0,y1,0,0,cr,cg,cb,ca, x1,y1,0,0,cr,cg,cb,ca, x0,y0,0,0,cr,cg,cb,ca, x1,y1,0,0,cr,cg,cb,ca, x1,y0,0,0,cr,cg,cb,ca});
     };
-    ar(buttons_[1].x + 16.f, mid + 5.f, buttons_[1].x + 30.f, mid + 6.5f, 0.70f, 0.70f, 0.72f, 1.f);
+    ar(buttons_[1].x + 16.f, mid + 5.f, buttons_[1].x + 30.f, mid + 6.5f, UIC(0.70f, 0.70f, 0.72f), 1.f);
     flushSolid(iconRects);
     font.drawText("\xe2\x96\xa1", buttons_[2].x + 16.f, mid - 8.f, 0.7f, 0.7f, 0.7f, 1.f);
     font.drawText("\xc3\x97", buttons_[3].x + 16.f, mid - 8.f, 1.f, 1.f, 1.f, 1.f);

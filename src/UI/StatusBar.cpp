@@ -34,11 +34,12 @@ void StatusBar::appendSolidRects(FontAtlas& font, std::vector<float>& verts, flo
 
 void StatusBar::drawText(FontAtlas& font, float windowW, float windowH,
                          size_t line, size_t col, const std::string& syntaxName, bool useTabs, int tabSize, const std::string& branch) {
+    UiTheme::ChromeScope chromeScope;
     if (!visible_) return;
     float barY = windowH - height_;
     char buf[64];
     snprintf(buf, sizeof(buf), "Line %zu, Col %zu", line + 1, col + 1);
-    { float tg = UiTheme::instance().text(0.7f); font.drawText(buf, 12.f, barY + 3.f, tg, tg, tg, 1.f); }
+    font.drawText(buf, 12.f, barY + 3.f, 0.7f, 0.7f, 0.7f, 1.f);
 
     if (!branch.empty()) {
         float branchX = 12.f + font.measureText(buf) + 24.f;
@@ -54,9 +55,9 @@ void StatusBar::drawText(FontAtlas& font, float windowW, float windowH,
     syntaxLabelW_ = synW + 6.f;
     indentLabelX_ = syntaxLabelX_ - indW - 24.f;
     indentLabelW_ = indW + 6.f;
-    { float tg = UiTheme::instance().text(0.65f); font.drawText(indentBuf, indentLabelX_ + 3.f, barY + 3.f, tg, tg, tg, 1.f); }
-    font.drawText("|", indentLabelX_ + indW + 10.f, barY + 3.f, 0.3f, 0.3f, 0.33f, 1.f);
-    { float tg = UiTheme::instance().text(0.65f); font.drawText(syntaxName, syntaxLabelX_ + 3.f, barY + 3.f, tg, tg, tg, 1.f); }
+    font.drawText(indentBuf, indentLabelX_ + 3.f, barY + 3.f, 0.65f, 0.65f, 0.68f, 1.f);
+    font.drawText("|", indentLabelX_ + indW + 10.f, barY + 3.f, UIC(0.3f, 0.3f, 0.33f), 1.f);
+    font.drawText(syntaxName, syntaxLabelX_ + 3.f, barY + 3.f, 0.65f, 0.65f, 0.68f, 1.f);
 }
 
 void StatusBar::draw(FontAtlas& font, float windowW, float windowH, float,
