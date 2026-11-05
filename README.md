@@ -1,5 +1,3 @@
-# Moreno Text
-
 Moreno Text is a fast, simple, open source editor/IDE inspired by Sublime Text. The goal is a small native binary with strong large-file handling, a clean keyboard-first UI, and a plugin API compatible enough for Sublime-style packages to feel at home.
 
 ## Goals
