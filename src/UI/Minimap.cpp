@@ -76,7 +76,7 @@ void Minimap::draw(FontAtlas& font, SyntaxHighlighter& syntax, const std::string
                         font.drawTextScaledClipped(gap, cx, y, scale, miniTextX, originX + width_ - 4.f, c.r, c.g, c.b, 0.78f);
                         cx += font.measureText(gap) * scale;
                     }
-                    auto& c = syntax.scopeColor(tok.scope);
+                    auto& c = syntax.scopeColor(tok);
                     std::string_view tokText(buffer.data() + tok.start, tok.length);
                     font.drawTextScaledClipped(tokText, cx, y, scale, miniTextX, originX + width_ - 4.f, c.r, c.g, c.b, 0.78f);
                     cx += font.measureText(tokText) * scale;

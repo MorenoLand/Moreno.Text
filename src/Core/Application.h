@@ -17,6 +17,8 @@
 #include <memory>
 #include "Plugin/PluginHost.h"
 #include "Platform/FileAssociations.h"
+#include "Core/ExcludeRules.h"
+#include "Core/GitStatus.h"
 #include "UI/SidebarMenu.h"
 
 class Titlebar;
@@ -499,6 +501,11 @@ private:
     void updateEncodingResults(const std::string& query);
     void updateProjectResults(const std::string& pattern);
     std::string encodeForSave(const std::string& path, const std::string& utf8) const;
+    // Works out how the bytes of a file just read are encoded (BOMs, then UTF-8, then the fallback_encoding setting) and
+    // converts them to UTF-8. False when they are already UTF-8 or are binary; encodingName is the file's encoding otherwise.
+    bool decodeOnOpen(const std::string& bytes, std::string& utf8, std::string& encodingName) const;
+    // default_encoding and default_line_ending, for a file that is being saved for the first time.
+    void applyNewFileDefaults(const std::string& path);
     std::map<std::string, std::string> fileEncodings_;
     std::string projectFile_;
     void rememberClipboardText(const std::string& text);
@@ -690,6 +697,12 @@ private:
     std::string sidebarRoot_;
     SidebarNode sidebarTree_;
     std::vector<SidebarNode> extraFolders_;  // folders after the first in a multi-folder project
+    ExcludeRules projectExtraRules_;                                   // exclude patterns from the project's own settings
+    std::vector<std::pair<std::string, ExcludeRules>> folderExtraRules_;   // ... and from each folder entry, keyed by folder path
+public:
+    // The settings' exclude patterns plus whatever the open project adds for the folder `path` is in.
+    ExcludeRules excludeRulesFor(const std::string& path) const;
+private:
     std::vector<SidebarNode*> sidebarRoots();
     std::vector<std::string> projectRoots();
     void addFolderToProject(const std::string& path);
@@ -853,6 +866,12 @@ private:
     struct UiColor { float r, g, b, a; };
     UiColor accentColor_{0.306f, 0.788f, 0.690f, 1.f};
     std::string gitBranch_;
+    GitStatus::Map gitStatus_;                      // sidebar marks: path -> M/A/D/R/?/U
+    mutable std::mutex gitStatusMutex_;
+    std::atomic<bool> gitStatusBusy_{false};
+    uint32_t gitStatusAt_ = 0;
+    void refreshGitStatus();
+    char gitStateFor(const std::string& path) const;   // 0 when the path is clean or not in a repository
     std::mutex gitBranchMutex_;
     std::atomic<bool> gitBranchBusy_{false};
     std::vector<std::string> closedTabStack_;

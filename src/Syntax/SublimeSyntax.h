@@ -22,6 +22,7 @@ public:
     const std::string& scope() const { return scope_; }
     const std::vector<std::string>& extensions() const { return extensions_; }
     const std::string& firstLineMatch() const { return firstLine_; }
+    bool hidden() const { return hidden_; }   // helpers and embeds: not offered in the syntax list
 
     // Tokenizes a whole text. Spans cover every byte that has a non-trivial scope; the rest is the base scope.
     std::vector<ScopeSpan> tokenize(const std::string& text, const class SyntaxLibrary* library = nullptr) const;
@@ -33,6 +34,7 @@ public:
 private:
     SublimeSyntax();
     std::string name_, scope_, firstLine_;
+    bool hidden_ = false;
     std::vector<std::string> extensions_;
     std::unique_ptr<Impl> impl_;
     friend class SyntaxLibrary;
@@ -54,6 +56,8 @@ public:
     size_t loadPaths(const std::vector<std::string>& dirs);
     // Merges syntaxes that use `extends` with their parents. Called after loading.
     void resolveExtends();
+    // Compiles every pattern of every syntax and returns "Syntax name: message: pattern" for each that does not compile.
+    std::vector<std::string> regexProblems() const;
     // The library the editor shares. It is filled on a background thread; ready() says when.
     static SyntaxLibrary& shared();
     bool ready() const { return ready_.load(); }

@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cctype>
+#include <mutex>
 #include <nlohmann/json.hpp>
 
 struct ThemeColor { float r, g, b, a; };
@@ -79,6 +80,10 @@ public:
                         std::string key = one.substr(a, b - a + 1);
                         if (hasForeground) scopeColors_[key] = c;
                         if (hasStyle) scopeStyles_[key] = style;
+                        // Moreno's own schemes colour "variable" and "punctuation" as coarse classes; as selectors they would paint
+                        // every identifier and bracket, so only the specific scopes (parameters, language variables) use them.
+                        bool coarseOnly = (key == "variable" || key == "punctuation") && path.size() > 20 && path.compare(path.size() - 20, 20, ".moreno-color-scheme") == 0;
+                        if (!coarseOnly) addRule(key, hasForeground, c, hasStyle, style);
                     }
                     if (comma == std::string::npos) break;
                     start = comma + 1;
@@ -115,6 +120,7 @@ public:
                 if (it != scopeColors_.end()) { scopeColors_[coarse] = it->second; break; }
             }
         }
+        addBaseRules();
     }
     ThemeColor parseColorPublic(const std::string& s) const { return parseColor(s); }
     const std::string& name() const { return name_; }
@@ -134,6 +140,34 @@ public:
         if (it != scopeStyles_.end()) return it->second;
         for (auto& [k, v] : scopeStyles_) if (scope.find(k) == 0) return v;
         return 0;
+    }
+    // The colour and font style a full scope stack ("source.go meta.function.go entity.name.function.go") gets, picked the
+    // way Sublime does: among the rules that match, the one that matches deepest in the stack and most specifically wins,
+    // and later rules beat earlier ones on a tie.
+    struct ScopeStyle { ThemeColor color; int style; };
+    ScopeStyle styleForStack(const std::string& stack) const {
+        std::lock_guard<std::mutex> lock(stackMutex_);
+        auto cached = stackCache_.find(stack);
+        if (cached != stackCache_.end()) return cached->second;
+        std::vector<std::string> atoms;
+        for (size_t i = 0; i < stack.size();) {
+            size_t sp = stack.find(' ', i);
+            if (sp == std::string::npos) sp = stack.size();
+            if (sp > i) atoms.push_back(stack.substr(i, sp - i));
+            i = sp + 1;
+        }
+        ScopeStyle result{fgColor_, 0};
+        long bestColor[3] = {-1, -1, -1}, bestStyle[3] = {-1, -1, -1};
+        for (const SelectorRule& rule : rules_) {
+            long score[3];
+            if (!matchRule(rule, atoms, score)) continue;
+            auto better = [&](const long* a, const long* b) { for (int i = 0; i < 3; ++i) { if (a[i] != b[i]) return a[i] > b[i]; } return true; };
+            if (rule.hasColor && better(score, bestColor)) { std::copy(score, score + 3, bestColor); result.color = rule.color; }
+            if (rule.hasStyle && better(score, bestStyle)) { std::copy(score, score + 3, bestStyle); result.style = rule.style; }
+        }
+        if (stackCache_.size() > 20000) stackCache_.clear();
+        stackCache_[stack] = result;
+        return result;
     }
     ThemeColor bgColor() const { return bgColor_; }
     ThemeColor fgColor() const { return fgColor_; }
@@ -327,6 +361,93 @@ private:
         minimapBg_ = {0.082f, 0.082f, 0.094f, 1.f};
         scopeColors_.clear();
         scopeStyles_.clear();
+        rules_.clear();
+        std::lock_guard<std::mutex> lock(stackMutex_);
+        stackCache_.clear();
+    }
+
+    struct SelectorRule {
+        std::vector<std::string> parts;      // descendant selector: each part is a scope prefix
+        std::vector<std::string> exclude;    // scopes after " - " that must not be in the stack
+        bool hasColor = false, hasStyle = false;
+        ThemeColor color{0, 0, 0, 1};
+        int style = 0;
+    };
+    std::vector<SelectorRule> rules_;
+    mutable std::mutex stackMutex_;
+    mutable std::unordered_map<std::string, ScopeStyle> stackCache_;
+
+    void addRule(const std::string& selector, bool hasColor, ThemeColor color, bool hasStyle, int style) {
+        SelectorRule rule;
+        bool excluding = false;
+        for (size_t i = 0; i < selector.size();) {
+            size_t sp = selector.find_first_of(" \t", i);
+            if (sp == std::string::npos) sp = selector.size();
+            if (sp > i) {
+                std::string token = selector.substr(i, sp - i);
+                if (token == "-") excluding = true;
+                else if (token[0] == '-') rule.exclude.push_back(token.substr(1));
+                else (excluding ? rule.exclude : rule.parts).push_back(token);
+            }
+            i = sp + 1;
+        }
+        if (rule.parts.empty()) return;
+        rule.hasColor = hasColor; rule.color = color; rule.hasStyle = hasStyle; rule.style = style;
+        rules_.push_back(std::move(rule));
+    }
+
+    static bool scopeHas(const std::string& atom, const std::string& prefix) {
+        return atom.size() >= prefix.size() && atom.compare(0, prefix.size(), prefix) == 0 && (atom.size() == prefix.size() || atom[prefix.size()] == '.');
+    }
+    static long dotSegments(const std::string& s) { return 1 + static_cast<long>(std::count(s.begin(), s.end(), '.')); }
+
+    // score = {index of the last stack entry matched, segments in the last part, segments in all parts}
+    static bool matchRule(const SelectorRule& rule, const std::vector<std::string>& atoms, long* score) {
+        for (const std::string& ex : rule.exclude)
+            for (const std::string& a : atoms) if (scopeHas(a, ex)) return false;
+        size_t at = 0;
+        long last = -1, total = 0;
+        for (const std::string& part : rule.parts) {
+            bool found = false;
+            for (; at < atoms.size(); ++at) {
+                if (scopeHas(atoms[at], part)) { last = static_cast<long>(at); ++at; found = true; break; }
+            }
+            if (!found) return false;
+            total += dotSegments(part);
+        }
+        score[0] = last; score[1] = dotSegments(rule.parts.back()); score[2] = total;
+        return true;
+    }
+
+    // Moreno's own schemes colour a dozen coarse names; give the standard Sublime scope names those colours first, so
+    // anything the scheme itself styles more specifically still wins.
+    void addBaseRules() {
+        static const std::pair<const char*, const char*> mapping[] = {
+            {"comment", "comment"}, {"string", "string"}, {"constant.numeric", "number"}, {"constant.language", "constant"},
+            {"constant.character", "constant"}, {"constant.other", "constant"}, {"support.constant", "constant"},
+            {"keyword", "keyword"}, {"keyword.operator", "operator"}, {"storage", "keyword"}, {"storage.type", "type"},
+            {"storage.type.function", "keyword"}, {"storage.type.class", "keyword"},
+            {"entity.name.function", "function"}, {"support.function", "function"}, {"variable.function", "function"}, {"meta.function-call", "function"},
+            {"entity.name.class", "type"}, {"entity.name.type", "type"}, {"entity.other.inherited-class", "type"}, {"support.class", "type"}, {"support.type", "type"},
+            {"entity.name.tag", "tag"}, {"entity.other.attribute-name", "attribute"}, {"variable.parameter", "variable"}, {"variable.language", "constant"},
+            {"invalid", "tag"},   // bare "punctuation" gets no rule: it inherits the colour of what it is inside (quotes stay string, // stays comment)
+            {"markup.heading", "markup.heading"}, {"markup.bold", "markup.bold"}, {"markup.italic", "markup.italic"}, {"markup.raw", "markup.raw"},
+            {"markup.underline.link", "markup.underline.link"}, {"string.other.link.title", "string.other.link.title"},
+        };
+        std::vector<SelectorRule> base;
+        for (auto& [selector, coarse] : mapping) {
+            auto color = scopeColors_.find(coarse);
+            if (color == scopeColors_.end()) continue;
+            SelectorRule rule;
+            rule.parts.push_back(selector);
+            rule.hasColor = true; rule.color = color->second;
+            auto style = scopeStyles_.find(coarse);
+            if (style != scopeStyles_.end()) { rule.hasStyle = true; rule.style = style->second; }
+            base.push_back(std::move(rule));
+        }
+        rules_.insert(rules_.begin(), base.begin(), base.end());
+        std::lock_guard<std::mutex> lock(stackMutex_);
+        stackCache_.clear();
     }
 
     ThemeColor bgColor_ = {0.118f, 0.118f, 0.133f, 1.f};

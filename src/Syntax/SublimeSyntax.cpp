@@ -4,11 +4,14 @@
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
+#include <chrono>
 #include <deque>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
 #include <sstream>
+#include <unordered_map>
+#include <unordered_set>
 #include <zlib.h>
 
 using json = nlohmann::json;
@@ -212,6 +215,12 @@ private:
                 ++i;
                 if (i < lines_.size() && lines_[i].indent > indent) arr.push_back(block(i, lines_[i].indent));
                 else arr.push_back(nullptr);
+            } else if (rest.rfind("- ", 0) == 0 || rest == "-") {
+                // a sequence starting on the dash line ("- - match: x"): its items line up two columns in
+                int inner = indent + 2;
+                lines_[i].indent = inner;
+                lines_[i].text = rest;
+                arr.push_back(sequence(i, inner));
             } else if (colonAt(rest) != std::string::npos && rest[0] != '[' && rest[0] != '{' && rest[0] != '\'' && rest[0] != '"') {
                 // a mapping starting on the dash line: re-indent the line so it reads as the first key of the map
                 int inner = indent + 2;
@@ -267,12 +276,14 @@ struct Pattern {
     const SublimeSyntax::Impl* owner = nullptr;  // the syntax this pattern was written in: context names in push/set resolve there
     mutable std::shared_ptr<OnigRegex> regex;
     mutable bool compileTried = false;
+    mutable bool anchored = false;            // uses \G, so its match depends on where the last match ended
     std::vector<std::string> scope;
     std::map<int, std::vector<std::string>> captures;
     enum Action { None, Push, Pop, Set, Branch, Fail } action = None;
     std::string branchPoint, failName;
     std::vector<std::string> branchTargets;
     int popCount = 1;
+    int branchPop = 0;                        // "pop: n" written together with "branch": leave n contexts, then try the alternatives
     std::vector<std::string> targets;         // context names, or scope:... references
     std::vector<std::shared_ptr<Context>> inlineTargets;
     std::vector<std::shared_ptr<Context>> withPrototype;  // contexts holding the with_prototype patterns
@@ -412,6 +423,11 @@ struct Loader {
             p.action = Pattern::Branch;
             p.branchPoint = item["branch_point"].get<std::string>();
             for (auto& b : item["branch"]) if (b.is_string()) p.branchTargets.push_back(b.get<std::string>());
+            if (item.contains("pop")) {
+                const json& pop = item["pop"];
+                if (pop.is_number()) p.branchPop = std::max(1, pop.get<int>());
+                else if (pop.is_boolean() && pop.get<bool>()) p.branchPop = 1;
+            }
         }
         else if (item.contains("fail") && item["fail"].is_string()) { p.action = Pattern::Fail; p.failName = item["fail"].get<std::string>(); }
         else if (item.contains("push")) { p.action = Pattern::Push; readTargets(item["push"], p); }
@@ -438,6 +454,7 @@ std::shared_ptr<SublimeSyntax> SublimeSyntax::parse(const std::string& yamlText,
     std::shared_ptr<SublimeSyntax> syn(new SublimeSyntax());
     syn->name_ = doc.value("name", std::string());
     syn->scope_ = doc.value("scope", std::string());
+    if (doc.contains("hidden") && doc["hidden"].is_boolean()) syn->hidden_ = doc["hidden"].get<bool>();
     syn->impl_->baseScope = syn->scope_;
     if (doc.contains("first_line_match") && doc["first_line_match"].is_string()) syn->firstLine_ = doc["first_line_match"].get<std::string>();
     if (doc.contains("file_extensions") && doc["file_extensions"].is_array())
@@ -470,6 +487,7 @@ struct Frame {
     const std::vector<std::shared_ptr<Context>>* withPrototype = nullptr;
     std::shared_ptr<Context> temp;      // an embed context built for this frame
     size_t metaCount = 0, contentCount = 0;
+    std::shared_ptr<std::vector<const Pattern*>> candidates;   // the patterns that apply here, expanded once per frame
 };
 
 struct Resolved { const Context* ctx = nullptr; std::shared_ptr<Context> keep; };
@@ -479,6 +497,8 @@ struct Tokenizer {
     const SyntaxLibrary* library;
     std::vector<Frame> stack;
     std::vector<std::string> scopes;
+    std::string joined;                 // `scopes` joined with spaces, kept in step with it
+    std::vector<size_t> joinedEnd;      // joined.size() after each scope, so any prefix is a substr
     std::vector<ScopeSpan> spans;
     std::deque<std::shared_ptr<Context>> temps;
     std::map<const SublimeSyntax::Impl*, std::shared_ptr<SublimeSyntax>> libraryHold;
@@ -492,12 +512,22 @@ struct Tokenizer {
         std::vector<std::string> scopes;
         size_t spanCount = 0, lastSpanLength = 0;
         size_t nextAlternative = 1;
+        size_t settle = 0;   // the branch is committed once the stack drops below this depth
     };
     std::vector<Snapshot> snapshots;
+    size_t maxDepth = 0;
+    std::map<std::pair<const Context*, const void*>, std::shared_ptr<std::vector<const Pattern*>>> candidateCache;
+    long rewindCount = 0;
+    double msSelect = 0, msAfter = 0;
+    long steps = 0, lineCount = 0;
+    double msCollect = 0, msSearch = 0, msTotal = 0;
+    std::map<std::string, std::pair<double, long>> profile;   // regex source -> total ms, searches (MORENO_SYNTAX_PROFILE)
     bool jumpPending = false;
     size_t jumpLine = 0, jumpPos = 0;
     const Pattern* altPattern = nullptr;
     size_t altLine = 0, altPos = 0, altIndex = 0;
+    const Pattern* blockedPattern = nullptr;   // a branch whose alternatives all failed: not allowed to match again right here
+    size_t blockedLine = 0, blockedPos = 0;
 
     Tokenizer(const SublimeSyntax::Impl& r, const SyntaxLibrary* lib) : root(r), library(lib) {}
 
@@ -514,6 +544,25 @@ struct Tokenizer {
             if (it == oi->contexts.end()) return nullptr;
             *foundOwner = oi;
             return it->second.get();
+        }
+        size_t suffix = name.find(".sublime-syntax");
+        if (suffix != std::string::npos && library) {
+            // "Packages/PHP/Embeddings/PHP Source (for PHP).sublime-syntax" or "...sublime-syntax#context": another file's context
+            std::string path = name.substr(0, suffix + 15), ctxName = "main";
+            size_t hash = name.find('#', suffix);
+            if (hash != std::string::npos) ctxName = name.substr(hash + 1);
+            std::string base = fs::path(path).filename().string();
+            const SublimeSyntax::Impl* byName = nullptr;
+            for (auto& other : library->all()) {
+                const SublimeSyntax::Impl* oi = other->impl();
+                if (oi->sourcePath == path) { byName = oi; break; }
+                if (!byName && fs::path(oi->sourcePath).filename().string() == base) byName = oi;
+            }
+            if (!byName) return nullptr;
+            auto found = byName->contexts.find(ctxName);
+            if (found == byName->contexts.end()) return nullptr;
+            *foundOwner = byName;
+            return found->second.get();
         }
         auto it = owner.contexts.find(name);
         if (it == owner.contexts.end()) return nullptr;
@@ -532,14 +581,33 @@ struct Tokenizer {
             if (p.kind != Pattern::Include) { out.push_back(&p); continue; }
             const SublimeSyntax::Impl* foundOwner = nullptr;
             const Context* inc = find(owner, p.includeName, &foundOwner);
+            if (!inc && std::getenv("MORENO_SYNTAX_DEBUG")) std::fprintf(stderr, "unresolved include: %s (in %s)", p.includeName.c_str(), ctx.name.c_str()), std::fputc(10, stderr);
             if (inc) collect(*inc, *foundOwner, out, depth + 1, false);
         }
     }
 
+    void pushScope(const std::string& name) {
+        scopes.push_back(name);
+        if (!joined.empty()) joined += ' ';
+        joined += name;
+        joinedEnd.push_back(joined.size());
+    }
+    void truncateScopes(size_t n) {
+        if (n >= scopes.size()) return;
+        scopes.resize(n);
+        joinedEnd.resize(n);
+        joined.resize(n ? joinedEnd[n - 1] : 0);
+    }
+    void rebuildJoined() {
+        joined.clear(); joinedEnd.clear();
+        for (size_t i = 0; i < scopes.size(); ++i) { if (i) joined += ' '; joined += scopes[i]; joinedEnd.push_back(joined.size()); }
+    }
+    // The first n scopes, joined.
+    std::string prefix(size_t n) const { return n == 0 ? std::string() : (n >= scopes.size() ? joined : joined.substr(0, joinedEnd[n - 1])); }
+
     void currentScopes(std::string& out, size_t drop = 0) const {
-        out.clear();
         size_t n = scopes.size() > drop ? scopes.size() - drop : 0;
-        for (size_t i = 0; i < n; ++i) { if (i) out += ' '; out += scopes[i]; }
+        out = prefix(n);
     }
 
     void emit(size_t start, size_t end, const std::string& scope) {
@@ -551,23 +619,24 @@ struct Tokenizer {
     void pushFrame(const Context* ctx, const std::vector<std::shared_ptr<Context>>* proto, std::shared_ptr<Context> temp) {
         Frame f;
         f.ctx = ctx; f.withPrototype = proto; f.temp = std::move(temp);
-        for (auto& s : ctx->metaScope) { scopes.push_back(s); ++f.metaCount; }
-        for (auto& s : ctx->metaContentScope) { scopes.push_back(s); ++f.contentCount; }
+        for (auto& s : ctx->metaScope) { pushScope(s); ++f.metaCount; }
+        for (auto& s : ctx->metaContentScope) { pushScope(s); ++f.contentCount; }
         stack.push_back(std::move(f));
+        if (stack.size() > maxDepth) maxDepth = stack.size();
     }
 
     void popFrame() {
         if (stack.size() <= 1) return;
         Frame& f = stack.back();
         size_t n = f.metaCount + f.contentCount;
-        scopes.resize(scopes.size() >= n ? scopes.size() - n : 0);
+        truncateScopes(scopes.size() >= n ? scopes.size() - n : 0);
         stack.pop_back();
     }
 
     std::vector<ScopeSpan> run(const std::string& text) {
         const Context* mainCtx = root.contexts.at("main").get();
-        scopes.clear();
-        if (!root.baseScope.empty()) scopes.push_back(root.baseScope);
+        scopes.clear(); joined.clear(); joinedEnd.clear();
+        if (!root.baseScope.empty()) pushScope(root.baseScope);
         pushFrame(mainCtx, nullptr, nullptr);
         size_t lineStart = 0, startPos = 0;
         long rewinds = 0;
@@ -580,6 +649,7 @@ struct Tokenizer {
                 jumpPending = false;
                 lineStart = jumpLine;
                 startPos = jumpPos;
+                ++rewindCount;
                 if (++rewinds > 20000) break;  // a grammar that keeps failing; give up on the rest
                 continue;
             }
@@ -589,47 +659,174 @@ struct Tokenizer {
     }
 
     void tokenizeLine(const std::string& full, size_t lineStart, size_t lineEnd, size_t startPos) {
+        static const bool traceTokens = std::getenv("MORENO_SYNTAX_TRACE") != nullptr;
+        static const bool debugRegex = std::getenv("MORENO_SYNTAX_DEBUG") != nullptr;
+        static const bool profileRegex = std::getenv("MORENO_SYNTAX_PROFILE") != nullptr;
+        struct CachedMatch { size_t from = 0; bool found = false; OnigRegex::Match match; };
+        std::unordered_map<const Pattern*, CachedMatch> matchCache;
+        // For a pattern list used on this line: every pattern's next match, and which one starts first. Most steps only
+        // change the position, and while the position has not passed the earliest start nothing needs searching again.
+        struct ListCache { bool primed = false, fastOk = true, searched = false; long minStart = -1, minIdx = -1; std::vector<CachedMatch> entries; };
+        std::unordered_map<const void*, ListCache> listCaches;
+        ++lineCount;
         std::string line = full.substr(lineStart, lineEnd - lineStart);
         size_t pos = startPos, anchor = startPos;
         int guard = 0;
         std::string scopeText;
+        // Loop protection: matching nothing, then changing the stack, can bring the stack back to a state already seen at
+        // this position. Some grammars do that a few times on purpose, but the same state and pattern coming round again and
+        // again would never end, so after several repeats that pattern is skipped.
+        std::unordered_map<uint64_t, int> seenStates;
+        size_t seenPos = std::string::npos;
+        std::vector<const Pattern*> skip;
+        size_t skipPos = 0, skipDepth = 0;
+        if (blockedPattern && blockedLine == lineStart && blockedPos == startPos) { skip.push_back(blockedPattern); skipPos = startPos; skipDepth = stack.size(); blockedPattern = nullptr; }
         while (pos < line.size() && ++guard < 4000) {
+            if (!skip.empty() && (skipPos != pos || skipDepth != stack.size())) skip.clear();
+            auto stepStart = profileRegex ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point();
+            ++steps;
             Frame& frame = stack.back();
             const SublimeSyntax::Impl* owner = frame.ctx->owner;
-            std::vector<const Pattern*> candidates;
-            if (frame.withPrototype) for (auto& wp : *frame.withPrototype) collect(*wp, *owner, candidates, 0, false);
-            collect(*frame.ctx, *owner, candidates, 0, true);
+            if (!frame.candidates) {
+                // the same context is pushed over and over; its expanded pattern list never changes
+                auto key = std::make_pair(frame.ctx, static_cast<const void*>(frame.withPrototype));
+                auto known = candidateCache.find(key);
+                if (known != candidateCache.end()) frame.candidates = known->second;
+                else {
+                    auto collectStart = std::chrono::steady_clock::now();
+                    auto list = std::make_shared<std::vector<const Pattern*>>();
+                    if (frame.withPrototype) for (auto& wp : *frame.withPrototype) collect(*wp, *owner, *list, 0, false);
+                    collect(*frame.ctx, *owner, *list, 0, true);
+                    frame.candidates = list;
+                    candidateCache[key] = list;
+                    msCollect += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - collectStart).count();
+                }
+            }
+            static const char* dumpContext = std::getenv("MORENO_SYNTAX_DUMP");
+            if (dumpContext && frame.ctx->name == dumpContext) {
+                for (const Pattern* c : *frame.candidates) std::fprintf(stderr, "  candidate: %.100s\n", c->source.c_str());
+            }
             // an embed's escape is live while anything above the embed is on the stack, and wins ties
             std::vector<std::pair<const Pattern*, size_t>> escapes;
             for (size_t j = stack.size(); j-- > 0;)
                 if (stack[j].temp && stack[j].temp->name == "__embed" && !stack[j].temp->patterns.empty()) escapes.emplace_back(&stack[j].temp->patterns[0], j);
-            for (size_t e = escapes.size(); e-- > 0;) candidates.insert(candidates.begin(), escapes[e].first);
+            std::vector<const Pattern*> withEscapes;
+            const std::vector<const Pattern*>* candidateList = frame.candidates.get();
+            if (!escapes.empty()) {
+                for (auto& e : escapes) withEscapes.push_back(e.first);
+                withEscapes.insert(withEscapes.end(), frame.candidates->begin(), frame.candidates->end());
+                candidateList = &withEscapes;
+            }
+            const std::vector<const Pattern*>& candidates = *candidateList;
 
             const Pattern* best = nullptr;
             OnigRegex::Match bestMatch;
             long bestStart = -1;
-            for (const Pattern* p : candidates) {
-                const std::string& src = p->kind == Pattern::Embed ? p->source : p->source;
+            bool fastDone = false;
+            if (escapes.empty() && skip.empty()) {
+                ListCache& lc = listCaches[frame.candidates.get()];
+                const std::vector<const Pattern*>& cands = *frame.candidates;
+                if (!lc.primed) {
+                    lc.primed = true;
+                    lc.entries.assign(cands.size(), CachedMatch());
+                    for (const Pattern* p : cands) {
+                        if (!p->compileTried) {
+                            p->compileTried = true;
+                            std::string err;
+                            p->regex = OnigRegex::compile(p->source, err);
+                            p->anchored = p->source.find("\\G") != std::string::npos;
+                            if (!p->regex && debugRegex) std::fprintf(stderr, "regex error (%s): %s\n", err.c_str(), p->source.c_str());
+                        }
+                        if (p->anchored) lc.fastOk = false;
+                    }
+                }
+                if (lc.fastOk) {
+                    auto research = [&](size_t i) {
+                        CachedMatch& entry = lc.entries[i];
+                        const Pattern* p = cands[i];
+                        entry.from = pos;
+                        entry.found = p->regex ? p->regex->search(line, pos, anchor, entry.match) : false;
+                    };
+                    auto recomputeMin = [&] {
+                        lc.minIdx = -1; lc.minStart = -1;
+                        for (size_t i = 0; i < lc.entries.size(); ++i)
+                            if (lc.entries[i].found && (lc.minIdx < 0 || lc.entries[i].match.groups[0].first < lc.minStart)) { lc.minStart = lc.entries[i].match.groups[0].first; lc.minIdx = static_cast<long>(i); }
+                    };
+                    if (!lc.searched) {
+                        lc.searched = true;
+                        for (size_t i = 0; i < cands.size(); ++i) research(i);
+                        recomputeMin();
+                    } else if (lc.minIdx >= 0 && lc.minStart < static_cast<long>(pos)) {
+                        for (size_t i = 0; i < cands.size(); ++i)
+                            if (lc.entries[i].found && lc.entries[i].match.groups[0].first < static_cast<long>(pos)) research(i);
+                        recomputeMin();
+                    }
+                    if (lc.minIdx >= 0) { best = cands[static_cast<size_t>(lc.minIdx)]; bestMatch = lc.entries[static_cast<size_t>(lc.minIdx)].match; bestStart = lc.minStart; }
+                    fastDone = true;
+                }
+            }
+            long escapeStart = -1;   // where the nearest live escape matches; nothing may consume across it
+            if (!fastDone) for (const Pattern* p : candidates) {
+                if (!skip.empty() && std::find(skip.begin(), skip.end(), p) != skip.end()) continue;
                 if (!p->compileTried) {
                     p->compileTried = true;
                     std::string err;
-                    p->regex = OnigRegex::compile(src, err);
-                    if (!p->regex && std::getenv("MORENO_SYNTAX_DEBUG")) std::fprintf(stderr, "regex error (%s): %s\n", err.c_str(), src.c_str());
+                    p->regex = OnigRegex::compile(p->source, err);
+                    p->anchored = p->source.find("\\G") != std::string::npos;
+                    if (!p->regex && debugRegex) std::fprintf(stderr, "regex error (%s): %s\n", err.c_str(), p->source.c_str());
                 }
                 if (!p->regex) continue;
-                OnigRegex::Match m;
-                if (!p->regex->search(line, pos, anchor, m)) continue;
-                long start = m.groups[0].first;
-                if (best == nullptr || start < bestStart) { best = p; bestMatch = std::move(m); bestStart = start; if (start == static_cast<long>(pos)) break; }
+                // A search from an earlier position that found its first match at M, or none, still holds for any later
+                // position up to M, so each pattern is searched about once per match instead of once per token.
+                const OnigRegex::Match* found = nullptr;
+                OnigRegex::Match fresh;
+                auto cached = p->anchored ? matchCache.end() : matchCache.find(p);
+                if (cached != matchCache.end() && pos >= cached->second.from && (!cached->second.found || static_cast<long>(pos) <= cached->second.match.groups[0].first)) {
+                    if (!cached->second.found) continue;
+                    found = &cached->second.match;
+                } else {
+                    auto searchStart = profileRegex ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point();
+                    bool ok = p->regex->search(line, pos, anchor, fresh);
+                    if (profileRegex) { msSearch += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - searchStart).count(); profile[p->source].first += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - searchStart).count(); ++profile[p->source].second; }
+                    if (!p->anchored) {
+                        auto& entry = matchCache[p];
+                        entry.from = pos; entry.found = ok;
+                        if (ok) { entry.match = fresh; found = &entry.match; }
+                    } else if (ok) found = &fresh;
+                    if (!ok) continue;
+                }
+                long start = found->groups[0].first;
+                bool isEscape = false;
+                for (auto& e : escapes) if (e.first == p) { isEscape = true; break; }
+                if (isEscape) { if (escapeStart < 0 || start < escapeStart) escapeStart = start; }
+                else if (escapeStart >= 0 && start < escapeStart && found->groups[0].second > escapeStart) continue;
+                if (best == nullptr || start < bestStart) { best = p; bestMatch = *found; bestStart = start; if (start == static_cast<long>(pos)) break; }
             }
+            auto selectedAt = profileRegex ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point();
+            if (profileRegex) msSelect += std::chrono::duration<double, std::milli>(selectedAt - stepStart).count();
             // an embed context's escape beats everything inside it
             if (frame.temp && frame.temp->name == "__embed") {
                 // handled through its first pattern (the escape), which collect() lists first
             }
-            if (std::getenv("MORENO_SYNTAX_TRACE")) std::fprintf(stderr, "pos=%zu ctx=%s candidates=%zu best=%s\n", pos, frame.ctx->name.c_str(), candidates.size(), best ? best->source.c_str() : "(none)");
+            if (traceTokens) std::fprintf(stderr, "pos=%zu ctx=%s depth=%zu candidates=%zu best=%.40s scopes=%s\n", pos, frame.ctx->name.c_str(), stack.size(), candidates.size(), best ? best->source.c_str() : "(none)", joined.c_str());
             if (!best) { currentScopes(scopeText); emit(lineStart + pos, lineStart + line.size(), scopeText); pos = line.size(); break; }
 
             size_t ms = static_cast<size_t>(bestMatch.groups[0].first), me = static_cast<size_t>(bestMatch.groups[0].second);
+            if (ms == pos && me == pos) {
+                if (seenPos != pos) { seenStates.clear(); seenPos = pos; }
+                uint64_t state = reinterpret_cast<uintptr_t>(best) * 1099511628211ull;
+                for (const Frame& f : stack) {
+                    state = (state ^ reinterpret_cast<uintptr_t>(f.ctx)) * 1099511628211ull;
+                    state = (state ^ reinterpret_cast<uintptr_t>(f.withPrototype)) * 1099511628211ull;
+                    state = (state ^ reinterpret_cast<uintptr_t>(f.temp.get())) * 1099511628211ull;
+                }
+                state = (state ^ snapshots.size()) * 1099511628211ull;
+                static const bool noGuard = std::getenv("MORENO_NO_LOOP_GUARD") != nullptr;
+                if (!noGuard && ++seenStates[state] > 6) {
+                    skip.push_back(best); skipPos = pos; skipDepth = stack.size();
+                    continue;   // this exact state and pattern already ran here without moving: it would loop forever
+                }
+            }
             if (best->action == Pattern::Fail) {
                 // undo back to the branch point and try its next alternative
                 long found = -1;
@@ -639,9 +836,15 @@ struct Tokenizer {
                     snapshots.resize(static_cast<size_t>(found));
                     stack = snap.stack;
                     scopes = snap.scopes;
+                    rebuildJoined();
                     spans.resize(snap.spanCount);
                     if (!spans.empty()) spans.back().length = snap.lastSpanLength;
                     altPattern = snap.pattern; altLine = snap.lineStart; altPos = snap.pos; altIndex = snap.nextAlternative;
+                    if (snap.nextAlternative >= snap.pattern->branchTargets.size()) {
+                        // every alternative failed: the branch pattern counts as not matching here, so the rest of the context gets a turn
+                        blockedPattern = snap.pattern; blockedLine = snap.lineStart; blockedPos = snap.pos;
+                        altPattern = nullptr;
+                    }
                     jumpPending = true; jumpLine = snap.lineStart; jumpPos = snap.pos;
                     return;
                 }
@@ -662,8 +865,10 @@ struct Tokenizer {
                 snap.name = best->branchPoint; snap.pattern = best; snap.lineStart = lineStart; snap.pos = pos;
                 snap.stack = stack; snap.scopes = scopes; snap.spanCount = spans.size(); snap.lastSpanLength = spans.empty() ? 0 : spans.back().length;
                 snap.nextAlternative = branchIndex + 1;
-                if (branchIndex + 1 < best->branchTargets.size()) snapshots.push_back(std::move(snap));
+                snapshots.push_back(std::move(snap));
                 if (snapshots.size() > 64) snapshots.erase(snapshots.begin());
+                static const bool noSnap = std::getenv("MORENO_NO_SNAPSHOT") != nullptr;
+                if (noSnap && !snapshots.empty() && snapshots.back().pattern == best) snapshots.pop_back();
             }
             currentScopes(scopeText);
             emit(lineStart + pos, lineStart + ms, scopeText);
@@ -691,38 +896,41 @@ struct Tokenizer {
                     esc.captures = best->escapeCaptures;
                     esc.action = Pattern::Pop;
                     temp->patterns.push_back(esc);
-                    Pattern inc;
-                    inc.owner = patternOwner;
-                    inc.kind = Pattern::Include;
-                    inc.includeName = best->embedScope;
-                    temp->patterns.push_back(inc);
                     temps.push_back(temp);
+                    // The escape lives in its own frame and the embedded context goes on top of it, so a `set` inside the
+                    // embedded syntax replaces that context only and the escape stays live until it matches.
                     targets.push_back({temp.get(), temp});
+                    const SublimeSyntax::Impl* embedOwner = nullptr;
+                    if (const Context* embedded = find(*patternOwner, best->embedScope, &embedOwner)) targets.push_back({embedded, nullptr});
                 }
             }
 
             // scopes for the matched text
-            std::vector<std::string> matchScopes = scopes;
             long escapeFrame = -1;
             for (auto& e : escapes) if (e.first == best) escapeFrame = static_cast<long>(e.second);
+            std::string matchJoined;
             if (escapeFrame >= 0) {
                 size_t drop = 0;
                 for (size_t j = static_cast<size_t>(escapeFrame); j < stack.size(); ++j) drop += stack[j].metaCount + stack[j].contentCount;
-                matchScopes.resize(matchScopes.size() >= drop ? matchScopes.size() - drop : 0);
+                matchJoined = prefix(scopes.size() >= drop ? scopes.size() - drop : 0);
             } else if (best->action == Pattern::Pop) {
                 size_t drop = stack.back().contentCount;
-                matchScopes.resize(matchScopes.size() >= drop ? matchScopes.size() - drop : 0);
+                matchJoined = prefix(scopes.size() >= drop ? scopes.size() - drop : 0);
+            } else if (best->action == Pattern::Branch && best->branchPop > 0) {
+                size_t drop = 0;
+                for (int k = 0; k < best->branchPop && static_cast<size_t>(k) < stack.size() - 1; ++k) drop += stack[stack.size() - 1 - static_cast<size_t>(k)].contentCount;
+                matchJoined = prefix(scopes.size() >= drop ? scopes.size() - drop : 0);
+                for (auto& t : targets) for (auto& sc : t.ctx->metaScope) { if (!matchJoined.empty()) matchJoined += ' '; matchJoined += sc; }
             } else {
-                for (auto& t : targets) { for (auto& s : t.ctx->metaScope) matchScopes.push_back(s); }
+                matchJoined = joined;
+                for (auto& t : targets) for (auto& s : t.ctx->metaScope) { if (!matchJoined.empty()) matchJoined += ' '; matchJoined += s; }
             }
-            for (auto& s : best->scope) matchScopes.push_back(s);
-            auto join = [](const std::vector<std::string>& v) { std::string o; for (size_t i = 0; i < v.size(); ++i) { if (i) o += ' '; o += v[i]; } return o; };
+            for (auto& s : best->scope) { if (!matchJoined.empty()) matchJoined += ' '; matchJoined += s; }
 
             if (best->captures.empty()) {
-                emit(lineStart + ms, lineStart + me, join(matchScopes));
+                emit(lineStart + ms, lineStart + me, matchJoined);
             } else {
                 // split the match around its capture groups
-                std::vector<std::pair<long, long>> bounds;
                 size_t cursor = ms;
                 std::vector<std::tuple<size_t, size_t, int>> caps;
                 for (auto& [group, names] : best->captures) {
@@ -732,16 +940,15 @@ struct Tokenizer {
                     caps.emplace_back(static_cast<size_t>(g.first), static_cast<size_t>(g.second), group);
                 }
                 std::sort(caps.begin(), caps.end(), [](const auto& a, const auto& b) { return std::get<0>(a) < std::get<0>(b) || (std::get<0>(a) == std::get<0>(b) && std::get<1>(a) > std::get<1>(b)); });
-                std::string base = join(matchScopes);
                 for (auto& [cs, ce, group] : caps) {
                     if (cs < cursor) continue;  // nested capture: the outer group already covered it
-                    emit(lineStart + cursor, lineStart + cs, base);
-                    std::vector<std::string> inner = matchScopes;
-                    for (auto& s : best->captures.at(group)) inner.push_back(s);
-                    emit(lineStart + cs, lineStart + ce, join(inner));
+                    emit(lineStart + cursor, lineStart + cs, matchJoined);
+                    std::string inner = matchJoined;
+                    for (auto& s : best->captures.at(group)) { if (!inner.empty()) inner += ' '; inner += s; }
+                    emit(lineStart + cs, lineStart + ce, inner);
                     cursor = ce;
                 }
-                emit(lineStart + cursor, lineStart + me, base);
+                emit(lineStart + cursor, lineStart + me, matchJoined);
             }
 
             // state change
@@ -756,10 +963,12 @@ struct Tokenizer {
                 if (best->action == Pattern::Set) popFrame();
                 for (auto& t : targets) pushFrame(t.ctx, best->withPrototype.empty() ? nullptr : &best->withPrototype, t.keep);
             } else if (best->action == Pattern::Push || best->action == Pattern::Branch) {
+                if (best->action == Pattern::Branch) for (int k = 0; k < best->branchPop; ++k) popFrame();
                 for (auto& t : targets) pushFrame(t.ctx, best->withPrototype.empty() ? nullptr : &best->withPrototype, t.keep);
+                if (best->action == Pattern::Branch && !snapshots.empty() && snapshots.back().pattern == best && snapshots.back().settle == 0) snapshots.back().settle = stack.size();
             }
             // a branch whose context has been popped again is settled: it cannot be undone any more
-            while (!snapshots.empty() && stack.size() <= snapshots.back().stack.size()) snapshots.pop_back();
+            while (!snapshots.empty() && (snapshots.back().settle ? stack.size() < snapshots.back().settle : stack.size() <= snapshots.back().stack.size())) snapshots.pop_back();
             bool changed = best->action != Pattern::None || best->kind == Pattern::Embed;
             if (me == pos && !changed) {
                 // an empty match that changes nothing: step over one character
@@ -772,6 +981,7 @@ struct Tokenizer {
                 pos = std::max(me, pos);
             }
             anchor = pos;
+            if (profileRegex) msAfter += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - selectedAt).count();
         }
         if (pos < line.size()) { currentScopes(scopeText); emit(lineStart + pos, lineStart + line.size(), scopeText); }
     }
@@ -783,7 +993,18 @@ std::vector<ScopeSpan> SublimeSyntax::tokenize(const std::string& text, const Sy
     static std::mutex tokenizeMutex;  // patterns compile their regexes lazily, so one tokenizer runs at a time
     std::lock_guard<std::mutex> lock(tokenizeMutex);
     Tokenizer t(*impl_, library);
-    return t.run(text);
+    auto runStart = std::chrono::steady_clock::now();
+    auto out = t.run(text);
+    t.msTotal = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - runStart).count();
+    if (std::getenv("MORENO_SYNTAX_PROFILE")) {
+        std::fprintf(stderr, "total %.0f ms: building pattern lists %.0f ms, regex searches %.0f ms\n", t.msTotal, t.msCollect, t.msSearch);
+        std::fprintf(stderr, "%ld lines, %ld steps: choosing the match %.0f ms, applying it %.0f ms\n", t.lineCount, t.steps, t.msSelect, t.msAfter);
+        std::fprintf(stderr, "context stack reached %zu frames (%zu left at the end), %zu spans, %ld branch rewinds\n", t.maxDepth, t.stack.size(), out.size(), t.rewindCount);
+        std::vector<std::pair<std::string, std::pair<double, long>>> rows(t.profile.begin(), t.profile.end());
+        std::sort(rows.begin(), rows.end(), [](const auto& a, const auto& b) { return a.second.first > b.second.first; });
+        for (size_t i = 0; i < rows.size() && i < 6; ++i) std::fprintf(stderr, "%9.1f ms %8ld searches  %s\n", rows[i].second.first, rows[i].second.second, rows[i].first.substr(0, 160).c_str());
+    }
+    return out;
 }
 
 // ── Library ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -816,7 +1037,11 @@ size_t SyntaxLibrary::loadDirectory(const std::string& dir) {
         std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
         std::string err;
         auto syn = SublimeSyntax::parse(text, err);
-        if (syn) { add(syn); ++added; }
+        if (syn) {
+            // the path Sublime would give it, so `extends: Packages/JavaScript/JavaScript.sublime-syntax` finds its parent
+            syn->impl_->sourcePath = "Packages/" + fs::relative(it->path(), dir, ec).generic_string();
+            add(syn); ++added;
+        }
     }
     return added;
 }
@@ -889,6 +1114,30 @@ size_t SyntaxLibrary::loadPaths(const std::vector<std::string>& dirs) {
     }
     resolveExtends();
     return added;
+}
+
+namespace {
+void checkContextRegexes(const Context& ctx, const std::string& owner, std::vector<std::string>& problems, int depth) {
+    if (depth > 8) return;
+    auto check = [&](const std::string& source) {
+        if (source.empty()) return;
+        std::string err;
+        if (!OnigRegex::compile(source, err)) problems.push_back(owner + ": " + err + ": " + source.substr(0, 140));
+    };
+    for (const Pattern& p : ctx.patterns) {
+        if (p.kind != Pattern::Include) check(p.source);
+        if (p.kind == Pattern::Embed) check(p.escape);
+        for (auto& inl : p.inlineTargets) checkContextRegexes(*inl, owner, problems, depth + 1);
+        for (auto& wp : p.withPrototype) checkContextRegexes(*wp, owner, problems, depth + 1);
+    }
+}
+}  // namespace
+
+std::vector<std::string> SyntaxLibrary::regexProblems() const {
+    std::vector<std::string> problems;
+    for (auto& syn : syntaxes_)
+        for (auto& kv : syn->impl_->contexts) checkContextRegexes(*kv.second, syn->name_, problems, 0);
+    return problems;
 }
 
 SyntaxLibrary& SyntaxLibrary::shared() {

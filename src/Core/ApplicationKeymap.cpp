@@ -72,7 +72,7 @@ void Application::loadKeymaps() {
         if (!fs::exists(root, ec)) continue;
         for (fs::directory_iterator pkg(root, ec), end; pkg != end; pkg.increment(ec)) {
             if (ec) break;
-            if (!pkg->is_directory(ec) || pkg->path().filename() == "User" || pkg->path().filename() == "Default") continue;
+            if (!pkg->is_directory(ec) || pkg->path().filename() == "User" || pkg->path().filename() == "Default" || PluginHost::packageIgnored(pkg->path().filename().string())) continue;
             for (const char* name : {"Default.sublime-keymap", "Default (Windows).sublime-keymap"}) {
                 fs::path candidate = pkg->path() / name;
                 if (fs::exists(candidate, ec)) packageKeymaps.push_back(candidate);

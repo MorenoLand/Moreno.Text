@@ -512,6 +512,18 @@ int Application::runSelfTest(const std::string& resultPath) {
         macro_.clear();
     }
 
+    {   // encodings are worked out when a file is read
+        std::string text, name;
+        check("UTF-8 is left alone", !decodeOnOpen("caf\xc3\xa9", text, name));
+        check("UTF-16 LE with a BOM is decoded", decodeOnOpen(std::string("\xFF\xFE" "h\0i\0", 6), text, name) && text == "hi" && name == "UTF-16 LE", text + "|" + name);
+        check("UTF-16 BE with a BOM is decoded", decodeOnOpen(std::string("\xFE\xFF" "\0h\0i", 6), text, name) && text == "hi" && name == "UTF-16 BE", text + "|" + name);
+        check("a UTF-8 BOM is dropped and remembered", decodeOnOpen("\xEF\xBB\xBF" "ok", text, name) && text == "ok" && name == "UTF-8 with BOM", text + "|" + name);
+#ifdef _WIN32
+        check("Latin-1 bytes fall back to Windows 1252", decodeOnOpen("caf\xe9", text, name) && text == "caf\xc3\xa9" && name == "Western (Windows 1252)", text + "|" + name);
+#endif
+        check("binary data is not decoded", !decodeOnOpen(std::string("ab\0cd\xff", 6), text, name));
+    }
+
     std::ofstream out(resultPath, std::ios::binary | std::ios::trunc);
     out << report.str() << (failures ? "FAILED " : "ALL PASSED ") << failures << "\n";
     return failures ? 1 : 0;

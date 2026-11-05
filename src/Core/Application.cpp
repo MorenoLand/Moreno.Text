@@ -609,11 +609,13 @@ bool Application::init(int argc, char** argv) {
     {   // real .sublime-syntax files from the packages folders and settings, loaded in the background
         std::vector<std::string> dirs = {paths_.dataDir + "/Packages", paths_.dataDir + "/Installed Packages", paths_.cacheDir + "/Installed Packages", paths_.installedPackagesDir};
         for (auto& extra : SettingsManager::instance().get<std::vector<std::string>>("syntax_paths", std::vector<std::string>())) dirs.push_back(extra);
+        dirs.push_back(paths_.exeDir + "/Syntaxes");   // the syntaxes that ship with the editor load last, so any of your own with the same extension win
         std::thread([dirs] { SyntaxLibrary::shared().loadPaths(dirs); SyntaxLibrary::shared().setReady(); }).detach();
     }
     startupTick("settings, keymaps loaded");
     bool detachedLaunch = argc > 2 && std::string(argv[1]) == "--detached-tab";
     (void)detachedLaunch;
+    PluginHost::setIgnoredPackages(SettingsManager::instance().get<std::vector<std::string>>("ignored_packages", std::vector<std::string>()));
     pluginHostStartPending_ = !warmIdle_;  // started in the background after the first frame
     selections_.emplace_back(0);
     TabBuffer initTab; initTab.fileName = "untitled"; initTab.selections.emplace_back(0);
@@ -734,6 +736,13 @@ bool Application::init(int argc, char** argv) {
         } catch (...) {
             newBuffer();
         }
+    } else if (argc > 1 && argv[1][0] != '-' && fs::is_directory(argv[1])) {   // `moreno_text some\folder` opens it in the sidebar, like `subl folder`
+        tabs_.clear();
+        selections_.clear();
+        newBuffer();
+        std::error_code ec;
+        loadFolder(fs::absolute(argv[1], ec).string());
+        sidebarVisible_ = true;
     } else if (argc > 1 && fs::exists(argv[1])) {
         tabs_.clear();
         selections_.clear();
@@ -1203,7 +1212,27 @@ void Application::detectSyntax() {
     syntaxDirty_ = true; indentsDirty_ = true;
 }
 
+void Application::refreshGitStatus() {
+    std::vector<std::string> roots = projectRoots();
+    if (roots.empty() || gitStatusBusy_.exchange(true)) return;
+    gitStatusAt_ = SDL_GetTicks() ? SDL_GetTicks() : 1;
+    std::thread([this, roots] {
+        GitStatus::Map fresh;
+        for (auto& root : roots) GitStatus::collect(root, fresh);
+        { std::lock_guard<std::mutex> lock(gitStatusMutex_); gitStatus_ = std::move(fresh); }
+        gitStatusBusy_ = false;
+    }).detach();
+}
+
+char Application::gitStateFor(const std::string& path) const {
+    std::lock_guard<std::mutex> lock(gitStatusMutex_);
+    if (gitStatus_.empty()) return 0;
+    auto it = gitStatus_.find(GitStatus::normalize(path));
+    return it == gitStatus_.end() ? 0 : it->second;
+}
+
 void Application::updateGitBranch() {
+    refreshGitStatus();
     std::string dir;
     if (!sidebarRoot_.empty()) dir = sidebarRoot_;
     else if (!openFilePath_.empty()) dir = fs::path(openFilePath_).parent_path().string();
@@ -1269,6 +1298,9 @@ void Application::openFile(const std::string& path, bool preview) {
         text = readLargeFileWindow(*largeBuffer, 0, 64ull * 1024ull * 1024ull, windowStartByte, windowEndByte);
     } else {
         std::ostringstream ss; ss << f.rdbuf(); text = ss.str();
+        fileEncodings_.erase(absPath);
+        std::string decoded, encodingName;
+        if (decodeOnOpen(text, decoded, encodingName)) { text = std::move(decoded); fileEncodings_[absPath] = encodingName; }
     }
     bool binaryView = isBinaryData(text);
     uintmax_t binaryFileSize = 0, binaryLoadedBytes = 0;
@@ -1379,7 +1411,7 @@ void Application::saveFileAs() {
     char buf[MAX_PATH] = {}; OPENFILENAMEA ofn = {}; ofn.lStructSize = sizeof(ofn);
     ofn.lpstrFilter = "All Files\0*.*\0Text Files\0*.txt\0"; ofn.lpstrFile = buf; ofn.nMaxFile = MAX_PATH;
     ofn.Flags = OFN_OVERWRITEPROMPT; ofn.lpstrDefExt = "txt";
-    if (GetSaveFileNameA(&ofn)) { try { openFilePath_ = fs::absolute(buf).string(); } catch (...) { openFilePath_ = buf; } openFile_ = fs::path(openFilePath_).filename().string(); detectSyntax(); saveFile(); updateGitBranch(); }
+    if (GetSaveFileNameA(&ofn)) { try { openFilePath_ = fs::absolute(buf).string(); } catch (...) { openFilePath_ = buf; } openFile_ = fs::path(openFilePath_).filename().string(); detectSyntax(); applyNewFileDefaults(openFilePath_); saveFile(); updateGitBranch(); }
     inOsDialog_ = false;
 #endif
 }
@@ -1410,6 +1442,8 @@ void Application::revertFile() {
     } else {
         std::ostringstream ss; ss << f.rdbuf();
         textBuffer = ss.str();
+        fileEncodings_.erase(openFilePath_);
+        { std::string decoded, encodingName; if (decodeOnOpen(textBuffer, decoded, encodingName)) { textBuffer = std::move(decoded); fileEncodings_[openFilePath_] = encodingName; } }
         largeFileGuarded_ = false; largeFileSize_ = 0; largeFileTotalLines_ = 0; largeFileWindowFirstLine_ = 0; largeFileWindowStartByte_ = 0; largeFileWindowEndByte_ = 0; largeFileBuffer_.reset();
     }
     binaryView_ = isBinaryData(textBuffer);
@@ -1523,12 +1557,14 @@ void Application::loadFolder(const std::string& path) {
 void Application::buildSidebarNode(SidebarNode& node) {
     node.children.clear();
     std::vector<SidebarNode> folders, files;
+    ExcludeRules rules = excludeRulesFor(node.path);
     try {
         for (auto& entry : fs::directory_iterator(node.path)) {
             SidebarNode child;
             child.path = entry.path().string();
             child.name = entry.path().filename().string();
             child.folder = entry.is_directory();
+            if (child.folder ? rules.excludesFolder(child.name, entry.path().generic_string()) : rules.excludesFile(child.name, entry.path().generic_string())) continue;
             child.depth = node.depth + 1;
             child.extension = entry.path().extension().string();
             (child.folder ? folders : files).push_back(std::move(child));
@@ -1680,7 +1716,17 @@ void Application::drawSidebar(FontAtlas& font, float windowH, float titlebarH, f
                     }
                 }
                 float b = active ? 0.94f : 0.73f;
-                textDraws.push_back({node.name, labelX, node.folder ? rowY + 3.f : rowY, sidebarScale, b, b, b + 0.03f});
+                float nr = b, ng = b, nb = b + 0.03f;
+                if (char state = gitStateFor(node.path)) {
+                    float dr = 0.90f, dg = 0.68f, db = 0.30f;                                 // modified
+                    if (state == '?' || state == 'A') { dr = 0.48f; dg = 0.78f; db = 0.45f; }  // new
+                    else if (state == 'D' || state == 'U') { dr = 0.90f; dg = 0.36f; db = 0.36f; }  // deleted, conflict
+                    else if (state == 'R') { dr = 0.45f; dg = 0.70f; db = 0.92f; }
+                    if (!node.folder) { nr = dr; ng = dg; nb = db; }
+                    float dotX = sidebarWidth_ - 22.f;
+                    addSolidRect(v, dotX, rowY + 6.f, dotX + 6.f, rowY + 12.f, dr, dg, db, 1.f);
+                }
+                textDraws.push_back({node.name, labelX, node.folder ? rowY + 3.f : rowY, sidebarScale, nr, ng, nb});
             }
         }
         if (node.folder && node.expanded) for (auto& child : node.children) drawNode(child);
@@ -2903,7 +2949,7 @@ std::vector<std::string> Application::syntaxLanguageNames() {
     if (SyntaxLibrary::shared().ready()) {
         std::vector<std::string> extra;
         for (auto& syn : SyntaxLibrary::shared().all()) {
-            if (syn->name().empty() || std::find(names.begin(), names.end(), syn->name()) != names.end()) continue;
+            if (syn->hidden() || syn->name().empty() || std::find(names.begin(), names.end(), syn->name()) != names.end()) continue;
             if (std::find(extra.begin(), extra.end(), syn->name()) == extra.end()) extra.push_back(syn->name());
         }
         std::sort(extra.begin(), extra.end());
@@ -3691,6 +3737,7 @@ void Application::handleEvents() {
                     || (gx >= popupScreenX_ && gx < popupScreenX_ + (int)popupMainW_ && gy >= popupScreenY_ && gy < popupScreenY_ + (int)popupMainH_);
             }
             if (focusMovedToPopup) continue;
+            if (SettingsManager::instance().get<bool>("save_on_focus_lost", false)) saveAll();
             titlebar_->closeMenuPopup();
             tabDropdownOpen_ = false; tabContextOpen_ = false; sidebarContextOpen_ = false; statusPopup_ = StatusPopup::None; acActive_ = false; commandPalette_.active = false;
             if (pluginQuickPanel_.active) finishPluginQuickPanel(-1);
@@ -5472,7 +5519,8 @@ void Application::update() {
     if (sidebarRefreshPending_.exchange(false) && !sidebarRoot_.empty()) {
         sidebarTree_.children.clear();
         buildSidebarNode(sidebarTree_);
-    }
+        refreshGitStatus();
+    } else if (sidebarVisible_ && !sidebarRoot_.empty() && SDL_GetTicks() - gitStatusAt_ > 20000) refreshGitStatus();
     if (syntaxDirty_) {
         syntax_->parse(textBuffer);
         syntaxDirty_ = false;
@@ -5626,7 +5674,7 @@ void Application::render() {
                             fontAtlas().drawTextClipped(gap, cx, yPreview, clipLeft, clipRight, c.r, c.g, c.b, 1.f);
                             cx += fontAtlas().measureText(gap);
                         }
-                        auto& c = paneSyntax.scopeColor(tok.scope);
+                        auto& c = paneSyntax.scopeColor(tok);
                         std::string_view tokText(preview.data() + tok.start, tok.length);
                         fontAtlas().drawTextClipped(tokText, cx, yPreview, clipLeft, clipRight, c.r, c.g, c.b, 1.f);
                         cx += fontAtlas().measureText(tokText);
@@ -5791,9 +5839,9 @@ void Application::render() {
                         fontAtlas().drawTextClipped(gap, cx, y, textX, editorRight, c.r, c.g, c.b, 1.0f);
                         cx += fontAtlas().measureText(gap);
                     }
-                    auto& c = syntax_->scopeColor(tok.scope);
+                    auto& c = syntax_->scopeColor(tok);
                     std::string_view tokText(textBuffer.data() + tok.start, tok.length);
-                    int style = syntax_->scopeStyle(tok.scope);
+                    int style = syntax_->scopeStyle(tok);
                     if (style & 1) boldFontAtlas().drawTextClipped(tokText, cx, y, textX, editorRight, c.r, c.g, c.b, 1.0f);
                     else if (style & 2) fontAtlas().drawTextItalic(tokText, cx, y, 1.f, c.r, c.g, c.b, 1.0f);
                     else fontAtlas().drawTextClipped(tokText, cx, y, textX, editorRight, c.r, c.g, c.b, 1.0f);

@@ -27,4 +27,7 @@ private:
     std::vector<std::unique_ptr<Node>> nodes_;
     int root_ = -1;
     int groupCount_ = 0;
+    void analyze();                 // fills first_ from the compiled pattern
+    bool firstKnown_ = false;       // first_ lists every byte a match can start with (the pattern cannot match empty)
+    bool first_[256] = {};
 };

@@ -430,7 +430,7 @@ struct ProjectSymbol {
     size_t line;
 };
 
-static std::vector<ProjectSymbol> scanProjectSymbols(const std::string& root) {
+static std::vector<ProjectSymbol> scanProjectSymbols(const std::string& root, const ExcludeRules& rules) {
     static const std::regex keywordDef(R"(^\s*(?:export\s+|public\s+|private\s+|protected\s+|static\s+|async\s+|pub\s+|abstract\s+|final\s+|default\s+)*(function|def|class|struct|enum|interface|trait|fn|func|impl|type|namespace|module|object|record|union|macro_rules!)\s+([A-Za-z_][\w$]*))");
     static const std::regex cFunction(R"(^[A-Za-z_][\w:<>\*&\s,]*?[\s\*&]([A-Za-z_~][\w:]*)\s*\([^;{}]*\)\s*(?:const\s*)?(?:noexcept\s*)?\{?\s*$)");
     static const char* sourceExts[] = {".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".hh", ".cs", ".java", ".js", ".jsx", ".ts", ".tsx", ".py", ".rb", ".go", ".rs", ".php", ".lua", ".swift", ".kt", ".scala", ".gd", ".pas", ".sh"};
@@ -442,9 +442,12 @@ static std::vector<ProjectSymbol> scanProjectSymbols(const std::string& root) {
         if (ec) break;
         if (it->is_directory(ec)) {
             std::string name = it->path().filename().string();
-            for (auto skip : skipDirs) if (name == skip) { it.disable_recursion_pending(); break; }
+            bool skipped = rules.excludesFolder(name, it->path().generic_string());
+            for (auto skip : skipDirs) if (name == skip) skipped = true;
+            if (skipped) it.disable_recursion_pending();
             continue;
         }
+        if (rules.excludesFile(it->path().filename().string(), it->path().generic_string())) continue;
         std::string ext = lowered(it->path().extension().string());
         bool known = false;
         for (auto e : sourceExts) if (ext == e) { known = true; break; }
@@ -470,9 +473,9 @@ static std::vector<ProjectSymbol> scanProjectSymbols(const std::string& root) {
     return out;
 }
 
-static std::vector<ProjectSymbol> scanRoots(const std::vector<std::string>& roots) {
+static std::vector<ProjectSymbol> scanRoots(const Application& app, const std::vector<std::string>& roots) {
     std::vector<ProjectSymbol> all;
-    for (auto& root : roots) { auto part = scanProjectSymbols(root); all.insert(all.end(), part.begin(), part.end()); }
+    for (auto& root : roots) { auto part = scanProjectSymbols(root, app.excludeRulesFor(root)); all.insert(all.end(), part.begin(), part.end()); }
     return all;
 }
 
@@ -483,7 +486,7 @@ void Application::updateProjectSymbolResults(const std::string& pattern) {
     for (auto& root : projectRoots()) rootsKey += root + "|";
     if (projectSymbolNames_.empty() || now - projectSymbolsBuiltAt_ > 15000 || projectSymbolsRoot_ != rootsKey) {
         projectSymbolNames_.clear(); projectSymbolPaths_.clear(); projectSymbolLines_.clear();
-        for (auto& sym : scanRoots(projectRoots())) {
+        for (auto& sym : scanRoots(*this, projectRoots())) {
             projectSymbolNames_.push_back(sym.name + "  (" + sym.kind + ")");
             projectSymbolPaths_.push_back(sym.path);
             projectSymbolLines_.push_back(sym.line);
@@ -527,7 +530,7 @@ void Application::gotoDefinition() {
     std::string word = wordOrSelectionAtCursor();
     if (word.empty()) return;
     if (sidebarRoot_.empty()) { pluginStatusText_ = "Goto Definition needs an open folder"; pluginStatusUntil_ = SDL_GetTicks() + 3000; return; }
-    auto symbols = scanRoots(projectRoots());
+    auto symbols = scanRoots(*this, projectRoots());
     std::vector<const ProjectSymbol*> hits;
     for (auto& s : symbols) if (s.name == word) hits.push_back(&s);
     if (hits.size() == 1) { openLocation(hits[0]->path, hits[0]->line); return; }

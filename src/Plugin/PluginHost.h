@@ -30,6 +30,9 @@ public:
     static void start(const PluginHostPaths& paths);
     static void stop(const PluginHostPaths& paths);
     static void runCommand(const PluginHostPaths& paths, const std::string& commandName);
+    // Packages named in the ignored_packages setting: their plugins, commands and key bindings are not loaded.
+    static void setIgnoredPackages(const std::vector<std::string>& names);
+    static bool packageIgnored(const std::string& name);
 private:
     static std::string legacyApiName();
     static bool writeCommandRequest(const PluginHostPaths& paths, const std::string& commandName);

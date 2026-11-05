@@ -63,20 +63,26 @@ void Application::refreshProjectFileList() {
     static const char* binaryExts[] = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".exe", ".dll", ".pdb", ".obj", ".lib", ".o", ".a", ".so", ".zip", ".7z", ".rar", ".gz", ".pyc", ".class", ".jar", ".woff", ".woff2", ".ttf", ".otf", ".mp3", ".mp4", ".wav", ".pdf"};
     std::error_code ec;
     std::vector<std::string> scanRoots = projectRoots();
-    for (size_t rootIndex = 0; rootIndex < scanRoots.size(); ++rootIndex)
+    for (size_t rootIndex = 0; rootIndex < scanRoots.size(); ++rootIndex) {
+    ExcludeRules rules = excludeRulesFor(scanRoots[rootIndex]);
     for (fs::recursive_directory_iterator it(scanRoots[rootIndex], fs::directory_options::skip_permission_denied, ec), end; it != end && projectFiles_.size() < 60000; it.increment(ec)) {
         if (ec) break;
+        std::string entryName = it->path().filename().string();
+        std::string entryPath = it->path().generic_string();
         if (it->is_directory(ec)) {
-            std::string name = it->path().filename().string();
-            for (auto skip : skipDirs) if (name == skip) { it.disable_recursion_pending(); break; }
+            bool skipped = rules.excludesFolder(entryName, entryPath);
+            for (auto skip : skipDirs) if (entryName == skip) skipped = true;
+            if (skipped) it.disable_recursion_pending();
             continue;
         }
+        if (rules.excludesFile(entryName, entryPath) || rules.isBinary(entryName, entryPath)) continue;
         std::string ext = it->path().extension().string();
         std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
         bool binary = false;
         for (auto b : binaryExts) if (ext == b) { binary = true; break; }
         if (binary) continue;
         projectFiles_.push_back(rootIndex == 0 ? fs::relative(it->path(), scanRoots[0], ec).generic_string() : it->path().generic_string());
+    }
     }
 }
 

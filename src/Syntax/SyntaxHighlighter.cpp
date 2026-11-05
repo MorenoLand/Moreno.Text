@@ -1,3 +1,4 @@
+#include <unordered_map>
 #include "Syntax/SyntaxHighlighter.h"
 #include "Syntax/SublimeSyntax.h"
 #include "Theme/ThemeEngine.h"
@@ -29,6 +30,32 @@ extern "C" const TSLanguage *tree_sitter_python(void);
 extern "C" const TSLanguage *tree_sitter_c(void);
 extern "C" const TSLanguage *tree_sitter_cpp(void);
 extern "C" const TSLanguage *tree_sitter_markdown(void);
+
+namespace {
+struct ScopeTableData {
+    std::mutex mutex;
+    std::unordered_map<std::string, int> ids;
+    std::vector<std::string> names{std::string()};   // id 0 means "none"
+};
+ScopeTableData& scopeTableData() { static ScopeTableData data; return data; }
+}  // namespace
+
+int ScopeTable::intern(const std::string& scopeStack) {
+    ScopeTableData& d = scopeTableData();
+    std::lock_guard<std::mutex> lock(d.mutex);
+    auto it = d.ids.find(scopeStack);
+    if (it != d.ids.end()) return it->second;
+    int id = static_cast<int>(d.names.size());
+    d.names.push_back(scopeStack);
+    d.ids.emplace(scopeStack, id);
+    return id;
+}
+
+std::string ScopeTable::name(int id) {
+    ScopeTableData& d = scopeTableData();
+    std::lock_guard<std::mutex> lock(d.mutex);
+    return id > 0 && static_cast<size_t>(id) < d.names.size() ? d.names[static_cast<size_t>(id)] : std::string();
+}
 
 // Maps a scope string (outermost first) to one of the editor's token classes.
 int SyntaxHighlighter::classifyScope(const std::string& scope) {
@@ -634,9 +661,9 @@ void SyntaxHighlighter::parseWorkerLoop() {
             if (text.size() < 4u * 1024u * 1024u) spansOut = allSpans;
             for (const ScopeSpan& span : *allSpans) {
                 int cls = classifyScope(span.scope);
-                if (cls == 0) continue;
-                if (!tokens.empty() && tokens.back().scope == cls && tokens.back().start + tokens.back().length == span.start) tokens.back().length += span.length;
-                else tokens.push_back({span.start, span.length, cls});
+                int detail = ScopeTable::intern(span.scope);
+                if (!tokens.empty() && tokens.back().detail == detail && tokens.back().start + tokens.back().length == span.start) tokens.back().length += span.length;
+                else tokens.push_back({span.start, span.length, cls, detail});
             }
         } else if (language && language == (const void*)tree_sitter_markdown()) tokens = markdownTokens(text);
         else tokens = parseTreeTokens(text, language);
@@ -824,6 +851,19 @@ const SyntaxColor& SyntaxHighlighter::scopeColor(int scope) const {
     }
     ThemeColor tc = ThemeEngine::instance().fgColor();
     cached[0] = {tc.r, tc.g, tc.b}; return cached[0];
+}
+
+const SyntaxColor& SyntaxHighlighter::scopeColor(const SyntaxToken& token) const {
+    if (token.detail <= 0 || useLocalColors_) return scopeColor(token.scope);
+    static thread_local SyntaxColor cached;
+    ThemeColor tc = ThemeEngine::instance().styleForStack(ScopeTable::name(token.detail)).color;
+    cached = {tc.r, tc.g, tc.b};
+    return cached;
+}
+
+int SyntaxHighlighter::scopeStyle(const SyntaxToken& token) const {
+    if (token.detail <= 0 || useLocalColors_) return scopeStyle(token.scope);
+    return ThemeEngine::instance().styleForStack(ScopeTable::name(token.detail)).style;
 }
 
 SyntaxColor SyntaxHighlighter::backgroundColor() const {

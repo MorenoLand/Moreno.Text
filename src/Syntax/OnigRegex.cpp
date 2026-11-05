@@ -396,7 +396,58 @@ std::shared_ptr<OnigRegex> OnigRegex::compile(const std::string& pattern, std::s
     if (c.error.empty() && c.i < pattern.size()) c.fail("unmatched )");
     if (!c.error.empty()) { error = c.error; return nullptr; }
     re->root_ = root;
+    re->analyze();
     return re;
+}
+
+// The bytes a match can start with. Lets search() skip positions that cannot begin a match instead of running the
+// backtracking matcher at every byte. A pattern that can match the empty string has no such set.
+void OnigRegex::analyze() {
+    std::function<void(int, bool*, bool&)> walk = [&](int id, bool* bits, bool& nullable) {
+        const Node& n = *nodes_[static_cast<size_t>(id)];
+        switch (n.kind) {
+            case Node::Empty: case Node::Anchor: case Node::Look: nullable = true; return;
+            case Node::Backref: for (int b = 0; b < 256; ++b) bits[b] = true; nullable = true; return;
+            case Node::Char: {
+                nullable = false;
+                if (n.ch < 128) {
+                    bits[n.ch] = true;
+                    if (n.icase && std::isalpha(static_cast<int>(n.ch))) { bits[std::tolower(static_cast<int>(n.ch))] = true; bits[std::toupper(static_cast<int>(n.ch))] = true; }
+                } else {
+                    uint32_t c = n.ch;
+                    unsigned lead = c < 0x800 ? (0xC0 | (c >> 6)) : c < 0x10000 ? (0xE0 | (c >> 12)) : (0xF0 | (c >> 18));
+                    bits[lead & 0xFF] = true;
+                }
+                return;
+            }
+            case Node::Any: nullable = false; for (int b = 0; b < 256; ++b) if (b != '\n') bits[b] = true; return;
+            case Node::Class: {
+                nullable = false;
+                for (int b = 0; b < 128; ++b) if (classMatches(n.set, static_cast<uint32_t>(b), n.icase)) bits[b] = true;
+                for (int b = 128; b < 256; ++b) bits[b] = true;
+                return;
+            }
+            case Node::Seq: {
+                nullable = true;
+                for (int kid : n.kids) { bool kn = false; walk(kid, bits, kn); if (!kn) { nullable = false; break; } }
+                return;
+            }
+            case Node::Alt: {
+                nullable = false;
+                for (int kid : n.kids) { bool kn = false; walk(kid, bits, kn); nullable = nullable || kn; }
+                return;
+            }
+            case Node::Group: case Node::NonCap: case Node::Atomic: walk(n.kids[0], bits, nullable); return;
+            case Node::Repeat: { bool kn = false; walk(n.kids[0], bits, kn); nullable = n.min == 0 || kn; return; }
+        }
+        for (int b = 0; b < 256; ++b) bits[b] = true;
+        nullable = true;
+    };
+    bool bits[256] = {};
+    bool nullable = false;
+    if (root_ >= 0) walk(root_, bits, nullable);
+    firstKnown_ = root_ >= 0 && !nullable;
+    if (firstKnown_) std::copy(bits, bits + 256, first_);
 }
 
 namespace {
@@ -478,7 +529,7 @@ struct Matcher {
             case Node::Anchor: {
                 bool ok = false;
                 switch (n.index) {
-                    case BOL: ok = pos == 0 || text[pos - 1] == '\n'; break;
+                    case BOL: ok = pos == 0 || (text[pos - 1] == '\n' && pos < text.size()); break;   // like Oniguruma: not after a final newline
                     case EOL: ok = pos == text.size() || text[pos] == '\n'; break;
                     case BOS: ok = pos == 0; break;
                     case EOS: ok = pos == text.size(); break;
@@ -524,10 +575,16 @@ struct Matcher {
 }  // namespace
 
 bool OnigRegex::search(const std::string& text, size_t from, size_t anchor, Match& out) const {
+    Matcher m{*this, nodes_, text, anchor, std::vector<std::pair<long, long>>(static_cast<size_t>(groupCount_) + 1, {-1, -1}), 0};
     for (size_t start = from; start <= text.size(); ++start) {
+        if (firstKnown_) {
+            if (start >= text.size()) break;   // a match consumes at least one byte
+            if (!first_[static_cast<unsigned char>(text[start])]) continue;
+        }
         // never begin in the middle of a multi-byte character
         if (start < text.size() && start > 0 && (static_cast<unsigned char>(text[start]) & 0xC0) == 0x80) continue;
-        Matcher m{*this, nodes_, text, anchor, std::vector<std::pair<long, long>>(static_cast<size_t>(groupCount_) + 1, {-1, -1}), 0};
+        std::fill(m.caps.begin(), m.caps.end(), std::pair<long, long>(-1, -1));
+        m.steps = 0;
         size_t endPos = 0;
         if (m.run(root_, start, [&](size_t p) { endPos = p; return true; })) {
             m.caps[0] = {static_cast<long>(start), static_cast<long>(endPos)};

@@ -15,6 +15,13 @@ struct SyntaxToken {
     size_t start;
     size_t length;
     int scope; // index into color table
+    int detail = 0; // the full scope stack (ScopeTable id) a .sublime-syntax gave this text; 0 when there is none
+};
+
+// Full scope stacks ("source.go meta.function.go entity.name.function.go") as small ids, shared by every highlighter.
+struct ScopeTable {
+    static int intern(const std::string& scopeStack);
+    static std::string name(int id);
 };
 
 struct SyntaxColor {
@@ -39,6 +46,9 @@ public:
     std::vector<SyntaxToken> highlightLine(std::string_view line, size_t lineOffset) const;
     const SyntaxColor& scopeColor(int scope) const;
     int scopeStyle(int scope) const;  // 1 = bold, 2 = italic
+    // Same, but a token that came from a .sublime-syntax is coloured by its full scope stack
+    const SyntaxColor& scopeColor(const SyntaxToken& token) const;
+    int scopeStyle(const SyntaxToken& token) const;
     SyntaxColor backgroundColor() const;
     SyntaxColor lineHighlightColor() const;
     SyntaxColor gutterColor() const;

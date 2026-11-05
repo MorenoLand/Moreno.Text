@@ -48,6 +48,21 @@ int main() {
         if (!near(t.bgColor().r, 0x27 / 255.f)) { std::cerr << "tm background\n"; return 7; }
         if (!near(t.colorForScope("comment").r, 0x75 / 255.f)) { std::cerr << "tm comment\n"; return 8; }
     }
+    {   // full scope stacks, picked the way Sublime picks: deepest and most specific rule wins
+        auto& t = ThemeEngine::instance();
+        t.writeDefault((dir / "Default.moreno-color-scheme").string());
+        t.load((dir / "Default.moreno-color-scheme").string());
+        auto stack = [&](const char* s) { return t.styleForStack(s).color; };
+        auto same = [&](ThemeColor a, ThemeColor b) { return near(a.r, b.r) && near(a.g, b.g) && near(a.b, b.b); };
+        if (same(stack("source.go keyword.declaration.go"), t.fgColor())) { std::cerr << "keyword.declaration should be coloured\n"; return 9; }
+        if (!same(stack("source.go keyword.declaration.go"), t.colorForScope("keyword"))) { std::cerr << "keyword.declaration uses the keyword colour\n"; return 10; }
+        if (!same(stack("text.html.basic meta.tag.block.any.html entity.name.tag.block.any.html"), t.colorForScope("tag"))) { std::cerr << "html tag name uses the tag colour\n"; return 11; }
+        if (!same(stack("source.go meta.function.go entity.name.function.go"), t.colorForScope("function"))) { std::cerr << "function name uses the function colour\n"; return 12; }
+        if (!same(stack("source.go comment.line.double-slash.go punctuation.definition.comment.go"), t.colorForScope("comment"))) { std::cerr << "comment punctuation stays comment coloured\n"; return 13; }
+        if (!same(stack("source.go meta.block.go"), t.fgColor())) { std::cerr << "plain code keeps the foreground\n"; return 14; }
+        if (!same(stack("source.java meta.class.java storage.modifier.java"), t.colorForScope("keyword"))) { std::cerr << "storage.modifier uses the keyword colour\n"; return 15; }
+        if (!same(stack("source.java meta.class.java meta.block.java meta.function.java storage.type.primitive.java"), t.colorForScope("type"))) { std::cerr << "storage.type.primitive uses the type colour\n"; return 16; }
+    }
     fs::remove_all(dir);
     return 0;
 }

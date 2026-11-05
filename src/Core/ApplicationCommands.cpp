@@ -384,14 +384,19 @@ void Application::runFindInFiles() {
     std::error_code ec;
     std::vector<std::string> searchRoots = {searchRoot};
     if (searchRoot == sidebarRoot_) for (auto& extra : extraFolders_) searchRoots.push_back(extra.path);
-    for (const std::string& rootDir : searchRoots)
+    for (const std::string& rootDir : searchRoots) {
+    ExcludeRules rules = excludeRulesFor(rootDir);
     for (fs::recursive_directory_iterator it(rootDir, fs::directory_options::skip_permission_denied, ec), end; it != end && hits < maxHits; it.increment(ec)) {
         if (ec) break;
+        std::string entryName = it->path().filename().string();
+        std::string entryPath = it->path().generic_string();
         if (it->is_directory(ec)) {
-            std::string name = it->path().filename().string();
-            for (auto skip : skipDirs) if (name == skip) { it.disable_recursion_pending(); break; }
+            bool skipped = rules.excludesFolder(entryName, entryPath);
+            for (auto skip : skipDirs) if (entryName == skip) skipped = true;
+            if (skipped) it.disable_recursion_pending();
             continue;
         }
+        if (rules.excludesFile(entryName, entryPath) || rules.isBinary(entryName, entryPath)) continue;
         if (!it->is_regular_file(ec) || it->file_size(ec) > 4u * 1024u * 1024u) continue;
         std::ifstream in(it->path(), std::ios::binary);
         if (!in) continue;
@@ -414,6 +419,7 @@ void Application::runFindInFiles() {
             body << (rootDir == searchRoot ? fs::relative(it->path(), searchRoot, ec).generic_string() : it->path().generic_string()) << ":\n" << fileBlock << "\n";
             ++hitFiles; hits += fileHits;
         }
+    }
     }
     std::ostringstream out;
     out << "Searching " << files << " files for \"" << find_.query << "\"\n\n" << body.str();

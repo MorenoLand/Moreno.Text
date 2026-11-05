@@ -200,6 +200,51 @@ void Application::saveWithEncoding(const std::string& name) {
     pluginStatusUntil_ = SDL_GetTicks() + 3000;
 }
 
+namespace {
+bool validUtf8(const std::string& s) {
+    size_t i = 0;
+    while (i < s.size()) {
+        unsigned char c = static_cast<unsigned char>(s[i]);
+        size_t n = c < 0x80 ? 1 : (c >> 5) == 6 ? 2 : (c >> 4) == 14 ? 3 : (c >> 3) == 30 ? 4 : 0;
+        if (!n || i + n > s.size()) return false;
+        for (size_t k = 1; k < n; ++k) if ((static_cast<unsigned char>(s[i + k]) & 0xC0) != 0x80) return false;
+        if (n == 2 && c < 0xC2) return false;
+        i += n;
+    }
+    return true;
+}
+}  // namespace
+
+bool Application::decodeOnOpen(const std::string& bytes, std::string& utf8, std::string& encodingName) const {
+    auto decodeAs = [&](const char* name) {
+        const EncodingInfo* enc = findEncoding(name);
+        if (!enc || !decodeBytes(bytes, *enc, utf8)) return false;
+        encodingName = enc->name;
+        return true;
+    };
+    if (bytes.size() >= 2 && (unsigned char)bytes[0] == 0xFF && (unsigned char)bytes[1] == 0xFE) return decodeAs("UTF-16 LE");
+    if (bytes.size() >= 2 && (unsigned char)bytes[0] == 0xFE && (unsigned char)bytes[1] == 0xFF) return decodeAs("UTF-16 BE");
+    if (bytes.size() >= 3 && (unsigned char)bytes[0] == 0xEF && (unsigned char)bytes[1] == 0xBB && (unsigned char)bytes[2] == 0xBF) return decodeAs("UTF-8 with BOM");
+    if (bytes.find('\0') != std::string::npos) return false;   // binary data is shown as hex, not decoded
+    if (validUtf8(bytes)) return false;
+    std::string fallback = SettingsManager::instance().get<std::string>("fallback_encoding", "Western (Windows 1252)");
+    return decodeAs(fallback.c_str()) || decodeAs("Western (Windows 1252)");
+}
+
+void Application::applyNewFileDefaults(const std::string& path) {
+    auto& settings = SettingsManager::instance();
+    std::string encoding = settings.get<std::string>("default_encoding", "UTF-8");
+    if (encoding != "UTF-8" && findEncoding(encoding) && !fileEncodings_.count(path)) fileEncodings_[path] = encoding;
+    std::string ending = settings.get<std::string>("default_line_ending", "system");
+#ifdef _WIN32
+    if (ending == "system") ending = "windows";
+#else
+    if (ending == "system") ending = "unix";
+#endif
+    if (ending == "windows" && textBuffer.find('\r') == std::string::npos && textBuffer.find('\n') != std::string::npos) convertLineEndings(true);
+    else if (ending == "cr") macLineEndingFiles_.insert(path);
+}
+
 std::string Application::encodeForSave(const std::string& path, const std::string& utf8Text) const {
     std::string utf8 = utf8Text;
     if (macLineEndingFiles_.count(path)) {
@@ -241,10 +286,24 @@ std::vector<std::string> allEncodingNames() {
     return names;
 }
 
+ExcludeRules Application::excludeRulesFor(const std::string& path) const {
+    ExcludeRules rules = ExcludeRules::fromSettings();
+    rules.add(projectExtraRules_);
+    std::string generic = fs::path(path).generic_string();
+    for (auto& [folder, extra] : folderExtraRules_) {
+        std::string root = fs::path(folder).generic_string();
+        if (generic == root || (generic.size() > root.size() && generic.compare(0, root.size(), root) == 0 && generic[root.size()] == '/')) rules.add(extra);
+    }
+    return rules;
+}
+
 void Application::openProjectFile(const std::string& path) {
     json project = readJsonFile(path);
     if (!project.is_object()) { pluginStatusText_ = "Couldn't read the project file"; pluginStatusUntil_ = SDL_GetTicks() + 3000; return; }
     fs::path base = fs::path(path).parent_path();
+    folderExtraRules_.clear();
+    projectExtraRules_ = ExcludeRules();
+    if (project.contains("settings") && project["settings"].is_object()) projectExtraRules_.merge(project["settings"]);
     if (project.contains("folders") && project["folders"].is_array() && !project["folders"].empty()) {
         bool loadedFirst = false;
         for (auto& entry : project["folders"]) {
@@ -253,6 +312,7 @@ void Application::openProjectFile(const std::string& path) {
             std::error_code ec;
             resolved = fs::weakly_canonical(resolved, ec);
             if (!fs::is_directory(resolved)) continue;
+            if (entry.is_object()) { ExcludeRules extra; extra.merge(entry); folderExtraRules_.emplace_back(resolved.string(), extra); }
             if (!loadedFirst) { loadFolder(resolved.string()); sidebarVisible_ = true; loadedFirst = true; }
             else addFolderToProject(resolved.string());
         }
@@ -340,6 +400,8 @@ void Application::editProject() {
 void Application::closeProject() {
     closeFolder();
     projectFile_.clear();
+    folderExtraRules_.clear();
+    projectExtraRules_ = ExcludeRules();
 }
 
 void Application::openRecentProjectPicker() { openGotoWithPrefix("^"); }

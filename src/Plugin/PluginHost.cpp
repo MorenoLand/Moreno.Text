@@ -1,3 +1,4 @@
+#include <mutex>
 #include "Plugin/PluginHost.h"
 #include "Plugin/ApiExtension.h"
 #include <nlohmann/json.hpp>
@@ -153,13 +154,26 @@ static std::vector<fs::path> materializeInstalledPackages(const std::string& pac
     return dirs;
 }
 
+static std::mutex& ignoredPackagesMutex() { static std::mutex m; return m; }
+static std::set<std::string>& ignoredPackages() { static std::set<std::string> s; return s; }
+
+void PluginHost::setIgnoredPackages(const std::vector<std::string>& names) {
+    std::lock_guard<std::mutex> lock(ignoredPackagesMutex());
+    ignoredPackages() = std::set<std::string>(names.begin(), names.end());
+}
+
+bool PluginHost::packageIgnored(const std::string& name) {
+    std::lock_guard<std::mutex> lock(ignoredPackagesMutex());
+    return ignoredPackages().count(name) != 0;
+}
+
 static void discoverScriptsInPackageDir(const fs::path& packageRoot, std::vector<PluginHost::Script>& scripts) {
     try {
         if (!fs::exists(packageRoot)) return;
         for (auto& packageEntry : fs::directory_iterator(packageRoot)) {
             if (!packageEntry.is_directory()) continue;
             std::string package = packageEntry.path().filename().string();
-            if (package == "User" || package == "0_package_control_loader") continue;
+            if (package == "User" || package == "0_package_control_loader" || PluginHost::packageIgnored(package)) continue;
             for (auto& fileEntry : fs::directory_iterator(packageEntry.path())) {
                 if (!fileEntry.is_regular_file() || fileEntry.path().extension() != ".py") continue;
                 scripts.push_back({package, fileEntry.path().string()});
@@ -223,7 +237,7 @@ static void discoverCommandPaletteEntriesInPackageDir(const fs::path& packageRoo
     try {
         if (!fs::exists(packageRoot)) return;
         for (auto& packageEntry : fs::directory_iterator(packageRoot)) {
-            if (!packageEntry.is_directory()) continue;
+            if (!packageEntry.is_directory() || PluginHost::packageIgnored(packageEntry.path().filename().string())) continue;
             fs::path commandFile = packageEntry.path() / (std::string("Default.") + std::string("sub") + "lime-commands");
             if (!fs::exists(commandFile)) continue;
             std::ifstream f(commandFile, std::ios::binary);
