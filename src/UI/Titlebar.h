@@ -55,6 +55,11 @@ private:
     std::string title_ = "Moreno Text";
     unsigned int iconTex_ = 0;
     int iconW_ = 0, iconH_ = 0;
+public:
+    unsigned int iconTexture() const { return iconTex_; }
+    float iconWidth() const { return static_cast<float>(iconW_); }
+    float iconHeight() const { return static_cast<float>(iconH_); }
+private:
     void updateButtonPositions(int windowWidth);
     bool menuOpen_ = false;
     int menuHovered_ = -1;

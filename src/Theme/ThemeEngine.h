@@ -92,7 +92,18 @@ public:
             {"type", {"storage.type", "entity.name.type", "entity.name.class", "support.type", "support.class"}},
             {"function", {"entity.name.function", "support.function", "variable.function"}},
             {"operator", {"keyword.operator"}},
+            {"markup.heading", {"entity.name.section", "keyword"}},
+            {"markup.bold", {"type", "storage.type"}},
+            {"markup.italic", {"string"}},
+            {"markup.raw", {"number", "constant"}},
+            {"markup.underline.link", {"operator", "keyword.operator"}},
+            {"punctuation.definition.markup", {"keyword.operator", "operator"}},
+            {"string.other.link.title", {"function", "entity.name.function"}},
         };
+        // markdown emphasis needs a weight even when the scheme says nothing about it
+        if (!scopeStyles_.count("markup.heading")) scopeStyles_["markup.heading"] = 1;
+        if (!scopeStyles_.count("markup.bold")) scopeStyles_["markup.bold"] = 1;
+        if (!scopeStyles_.count("markup.italic")) scopeStyles_["markup.italic"] = 2;
         for (auto& [coarse, options] : fallbacks) {
             for (auto option : options) {
                 auto st = scopeStyles_.find(option);

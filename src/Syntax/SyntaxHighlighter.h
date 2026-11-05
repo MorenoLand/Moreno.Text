@@ -78,7 +78,8 @@ private:
     std::unordered_set<std::string> builtins_;
     std::unordered_set<std::string> types_;
     // scope indices: 0=plain, 1=keyword, 2=string, 3=comment, 4=number, 5=type, 6=builtin, 7=operator, 8=punctuation
-    SyntaxColor colors_[9] = {
+    // 9=markup.heading, 10=bold, 11=italic, 12=raw/code, 13=link destination, 14=markdown markers, 15=link text
+    SyntaxColor colors_[16] = {
         {0.671f, 0.698f, 0.749f}, // plain #abb2bf
         {0.776f, 0.471f, 0.867f}, // keyword #c678dd
         {0.596f, 0.765f, 0.475f}, // string #98c379
@@ -88,6 +89,8 @@ private:
         {0.380f, 0.686f, 0.937f}, // builtin/function #61afef
         {0.337f, 0.714f, 0.761f}, // operator #56b6c2
         {0.671f, 0.698f, 0.749f}, // punctuation
+        {0.776f, 0.471f, 0.867f}, {0.898f, 0.753f, 0.482f}, {0.596f, 0.765f, 0.475f}, {0.820f, 0.604f, 0.400f},
+        {0.337f, 0.714f, 0.761f}, {0.337f, 0.714f, 0.761f}, {0.380f, 0.686f, 0.937f},
     };
     SyntaxColor localBackground_ = {0.118f, 0.118f, 0.133f};
     SyntaxColor localLineHighlight_ = {0.165f, 0.165f, 0.188f};

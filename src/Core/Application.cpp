@@ -9,6 +9,7 @@
 #include "Theme/ThemeEngine.h"
 #include "Commands/KeyBindingManager.h"
 #include "UI/Gutter.h"
+#include "UI/LineEdit.h"
 #include "UI/Minimap.h"
 #include "UI/StatusBar.h"
 #include "Syntax/SyntaxHighlighter.h"
@@ -388,6 +389,7 @@ int Application::run(int argc, char** argv) {
         PluginHost::stop(pluginPaths);
         return 1;
     }
+    for (int i = 1; i < argc; ++i) if (std::string(argv[i]) == "--file-associations") showFileAssociations();   // opens the dialog for installers and scripts
     for (int i = 1; i + 1 < argc; ++i) {
         if (std::string(argv[i]) == "--selftest") {
             int code = runSelfTest(argv[i + 1]);
@@ -621,6 +623,9 @@ bool Application::init(int argc, char** argv) {
 #endif
 #ifdef SDL_HINT_VIDEO_HIGHDPI_DISABLED
     SDL_SetHint(SDL_HINT_VIDEO_HIGHDPI_DISABLED, "0");
+#endif
+#ifdef SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH
+    SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");   // the click that focuses a window (or a popup menu) must still reach it
 #endif
     startupTick("before SDL_Init");
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS) != 0) { std::cerr << "SDL_Init: " << SDL_GetError() << std::endl; return false; }
@@ -3054,6 +3059,7 @@ static const ExtraPaletteCommand extraPaletteCommands[] = {
     {"Developer: View Package File","",[](Application& a){ a.openPackageFilePicker(); }},
     {"Preferences: Mouse Bindings","",[](Application& a){ a.openMouseBindings(); }},
     {"Preferences: Browse Packages","",[](Application& a){ a.browsePackages(); }},
+    {"Preferences: File Associations","",[](Application& a){ a.showFileAssociations(); }},
     {"Help: Documentation","",[](Application& a){ a.openDocumentation(); }},
     {"Help: Report a Bug","",[](Application& a){ a.reportBug(); }},
     {"Help: About Moreno Text","",[](Application& a){ a.showAbout(); }},
@@ -3701,6 +3707,7 @@ void Application::handleEvents() {
             }
             continue;
         }
+        if (handleDialogEvent(e)) continue;
         if (closeConfirmOpen_) {
             int ww, wh; SDL_GetWindowSize(window_, &ww, &wh);
             std::string name = closeConfirmIndex_ < tabs_.size() ? tabs_[closeConfirmIndex_].fileName : openFile_;
@@ -3733,8 +3740,21 @@ void Application::handleEvents() {
             }
         }
         if (e.type == SDL_TEXTINPUT) cursorLastInputTicks_ = SDL_GetTicks();
+        if (inputDrag_ && e.type == SDL_MOUSEMOTION) {   // dragging inside an input box extends its selection
+            auto measure = [&](const std::string& s) { return fontAtlas().measureText(s); };
+            float x = (float)e.motion.x - inputDragX_;
+            switch (inputDrag_) {
+            case 1: find_.qCur = LineEdit::offsetAtX(find_.query, x, measure); break;
+            case 2: find_.rCur = LineEdit::offsetAtX(find_.replace, x, measure); break;
+            case 3: commandPalette_.cursor = LineEdit::offsetAtX(commandPalette_.query, x, measure); break;
+            case 4: goto_.cur = LineEdit::offsetAtX(goto_.query, x, measure); break;
+            }
+            continue;
+        }
+        if (inputDrag_ && e.type == SDL_MOUSEBUTTONUP) inputDrag_ = 0;
         // find mode input
-        if (find_.active && e.type == SDL_KEYDOWN) {
+        if (!find_.active) findEditorFocus_ = false;   // reopening the panel always starts in its field
+        if (find_.active && !findEditorFocus_ && e.type == SDL_KEYDOWN) {
             auto mod = e.key.keysym.mod; auto sym = e.key.keysym.sym;
             if (sym == SDLK_ESCAPE) { find_.active = false; findPanelIsInFiles_ = false; acActive_ = false; continue; }
             if (sym == SDLK_TAB && find_.replaceActive) { findFocus_ = 1 - findFocus_; continue; }
@@ -3751,35 +3771,33 @@ void Application::handleEvents() {
                 continue;
             }
             if ((mod & KMOD_CTRL) && (sym == SDLK_f || sym == SDLK_h || sym == SDLK_r)) continue;
-            if (sym == SDLK_BACKSPACE) {
-                if (findFocus_ == 1 && find_.replaceActive) { if (!find_.replace.empty()) { auto it = find_.replace.end(); --it; while (it != find_.replace.begin() && (*it & 0xC0) == 0x80) --it; find_.replace.erase(it, find_.replace.end()); } }
-                else { if (!find_.query.empty()) { auto it = find_.query.end(); --it; while (it != find_.query.begin() && (*it & 0xC0) == 0x80) --it; find_.query.erase(it, find_.query.end()); findAllMatches(); } }
-                continue;
+            if ((mod & KMOD_CTRL) && !(mod & KMOD_ALT) && sym == SDLK_c &&
+                (findFocus_ == 1 && find_.replaceActive ? find_.rCur == find_.rAnc : find_.qCur == find_.qAnc)) { commandCopy(); continue; }   // nothing selected in the box: copy from the editor
+            if (!((mod & KMOD_ALT) && (sym == SDLK_r || sym == SDLK_c || sym == SDLK_w))) {
+                bool inReplace = findFocus_ == 1 && find_.replaceActive;
+                int r = inReplace ? LineEdit::key(find_.replace, find_.rCur, find_.rAnc, e.key) : LineEdit::key(find_.query, find_.qCur, find_.qAnc, e.key);
+                if (r == 2 && !inReplace) findAllMatches();
+                if (r) continue;
             }
             if ((mod & KMOD_ALT) && sym == SDLK_r) { find_.regex = !find_.regex; findAllMatches(); continue; }
             if ((mod & KMOD_ALT) && sym == SDLK_c) { find_.caseSensitive = !find_.caseSensitive; findAllMatches(); continue; }
             if ((mod & KMOD_ALT) && sym == SDLK_w) { find_.wholeWord = !find_.wholeWord; findAllMatches(); continue; }
             continue;
         }
-        if (find_.active && e.type == SDL_TEXTINPUT) {
-            if (findFocus_ == 1 && find_.replaceActive) find_.replace += e.text.text;
-            else { find_.query += e.text.text; findAllMatches(); }
+        if (find_.active && !findEditorFocus_ && e.type == SDL_TEXTINPUT) {
+            if (findFocus_ == 1 && find_.replaceActive) LineEdit::insert(find_.replace, find_.rCur, find_.rAnc, e.text.text);
+            else { LineEdit::insert(find_.query, find_.qCur, find_.qAnc, e.text.text); findAllMatches(); }
             continue;
         }
         if (pluginInputPanel_.active && e.type == SDL_KEYDOWN) {
             auto sym = e.key.keysym.sym;
             if (sym == SDLK_ESCAPE) { finishPluginInputPanel(false); continue; }
             if (sym == SDLK_RETURN) { finishPluginInputPanel(true); continue; }
-            if (sym == SDLK_BACKSPACE && !pluginInputPanel_.text.empty()) {
-                auto it = pluginInputPanel_.text.end(); --it;
-                while (it != pluginInputPanel_.text.begin() && (*it & 0xC0) == 0x80) --it;
-                pluginInputPanel_.text.erase(it, pluginInputPanel_.text.end());
-                continue;
-            }
+            LineEdit::key(pluginInputPanel_.text, pluginInputPanel_.cur, pluginInputPanel_.anc, e.key);
             continue;
         }
         if (pluginInputPanel_.active && e.type == SDL_TEXTINPUT) {
-            pluginInputPanel_.text += e.text.text;
+            LineEdit::insert(pluginInputPanel_.text, pluginInputPanel_.cur, pluginInputPanel_.anc, e.text.text);
             continue;
         }
         if (pluginQuickPanel_.active && e.type == SDL_KEYDOWN) {
@@ -3796,17 +3814,11 @@ void Application::handleEvents() {
             if (sym == SDLK_RETURN) { if (pluginQuickPanel_.selected >= 0 && pluginQuickPanel_.selected < (int)pluginQuickPanel_.results.size()) finishPluginQuickPanel(pluginQuickPanel_.results[pluginQuickPanel_.selected]); continue; }
             if (sym == SDLK_UP) { if (pluginQuickPanel_.selected > 0) --pluginQuickPanel_.selected; clampQuickPanelScroll(); continue; }
             if (sym == SDLK_DOWN) { if (pluginQuickPanel_.selected < (int)pluginQuickPanel_.results.size() - 1) ++pluginQuickPanel_.selected; clampQuickPanelScroll(); continue; }
-            if (sym == SDLK_BACKSPACE && !pluginQuickPanel_.query.empty()) {
-                auto it = pluginQuickPanel_.query.end(); --it;
-                while (it != pluginQuickPanel_.query.begin() && (*it & 0xC0) == 0x80) --it;
-                pluginQuickPanel_.query.erase(it, pluginQuickPanel_.query.end());
-                updatePluginQuickPanelResults(pluginQuickPanel_);
-                continue;
-            }
+            if (LineEdit::key(pluginQuickPanel_.query, pluginQuickPanel_.cur, pluginQuickPanel_.anc, e.key) == 2) updatePluginQuickPanelResults(pluginQuickPanel_);
             continue;
         }
         if (pluginQuickPanel_.active && e.type == SDL_TEXTINPUT) {
-            pluginQuickPanel_.query += e.text.text;
+            LineEdit::insert(pluginQuickPanel_.query, pluginQuickPanel_.cur, pluginQuickPanel_.anc, e.text.text);
             updatePluginQuickPanelResults(pluginQuickPanel_);
             continue;
         }
@@ -3857,6 +3869,10 @@ void Application::handleEvents() {
                 if (hasQuerySelection()) eraseQuerySelection();
                 else if (commandPalette_.cursor < query.size()) { size_t end = ctrl ? wordRight(commandPalette_.cursor) : nextChar(commandPalette_.cursor); query.erase(commandPalette_.cursor, end - commandPalette_.cursor); }
                 updateCommandPalette(); continue;
+            }
+            if (ctrl && (sym == SDLK_c || sym == SDLK_x || sym == SDLK_v)) {   // clipboard: same rules as the other input boxes
+                if (LineEdit::key(query, commandPalette_.cursor, commandPalette_.anchor, e.key) == 2) updateCommandPalette();
+                continue;
             }
             continue;
         }
@@ -3986,14 +4002,10 @@ void Application::handleEvents() {
             }
             if (sym == SDLK_UP) { if (goto_.selected > 0) --goto_.selected; continue; }
             if (sym == SDLK_DOWN) { if (goto_.selected < (int)goto_.items.size() - 1) ++goto_.selected; continue; }
-            if (sym == SDLK_BACKSPACE && !goto_.query.empty()) {
-                auto it = goto_.query.end(); --it;
-                while (it != goto_.query.begin() && (*it & 0xC0) == 0x80) --it;
-                goto_.query.erase(it, goto_.query.end()); updateGotoResults(); continue;
-            }
+            if (LineEdit::key(goto_.query, goto_.cur, goto_.anc, e.key) == 2) updateGotoResults();
             continue;
         }
-        if (goto_.active && e.type == SDL_TEXTINPUT) { goto_.query += e.text.text; updateGotoResults(); continue; }
+        if (goto_.active && e.type == SDL_TEXTINPUT) { LineEdit::insert(goto_.query, goto_.cur, goto_.anc, e.text.text); updateGotoResults(); continue; }
         // menu bar
         int ww, wh; SDL_GetWindowSize(window_, &ww, &wh);
         if (titlebar_->handleEvent(e, window_)) continue;
@@ -4042,6 +4054,13 @@ void Application::handleEvents() {
             }
             if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == 1) {
                 float mx = (float)e.button.x, my = (float)e.button.y;
+                if (mx >= ox && mx < ox + ow && my >= oy && my < oy + 38.f) {   // the input row: place the caret, start a drag
+                    inputDragX_ = ox + 42.f;
+                    size_t pos = LineEdit::offsetAtX(commandPalette_.query, mx - inputDragX_, [&](const std::string& s) { return fontAtlas().measureText(s); });
+                    if (e.button.clicks >= 2) LineEdit::selectWordAt(commandPalette_.query, pos, commandPalette_.cursor, commandPalette_.anchor);
+                    else { commandPalette_.cursor = pos; if (!(SDL_GetModState() & KMOD_SHIFT)) commandPalette_.anchor = pos; inputDrag_ = 3; }
+                    continue;
+                }
                 if (maxScroll > 0 && mx >= trackX - 4.f && mx <= ox + ow && my >= listY && my < listY + listH) {
                     commandPalette_.scrollbarDragging = true;
                     commandPalette_.scrollbarDragOffset = my >= thumbY && my <= thumbY + thumbH ? my - thumbY : thumbH * 0.5f;
@@ -4263,6 +4282,13 @@ void Application::handleEvents() {
             }
             if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == 1) {
                 float mx = (float)e.button.x, my = (float)e.button.y;
+                if (mx >= ox && mx < ox + ow && my >= oy && my < oy + 38.f) {   // the input row: place the caret, start a drag
+                    inputDragX_ = ox + 42.f;
+                    size_t pos = LineEdit::offsetAtX(commandPalette_.query, mx - inputDragX_, [&](const std::string& s) { return fontAtlas().measureText(s); });
+                    if (e.button.clicks >= 2) LineEdit::selectWordAt(commandPalette_.query, pos, commandPalette_.cursor, commandPalette_.anchor);
+                    else { commandPalette_.cursor = pos; if (!(SDL_GetModState() & KMOD_SHIFT)) commandPalette_.anchor = pos; inputDrag_ = 3; }
+                    continue;
+                }
                 if (maxScroll > 0 && mx >= trackX - 4.f && mx <= ox + ow && my >= listY && my < listY + listH) {
                     commandPalette_.scrollbarDragging = true;
                     commandPalette_.scrollbarDragOffset = my >= thumbY && my <= thumbY + thumbH ? my - thumbY : thumbH * 0.5f;
@@ -4271,6 +4297,17 @@ void Application::handleEvents() {
                     int index = commandPalette_.scroll + (int)((my - listY) / rowH);
                     if (index >= 0 && index < total) commandPalette_.selected = index;
                 }
+                continue;
+            }
+        }
+        if (goto_.active && e.type == SDL_MOUSEBUTTONDOWN && e.button.button == 1) {
+            float gow = 400.f, gox = ((float)ww - gow) / 2.f, goy = titlebar_->height() + tabBarH_ + 20.f;
+            float mx = (float)e.button.x, my = (float)e.button.y;
+            if (mx >= gox && mx < gox + gow && my >= goy && my < goy + 28.f) {
+                inputDragX_ = gox + 8.f + fontAtlas().measureText("Goto: ");
+                size_t pos = LineEdit::offsetAtX(goto_.query, mx - inputDragX_, [&](const std::string& s) { return fontAtlas().measureText(s); });
+                if (e.button.clicks >= 2) LineEdit::selectWordAt(goto_.query, pos, goto_.cur, goto_.anc);
+                else { goto_.cur = pos; if (!(SDL_GetModState() & KMOD_SHIFT)) goto_.anc = pos; inputDrag_ = 4; }
                 continue;
             }
         }
@@ -4283,6 +4320,7 @@ void Application::handleEvents() {
             float rowH = 28.f, barH = find_.replaceActive ? rowH * 2.f : rowH;
             float barY = (float)wh - sbH - barH;
             float mx = (float)e.button.x, my = (float)e.button.y;
+            findEditorFocus_ = !(my >= barY && my < barY + barH);   // a click in the editor hands the keyboard back to it
             if (my >= barY && my < barY + barH) {
                 float panelW = (float)ww;
                 float fieldH = 24.f;
@@ -4308,7 +4346,13 @@ void Application::handleEvents() {
                 if (inRect(toggleX, fy, 28.f, fieldH)) { find_.regex = !find_.regex; findAllMatches(); continue; }
                 if (inRect(toggleX + 34.f, fy, 28.f, fieldH)) { find_.caseSensitive = !find_.caseSensitive; findAllMatches(); continue; }
                 if (inRect(toggleX + 68.f, fy, 28.f, fieldH)) { find_.wholeWord = !find_.wholeWord; findAllMatches(); continue; }
-                if (inRect(fieldX, fy, fieldW, fieldH)) { findFocus_ = 0; continue; }
+                auto placeCaret = [&](int which, std::string& text, size_t& cur, size_t& anc) {
+                    inputDragX_ = fieldX + 6.f;
+                    size_t pos = LineEdit::offsetAtX(text, mx - inputDragX_, [&](const std::string& s) { return fontAtlas().measureText(s); });
+                    if (e.button.clicks >= 2) LineEdit::selectWordAt(text, pos, cur, anc);
+                    else { cur = pos; if (!(SDL_GetModState() & KMOD_SHIFT)) anc = pos; inputDrag_ = which; }
+                };
+                if (inRect(fieldX, fy, fieldW, fieldH)) { findFocus_ = 0; placeCaret(1, find_.query, find_.qCur, find_.qAnc); continue; }
                 if (inRect(findButtonX, fy, find_.replaceActive ? replaceLeftW : findW, fieldH)) {
                     if (!find_.matches.empty()) {
                         find_.currentMatch = (find_.currentMatch + 1) % find_.matches.size();
@@ -4341,7 +4385,7 @@ void Application::handleEvents() {
                     float rfy = barY + rowH + 2.f;
                     if (inRect(toggleX, rfy, 28.f, fieldH)) continue;
                     if (inRect(toggleX + 34.f, rfy, 28.f, fieldH)) continue;
-                    if (inRect(fieldX, rfy, fieldW, fieldH)) { findFocus_ = 1; continue; }
+                    if (inRect(fieldX, rfy, fieldW, fieldH)) { findFocus_ = 1; placeCaret(2, find_.replace, find_.rCur, find_.rAnc); continue; }
                     if (inRect(findButtonX, rfy, replaceLeftW, fieldH)) {
                         if (!find_.matches.empty()) {
                             selections_.clear();
@@ -4909,9 +4953,9 @@ void Application::handleEvents() {
             else if (ctrl && sym == SDLK_v) pasteClipboard(shift);
             else if (ctrl && sym == SDLK_z) { if (shift) doRedo(); else doUndo(); }
             else if (ctrl && sym == SDLK_y) doRedo();
-            else if (ctrl && !shift && sym == SDLK_f) { findPanelIsInFiles_ = false; find_.active = true; find_.replaceActive = false; find_.query.clear(); find_.matches.clear(); findFocus_ = 0; }
+            else if (ctrl && !shift && sym == SDLK_f) { findPanelIsInFiles_ = false; find_.active = true; find_.replaceActive = false; find_.query.clear(); find_.matches.clear(); findFocus_ = 0; findEditorFocus_ = false; }
             else if (ctrl && sym == SDLK_BACKQUOTE) { consoleOpen_ = !consoleOpen_; }
-            else if (ctrl && !shift && sym == SDLK_h) { findPanelIsInFiles_ = false; find_.active = true; find_.replaceActive = true; find_.query.clear(); find_.matches.clear(); findFocus_ = 0; }
+            else if (ctrl && !shift && sym == SDLK_h) { findPanelIsInFiles_ = false; find_.active = true; find_.replaceActive = true; find_.query.clear(); find_.matches.clear(); findFocus_ = 0; findEditorFocus_ = false; }
             else if (ctrl && sym == SDLK_s) { if (shift) saveFileAs(); else saveFile(); }
             else if (ctrl && shift && sym == SDLK_t) reopenClosedTab();
             else if (ctrl && shift && sym == SDLK_p) commandPalette();
@@ -5222,6 +5266,7 @@ void Application::pollPluginBridge() {
             pluginInputPanel_.responsePath = j.value("response", "");
             pluginInputPanel_.caption = j.value("caption", "");
             pluginInputPanel_.text = j.value("initial_text", "");
+            pluginInputPanel_.cur = pluginInputPanel_.anc = pluginInputPanel_.text.size();
             pluginInputPanel_.submitted = false;
             pluginInputPanel_.active = !pluginInputPanel_.responsePath.empty();
             if (pluginInputPanel_.active) {
@@ -6089,7 +6134,19 @@ void Application::render() {
             button(replaceAllButtonX, rfy, replaceColumnW);
         }
         flushSolid();
-        std::string findText = find_.query + (findFocus_ == 0 ? "|" : "");
+        auto drawFieldEdit = [&](const std::string& text, size_t cur, size_t anc, float x, float y, bool focused) {
+            cur = std::min(cur, text.size()); anc = std::min(anc, text.size());
+            if (cur != anc) {
+                size_t a = std::min(cur, anc), b = std::max(cur, anc);
+                float sx = x + fontAtlas().measureText(text.substr(0, a)), sw = fontAtlas().measureText(text.substr(a, b - a));
+                addSolid(sx, y - 1.f, sx + sw, y + fieldH - 7.f, 0.22f, 0.36f, 0.65f, 0.95f);
+            }
+            if (focused) { float cx = x + fontAtlas().measureText(text.substr(0, cur)); addSolid(cx, y - 1.f, cx + 1.f, y + fieldH - 7.f, 0.88f, 0.88f, 0.92f, 1.f); }
+            flushSolid();
+        };
+        drawFieldEdit(find_.query, find_.qCur, find_.qAnc, fieldX + 6.f, fy + 4.f, findFocus_ == 0 && !findEditorFocus_);
+        if (find_.replaceActive) drawFieldEdit(find_.replace, find_.rCur, find_.rAnc, fieldX + 6.f, replaceFieldY + 4.f, findFocus_ == 1 && !findEditorFocus_);
+        std::string findText = find_.query;
         fontAtlas().drawText(".*", toggleX + 6.f, fy + 5.f, toggleTextRaw(find_.regex, 0.95f, 0.86f, 0.95f).r, toggleTextRaw(find_.regex, 0.95f, 0.86f, 0.95f).g, toggleTextRaw(find_.regex, 0.95f, 0.86f, 0.95f).b, 1.f);
         fontAtlas().drawText("Aa", toggleX + 39.f, fy + 5.f, toggleTextRaw(find_.caseSensitive, 0.95f, 0.86f, 0.95f).r, toggleTextRaw(find_.caseSensitive, 0.95f, 0.86f, 0.95f).g, toggleTextRaw(find_.caseSensitive, 0.95f, 0.86f, 0.95f).b, 1.f);
         fontAtlas().drawText("\\b", toggleX + 73.f, fy + 5.f, toggleTextRaw(find_.wholeWord, 0.95f, 0.86f, 0.95f).r, toggleTextRaw(find_.wholeWord, 0.95f, 0.86f, 0.95f).g, toggleTextRaw(find_.wholeWord, 0.95f, 0.86f, 0.95f).b, 1.f);
@@ -6108,7 +6165,7 @@ void Application::render() {
         if (!find_.replaceActive) centeredText("Find All", findButtonX + findW + gap + findPrevW + gap, fy, findAllW);
         fontAtlas().drawText("\xc3\x97", closeButtonX + 7.f, fy + 4.f, 0.65f, 0.65f, 0.68f, 1.f);
         if (find_.replaceActive) {
-            std::string repText = find_.replace + (findFocus_ == 1 ? "|" : "");
+            std::string repText = find_.replace;
             fontAtlas().drawText("AB", toggleX + 4.f, replaceFieldY + 5.f, 0.58f, 0.58f, 0.62f, 1.f);
             fontAtlas().drawText("<>", toggleX + 38.f, replaceFieldY + 5.f, 0.58f, 0.58f, 0.62f, 1.f);
             fontAtlas().drawText("Replace:", findLabelX - 28.f, replaceFieldY + 5.f, 0.78f, 0.78f, 0.82f, 1.f);
@@ -6129,7 +6186,19 @@ void Application::render() {
         if (goto_.selected >= 0 && goto_.selected < (int)goto_.items.size())
             ar(ox, oy + 28 + goto_.selected * 22, ox + ow, oy + 28 + (goto_.selected + 1) * 22, UIC(0.22f, 0.28f, 0.42f), 1.f);
         flushSolid();
-        fontAtlas().drawText("Goto: " + goto_.query + "|", ox + 8, oy + 6, 0.8f, 0.8f, 0.8f, 1.f);
+        {
+            float tx = ox + 8.f + fontAtlas().measureText("Goto: ");
+            size_t gc = std::min(goto_.cur, goto_.query.size()), ga = std::min(goto_.anc, goto_.query.size());
+            if (gc != ga) {
+                size_t a = std::min(gc, ga), b = std::max(gc, ga);
+                float sx = tx + fontAtlas().measureText(goto_.query.substr(0, a)), sw = fontAtlas().measureText(goto_.query.substr(a, b - a));
+                addSolid(sx, oy + 4.f, sx + sw, oy + 24.f, 0.22f, 0.36f, 0.65f, 0.95f);
+            }
+            float cx = tx + fontAtlas().measureText(goto_.query.substr(0, gc));
+            addSolid(cx, oy + 4.f, cx + 1.f, oy + 24.f, 0.84f, 0.84f, 0.86f, 1.f);
+            flushSolid();
+        }
+        fontAtlas().drawText("Goto: " + goto_.query, ox + 8, oy + 6, 0.8f, 0.8f, 0.8f, 1.f);
         const char* modeLabel = promptActive_ ? promptCaption_.c_str() : gotoMode_ == Symbols ? "Symbols" : gotoMode_ == Lines ? "Go to Line" : gotoMode_ == Words ? "Words" : gotoMode_ == ProjectSymbols ? "Project Symbols" : gotoMode_ == Builds ? "Build" : gotoMode_ == ColorSchemes ? "Color Scheme" : gotoMode_ == Snippets ? "Snippets" : gotoMode_ == PasteHistory ? "Paste History" : gotoMode_ == Encodings ? "Encoding" : gotoMode_ == Projects ? "Projects" : gotoMode_ == PackageFiles ? "Package Files" : gotoMode_ == SpellSuggest ? "Spelling" : gotoMode_ == Dictionaries ? "Dictionary" : "Files";
         float mlW = fontAtlas().measureText(modeLabel);
         fontAtlas().drawText(modeLabel, ox + ow - mlW - 12, oy + 6, UIC(0.45f, 0.45f, 0.5f), 1.f);
@@ -6228,7 +6297,20 @@ void Application::render() {
         flushSolid();
         if (rich) { addSolid(mainX + 14.f, mainY + 10.f, mainX + 35.f, mainY + 32.f, UIC(0.28f, 0.30f, 0.35f), 1.f); flushSolid(); }
         uiFontAtlas().drawText(">", rich ? mainX + 21.f : mainX + 12.f, mainY + (rich ? 12.f : 9.f), 0.86f, 0.88f, 0.93f, 1.f);
-        uiFontAtlas().drawText(pluginQuickPanel_.query + "|", rich ? mainX + 43.f : mainX + 32.f, mainY + (rich ? 12.f : 8.f), 0.88f, 0.89f, 0.92f, 1.f);
+        {
+            float qx = rich ? mainX + 43.f : mainX + 32.f, qy = mainY + (rich ? 12.f : 8.f);
+            const std::string& qt = pluginQuickPanel_.query;
+            size_t qc = std::min(pluginQuickPanel_.cur, qt.size()), qa = std::min(pluginQuickPanel_.anc, qt.size());
+            if (qc != qa) {
+                size_t a = std::min(qc, qa), b = std::max(qc, qa);
+                float sx = qx + uiFontAtlas().measureText(qt.substr(0, a)), sw = uiFontAtlas().measureText(qt.substr(a, b - a));
+                addSolid(sx, qy - 1.f, sx + sw, qy + 19.f, 0.22f, 0.36f, 0.65f, 0.95f);
+            }
+            float cx = qx + uiFontAtlas().measureText(qt.substr(0, qc));
+            addSolid(cx, qy - 1.f, cx + 1.f, qy + 19.f, 0.88f, 0.89f, 0.92f, 1.f);
+            flushSolid();
+            uiFontAtlas().drawText(qt, qx, qy, 0.88f, 0.89f, 0.92f, 1.f);
+        }
         glEnable(GL_SCISSOR_TEST);
         GLRenderer::scissor((int)mainX, wh - (int)(mainY + mainH), (int)mainW, (int)mainH);
         for (int row = 0; row < visible; ++row) {
@@ -6273,10 +6355,20 @@ void Application::render() {
         fontAtlas().drawText(caption, mainX + 12.f, mainY + 14.f, 0.88f, 0.88f, 0.90f, 1.f);
         glEnable(GL_SCISSOR_TEST);
         GLRenderer::scissor((int)(mainX + 12.f), wh - (int)(mainY + 68.f), (int)(mainW - 24.f), 26);
-        fontAtlas().drawText(pluginInputPanel_.text, mainX + 16.f, mainY + 48.f, 0.94f, 0.94f, 0.96f, 1.f);
-        float tw = fontAtlas().measureText(pluginInputPanel_.text);
-        uint32_t blink = (SDL_GetTicks() / 500) % 2;
-        if (!blink) fontAtlas().drawText("|", mainX + 16.f + tw, mainY + 48.f, accentColor_.r, accentColor_.g, accentColor_.b, 1.f);
+        {
+            const std::string& it = pluginInputPanel_.text;
+            size_t ic = std::min(pluginInputPanel_.cur, it.size()), ia = std::min(pluginInputPanel_.anc, it.size());
+            if (ic != ia) {
+                size_t a = std::min(ic, ia), b = std::max(ic, ia);
+                float sx = mainX + 16.f + fontAtlas().measureText(it.substr(0, a)), sw = fontAtlas().measureText(it.substr(a, b - a));
+                addSolid(sx, mainY + 46.f, sx + sw, mainY + 66.f, 0.22f, 0.36f, 0.65f, 0.95f);
+                flushSolid();
+            }
+            fontAtlas().drawText(it, mainX + 16.f, mainY + 48.f, 0.94f, 0.94f, 0.96f, 1.f);
+            float tw = fontAtlas().measureText(it.substr(0, ic));
+            uint32_t blink = (SDL_GetTicks() / 500) % 2;
+            if (!blink) fontAtlas().drawText("|", mainX + 16.f + tw, mainY + 48.f, accentColor_.r, accentColor_.g, accentColor_.b, 1.f);
+        }
         glDisable(GL_SCISSOR_TEST);
     }
     // autocomplete popup
@@ -6347,6 +6439,7 @@ void Application::render() {
     titlebar_->appendSolidRects(solidVerts_);
     flushSolid();
     titlebar_->drawForeground(uiFontAtlas());
+    drawDialogs(fww, fwh);
     if (closeConfirmOpen_) {
         std::string name = closeConfirmIndex_ < tabs_.size() ? tabs_[closeConfirmIndex_].fileName : openFile_;
         CloseConfirmLayout dlg = makeCloseConfirmLayout(fontAtlas(), fww, fwh, name);

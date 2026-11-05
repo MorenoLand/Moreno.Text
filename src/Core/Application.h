@@ -16,6 +16,7 @@
 #include <set>
 #include <memory>
 #include "Plugin/PluginHost.h"
+#include "Platform/FileAssociations.h"
 #include "UI/SidebarMenu.h"
 
 class Titlebar;
@@ -52,6 +53,7 @@ struct FindState {
     bool replaceActive = false;
     std::string query;
     std::string replace;
+    size_t qCur = 0, qAnc = 0, rCur = 0, rAnc = 0;   // caret and selection anchor in the two fields
     bool regex = false;
     bool caseSensitive = false;
     bool wholeWord = false;
@@ -62,6 +64,7 @@ struct FindState {
 struct GotoState {
     bool active = false;
     std::string query;
+    size_t cur = 0, anc = 0;
     std::vector<std::string> items;
     std::vector<std::string> subtexts;
     std::vector<float> scores;
@@ -101,6 +104,7 @@ struct PluginQuickPanelState {
     std::vector<std::string> linkUrls;
     std::vector<int> results;
     std::string query;
+    size_t cur = 0, anc = 0;
     int selected = 0;
     int scroll = 0;
     bool scrollbarDragging = false;
@@ -114,6 +118,7 @@ struct PluginInputPanelState {
     std::string responsePath;
     std::string caption;
     std::string text;
+    size_t cur = 0, anc = 0;
 };
 
 struct DiffHunk {
@@ -206,8 +211,8 @@ public:
     void commandPaste() { pasteClipboard(false); }
     void commandPasteAndIndent() { pasteClipboard(true); }
     void commandSelectAll() { if (!selections_.empty()) { selections_[0].anchor = 0; selections_[0].cursor = textBuffer.size(); } }
-    void commandFind() { findPanelIsInFiles_ = false; find_.active = true; find_.replaceActive = false; find_.query.clear(); find_.matches.clear(); }
-    void commandReplace() { findPanelIsInFiles_ = false; find_.active = true; find_.replaceActive = true; find_.query.clear(); find_.matches.clear(); }
+    void commandFind() { findEditorFocus_ = false; findPanelIsInFiles_ = false; find_.active = true; find_.replaceActive = false; find_.query.clear(); find_.matches.clear(); }
+    void commandReplace() { findEditorFocus_ = false; findPanelIsInFiles_ = false; find_.active = true; find_.replaceActive = true; find_.query.clear(); find_.matches.clear(); }
     void commandGotoAnything() { promptActive_ = false; goto_.active = true; goto_.query.clear(); goto_.selected = 0; goto_.items.clear(); }
     void commandPalette() { commandPalette_.active = true; commandPalette_.query.clear(); commandPalette_.cursor = commandPalette_.anchor = 0; commandPalette_.selected = 0; commandPalette_.scroll = 0; commandPalette_.hover = -1; updateCommandPalette(); }
     void toggleConsole();
@@ -357,6 +362,15 @@ public:
     void newSyntax();
     void newBuildSystem();
     void openMouseBindings();
+    void showFileAssociations();   // choose which file extensions Moreno Text opens (Windows)
+    bool handleDialogEvent(const SDL_Event& e);   // About and File Associations: true when the event was theirs
+    void drawDialogs(float windowW, float windowH);
+    bool aboutOpen_ = false;
+    bool assocOpen_ = false;
+    std::vector<FileAssociations::Entry> assocEntries_;
+    int assocScroll_ = 0, assocHoverRow_ = -1, assocHoverButton_ = -1;
+    std::string assocAdd_, assocStatus_;
+    size_t assocAddCur_ = 0, assocAddAnc_ = 0;
     void browsePackages();
     void openPackageFilePicker();
     void copyAsHtml();
@@ -435,6 +449,9 @@ private:
     void selectMatch(size_t pos);
     void runFindInFiles();
     bool findPanelIsInFiles_ = false;
+    float inputDragX_ = 0.f;   // x where the dragged field's text starts
+    bool findEditorFocus_ = false;   // the editor has the keyboard even though the find panel is open
+    int inputDrag_ = 0;   // 1 find field, 2 replace field, 3 command palette, 4 goto: a mouse drag is selecting text in it
     size_t markPos_ = std::string::npos;
     bool macroRecording_ = false, macroPlaying_ = false;
     std::vector<SDL_Event> macro_;

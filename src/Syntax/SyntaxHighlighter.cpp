@@ -424,6 +424,189 @@ static std::vector<SyntaxToken> parseTreeTokens(const std::string& text, const v
     return nonOverlapping;
 }
 
+// Markdown token classes (see SyntaxHighlighter.h): 9 heading, 10 bold, 11 italic, 12 raw/code, 13 link destination, 14 markers, 15 link text
+static void markdownInline(const std::string& t, size_t base, size_t a, size_t b, std::vector<SyntaxToken>& out) {
+    auto add = [&](size_t s, size_t e, int cls) { if (e > s) out.push_back({base + s, e - s, cls}); };
+    auto isSpace = [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; };
+    auto isAlnum = [](char c) { return std::isalnum((unsigned char)c) != 0; };
+    size_t i = a;
+    while (i < b) {
+        char c = t[base + i];
+        if (c == '\\' && i + 1 < b) { i += 2; continue; }
+        if (c == '`') {
+            size_t n = 0; while (i + n < b && t[base + i + n] == '`') ++n;
+            size_t j = i + n, close = std::string::npos;
+            while (j < b) {
+                if (t[base + j] != '`') { ++j; continue; }
+                size_t m = 0; while (j + m < b && t[base + j + m] == '`') ++m;
+                if (m == n) { close = j + m; break; }
+                j += m;
+            }
+            if (close != std::string::npos) { add(i, close, 12); i = close; } else i += n;
+            continue;
+        }
+        if (c == '*' || c == '_') {
+            size_t n = 0; while (i + n < b && t[base + i + n] == c) ++n;
+            bool leftOk = i + n < b && !isSpace(t[base + i + n]) && (c == '*' || i == a || !isAlnum(t[base + i - 1]));
+            size_t m = std::min<size_t>(n, 3), close = std::string::npos;
+            if (leftOk) {
+                for (size_t j = i + n; j < b; ++j) {
+                    if (t[base + j] == '\\') { ++j; continue; }
+                    if (t[base + j] != c) continue;
+                    size_t r = 0; while (j + r < b && t[base + j + r] == c) ++r;
+                    bool rightOk = j > i + n && !isSpace(t[base + j - 1]) && r >= m && (c == '*' || j + m >= b || !isAlnum(t[base + j + m]));
+                    if (rightOk) { close = j + m; break; }
+                    j += r - 1;
+                }
+            }
+            if (close != std::string::npos) { add(i, close, m == 1 ? 11 : 10); i = close; } else i += n;
+            continue;
+        }
+        if (c == '~' && i + 1 < b && t[base + i + 1] == '~' && i + 2 < b && !isSpace(t[base + i + 2])) {
+            size_t j = t.find("~~", base + i + 2);
+            if (j != std::string::npos && j - base < b) { add(i, j - base + 2, 3); i = j - base + 2; continue; }
+        }
+        if (c == '[' || (c == '!' && i + 1 < b && t[base + i + 1] == '[')) {
+            size_t open = c == '!' ? i + 1 : i, depth = 0, j = open;
+            for (; j < b; ++j) {
+                char d = t[base + j];
+                if (d == '\\') { ++j; continue; }
+                if (d == '[') ++depth;
+                else if (d == ']' && --depth == 0) break;
+            }
+            if (j < b && j + 1 < b && (t[base + j + 1] == '(' || t[base + j + 1] == '[')) {
+                char closer = t[base + j + 1] == '(' ? ')' : ']';
+                size_t k = j + 2, pd = 1;
+                for (; k < b; ++k) {
+                    char d = t[base + k];
+                    if (d == '\\') { ++k; continue; }
+                    if (d == '(' && closer == ')') ++pd;
+                    else if (d == closer && --pd == 0) break;
+                }
+                if (k < b) { add(i, j + 1, 15); add(j + 1, k + 1, 13); i = k + 1; continue; }
+            }
+            ++i; continue;
+        }
+        if (c == '<' && i + 1 < b) {
+            size_t j = i + 1;
+            while (j < b && t[base + j] != '>' && !isSpace(t[base + j]) && t[base + j] != '<') ++j;
+            if (j < b && t[base + j] == '>') {
+                std::string inner = t.substr(base + i + 1, j - i - 1);
+                bool autolink = inner.find("://") != std::string::npos || (inner.find('@') != std::string::npos && inner.find('.') != std::string::npos);
+                add(i, j + 1, autolink ? 13 : 5); i = j + 1; continue;
+            }
+            // a tag with attributes
+            if (std::isalpha((unsigned char)t[base + i + 1]) || t[base + i + 1] == '/' || t[base + i + 1] == '!') {
+                size_t k = t.find('>', base + i);
+                if (k != std::string::npos && k - base < b) { add(i, k - base + 1, 5); i = k - base + 1; continue; }
+            }
+            ++i; continue;
+        }
+        if ((c == 'h' || c == 'H') && (i == a || !isAlnum(t[base + i - 1])) && (t.compare(base + i, 7, "http://") == 0 || t.compare(base + i, 8, "https://") == 0)) {
+            size_t j = i; while (j < b && !isSpace(t[base + j]) && t[base + j] != '<' && t[base + j] != '>') ++j;
+            while (j > i && std::strchr(".,;:!?)'\"]", t[base + j - 1])) --j;
+            add(i, j, 13); i = j; continue;
+        }
+        ++i;
+    }
+}
+
+static std::vector<SyntaxToken> markdownTokens(const std::string& t) {
+    std::vector<SyntaxToken> out;
+    char fenceChar = 0; size_t fenceLen = 0;
+    bool prevBlank = true;
+    size_t pos = 0;
+    while (pos <= t.size()) {
+        size_t nl = t.find('\n', pos);
+        size_t end = nl == std::string::npos ? t.size() : nl;
+        size_t le = end; if (le > pos && t[le - 1] == '\r') --le;
+        size_t i = pos;
+        size_t indent = 0; while (i < le && indent < 4 && (t[i] == ' ')) { ++i; ++indent; }
+        auto add = [&](size_t s, size_t e, int cls) { if (e > s) out.push_back({s, e - s, cls}); };
+        bool blank = true; for (size_t k = pos; k < le; ++k) if (t[k] != ' ' && t[k] != '\t') { blank = false; break; }
+        if (fenceChar) {
+            size_t n = 0; while (i + n < le && t[i + n] == fenceChar) ++n;
+            bool closing = indent < 4 && n >= fenceLen && t.find_first_not_of(" \t", i + n) >= le;
+            add(pos, le, 12);
+            if (closing) fenceChar = 0;
+        } else if (!blank && indent < 4 && i < le && (t[i] == '`' || t[i] == '~')) {
+            char fc = t[i]; size_t n = 0; while (i + n < le && t[i + n] == fc) ++n;
+            bool ok = n >= 3 && (fc == '~' || t.find('`', i + n) >= le);
+            if (ok) {
+                fenceChar = fc; fenceLen = n;
+                add(i, i + n, 12);
+                size_t info = t.find_first_not_of(" \t", i + n);
+                if (info < le) add(info, le, 6);
+            } else markdownInline(t, 0, pos, le, out);
+        } else if (!blank && indent < 4 && i < le && t[i] == '#') {
+            size_t n = 0; while (i + n < le && t[i + n] == '#') ++n;
+            if (n <= 6 && (i + n == le || t[i + n] == ' ' || t[i + n] == '\t')) add(pos, le, 9);
+            else markdownInline(t, 0, pos, le, out);
+        } else if (!blank && indent < 4 && i < le && (t[i] == '-' || t[i] == '*' || t[i] == '_' || t[i] == '=') &&
+                   [&] { char hc = t[i]; size_t cnt = 0; for (size_t k = i; k < le; ++k) { if (t[k] == hc) ++cnt; else if (t[k] != ' ' && t[k] != '\t') return false; } return hc == '=' ? cnt >= 1 : cnt >= 3; }()) {
+            add(pos, le, 14);
+        } else if (!blank) {
+            size_t p = i, tail = le;
+            if (indent >= 4 && prevBlank) { /* indented code block */ add(pos, le, 12); goto nextLine; }
+            while (true) {   // blockquote markers, then an optional list marker
+                size_t q = p; while (q < le && t[q] == ' ') ++q;
+                if (q < le && t[q] == '>') { add(q, q + 1, 14); p = q + 1; continue; }
+                break;
+            }
+            {
+                size_t q = p; while (q < le && (t[q] == ' ' || t[q] == '\t')) ++q;
+                size_t mk = q;
+                bool listMarker = false;
+                if (mk < le && (t[mk] == '-' || t[mk] == '+' || t[mk] == '*') && mk + 1 < le && (t[mk + 1] == ' ' || t[mk + 1] == '\t')) { add(mk, mk + 1, 14); p = mk + 1; listMarker = true; }
+                else {
+                    size_t d = mk; while (d < le && std::isdigit((unsigned char)t[d]) && d - mk < 9) ++d;
+                    if (d > mk && d + 1 < le && (t[d] == '.' || t[d] == ')') && (t[d + 1] == ' ' || t[d + 1] == '\t')) { add(mk, d + 1, 14); p = d + 1; listMarker = true; }
+                }
+                if (listMarker) {   // task list box
+                    size_t s = p; while (s < le && t[s] == ' ') ++s;
+                    if (s + 2 < le && t[s] == '[' && (t[s + 1] == ' ' || t[s + 1] == 'x' || t[s + 1] == 'X') && t[s + 2] == ']' && (s + 3 >= le || t[s + 3] == ' ')) { add(s, s + 3, 14); p = s + 3; }
+                }
+            }
+            // link reference definition:  [label]: destination
+            {
+                size_t s = p; while (s < le && t[s] == ' ') ++s;
+                if (s < le && t[s] == '[' && s == i) {
+                    size_t cb = t.find("]:", s);
+                    if (cb != std::string::npos && cb < le) {
+                        size_t ds = t.find_first_not_of(" \t", cb + 2);
+                        if (ds < le) {
+                            size_t de = ds; while (de < le && t[de] != ' ' && t[de] != '\t') ++de;
+                            add(s, cb + 2, 15); add(ds, de, 13);
+                            p = de;
+                        }
+                    }
+                }
+            }
+            if (t.find('|', p) < tail && t.find_first_not_of(" \t|:-", p) >= tail && t.find('-', p) < tail) add(p, tail, 14);   // table delimiter row
+            else {
+                size_t before = out.size();
+                markdownInline(t, 0, p, tail, out);
+                if (t.find_first_not_of(" \t", pos) != std::string::npos && t[t.find_first_not_of(" \t", pos)] == '|') {
+                    // table row: pipes as markers, inline spans stay as they are
+                    std::vector<SyntaxToken> pipes;
+                    for (size_t k = p; k < tail; ++k) if (t[k] == '|') pipes.push_back({k, 1, 14});
+                    for (auto& pt : pipes) {
+                        bool inside = false;
+                        for (size_t q = before; q < out.size(); ++q) if (pt.start >= out[q].start && pt.start < out[q].start + out[q].length) { inside = true; break; }
+                        if (!inside) out.push_back(pt);
+                    }
+                    std::sort(out.begin() + (long)before, out.end(), [](const SyntaxToken& x, const SyntaxToken& y) { return x.start < y.start; });
+                }
+            }
+        }
+        nextLine:
+        prevBlank = blank;
+        if (nl == std::string::npos) break;
+        pos = nl + 1;
+    }
+    return out;
+}
+
 void SyntaxHighlighter::ensureParseWorker() {
     if (!parseWorker_.joinable()) parseWorker_ = std::thread(&SyntaxHighlighter::parseWorkerLoop, this);
 }
@@ -455,7 +638,8 @@ void SyntaxHighlighter::parseWorkerLoop() {
                 if (!tokens.empty() && tokens.back().scope == cls && tokens.back().start + tokens.back().length == span.start) tokens.back().length += span.length;
                 else tokens.push_back({span.start, span.length, cls});
             }
-        } else tokens = parseTreeTokens(text, language);
+        } else if (language && language == (const void*)tree_sitter_markdown()) tokens = markdownTokens(text);
+        else tokens = parseTreeTokens(text, language);
         auto parsed = std::make_shared<const std::vector<SyntaxToken>>(std::move(tokens));
         if (generation == latestGeneration_.load()) {
             std::lock_guard<std::mutex> lock(tokenMutex_);
@@ -620,19 +804,21 @@ std::vector<SyntaxToken> SyntaxHighlighter::highlightLine(std::string_view line,
 }
 
 int SyntaxHighlighter::scopeStyle(int scope) const {
-    if (useLocalColors_ || scope < 1 || scope >= 9) return 0;
-    static const char* scopeNames[] = {"", "keyword", "string", "comment", "number", "type", "function", "operator", "punctuation"};
+    if (useLocalColors_ || scope < 1 || scope >= 16) return 0;
+    static const char* scopeNames[] = {"", "keyword", "string", "comment", "number", "type", "function", "operator", "punctuation",
+        "markup.heading", "markup.bold", "markup.italic", "markup.raw", "markup.underline.link", "punctuation.definition.markup", "string.other.link.title"};
     return ThemeEngine::instance().styleForScope(scopeNames[scope]);
 }
 
 const SyntaxColor& SyntaxHighlighter::scopeColor(int scope) const {
     if (useLocalColors_) {
-        if (scope < 0 || scope >= 9) scope = 0;
+        if (scope < 0 || scope >= 16) scope = 0;
         return colors_[scope];
     }
-    static const char* scopeNames[] = {"","keyword","string","comment","number","type","function","operator","punctuation"};
-    static thread_local SyntaxColor cached[9];
-    if (scope >= 1 && scope < 9) {
+    static const char* scopeNames[] = {"","keyword","string","comment","number","type","function","operator","punctuation",
+        "markup.heading", "markup.bold", "markup.italic", "markup.raw", "markup.underline.link", "punctuation.definition.markup", "string.other.link.title"};
+    static thread_local SyntaxColor cached[16];
+    if (scope >= 1 && scope < 16) {
         ThemeColor tc = ThemeEngine::instance().colorForScope(scopeNames[scope]);
         cached[scope] = {tc.r, tc.g, tc.b}; return cached[scope];
     }

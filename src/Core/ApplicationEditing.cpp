@@ -14,6 +14,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <shellapi.h>
 #endif
 
 #ifdef None
@@ -45,7 +46,15 @@ void eraseRange(std::string& text, std::vector<SelRange>& sels, size_t a, size_t
 
 void openExternal(const std::string& url) {
 #ifdef _WIN32
-    ShellExecuteA(nullptr, "open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, nullptr, 0);
+    std::wstring wurl(wlen > 0 ? static_cast<size_t>(wlen) : 1, L'\0');
+    if (wlen > 0) MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, wurl.data(), wlen);
+    auto r = reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"open", wurl.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
+    if (r <= 32) {   // no registered handler for the scheme: ask the URL protocol handler directly
+        std::wstring cmd = L"rundll32.exe url.dll,FileProtocolHandler " + wurl;
+        STARTUPINFOW si{}; si.cb = sizeof(si); PROCESS_INFORMATION pi{};
+        if (CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) { CloseHandle(pi.hThread); CloseHandle(pi.hProcess); }
+    }
 #elif defined(__APPLE__)
     std::string cmd = "open '" + url + "' &";
     std::system(cmd.c_str());
@@ -240,9 +249,14 @@ void Application::refreshFolder() {
 void Application::openDocumentation() { openExternal("https://github.com/MorenoLand/Moreno.Text"); }
 void Application::reportBug() { openExternal("https://github.com/MorenoLand/Moreno.Text/issues"); }
 
-void Application::showAbout() {
-    pluginStatusText_ = std::string("Moreno Text ") + MORENO_TEXT_VERSION;
-    pluginStatusUntil_ = SDL_GetTicks() + 6000;
+void Application::showAbout() { aboutOpen_ = true; assocOpen_ = false; }
+
+void Application::showFileAssociations() {
+    assocEntries_ = FileAssociations::load();
+    assocScroll_ = 0; assocHoverRow_ = assocHoverButton_ = -1;
+    assocAdd_.clear(); assocAddCur_ = assocAddAnc_ = 0;
+    assocStatus_ = "Tick the types Moreno Text should open, then Apply. Where Windows keeps your own choice, use Windows Default Apps.";
+    assocOpen_ = true; aboutOpen_ = false;
 }
 
 void Application::foldCurrent() {
