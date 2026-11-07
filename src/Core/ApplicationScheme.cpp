@@ -90,6 +90,31 @@ void Application::openColorSchemePicker() {
     openGotoWithPrefix("=");
 }
 
+void Application::openUiThemePicker() {
+    openGotoWithPrefix("&");
+}
+
+void Application::updateUiThemeResults(const std::string& pattern) {
+    std::string needle = lowered(pattern);
+    std::string active = SettingsManager::instance().get<std::string>("theme", "Default.sublime-theme");
+    auto add = [&](const std::string& label, const std::string& sub, const std::string& value) {
+        if (!needle.empty() && lowered(label).find(needle) == std::string::npos) return;
+        goto_.items.push_back(label + (value == active ? "  (current)" : ""));
+        goto_.subtexts.push_back(sub);
+        goto_.data.push_back(value);
+    };
+    add("Default", "Built-in look", "Default.sublime-theme");
+    add("Follow Color Scheme", "Chrome takes its colors from the color scheme", "follow_color_scheme");
+    std::error_code ec;
+    for (fs::recursive_directory_iterator it(paths_.dataDir + "/Packages", fs::directory_options::skip_permission_denied, ec), end; it != end; it.increment(ec)) {
+        if (ec) break;
+        if (!it->is_regular_file(ec) || it->path().extension() != ".sublime-theme") continue;
+        std::string file = it->path().filename().string();
+        if (file == "Default.sublime-theme") continue;
+        add(it->path().stem().string(), it->path().parent_path().filename().string(), file);
+    }
+}
+
 void Application::customizeColorScheme() {
     const std::string& path = ThemeEngine::instance().path();
     if (!path.empty()) openFile(path);

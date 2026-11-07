@@ -21,6 +21,7 @@ namespace {
 
 const wchar_t* const kProgId = L"MorenoText.File";
 const wchar_t* const kAppKey = L"Applications\\moreno_text.exe";
+const wchar_t* const kCapabilities = L"Software\\MorenoText\\Capabilities";   // what makes the app appear under Settings > Default apps
 
 // ── registry helpers: always an explicit key path, never a pattern ──────────────────────────────────────
 std::wstring classKey(const std::wstring& relative) { return L"Software\\Classes\\" + relative; }
@@ -151,6 +152,10 @@ void registerProgId() {
     writeString(app, L"FriendlyAppName", L"Moreno Text");
     writeString(app + L"\\DefaultIcon", nullptr, icon);
     writeString(app + L"\\shell\\open\\command", nullptr, open);
+    // Registered application: lists Moreno Text with its file types under Settings > Default apps, where Windows offers "Set default"
+    writeString(kCapabilities, L"ApplicationName", L"Moreno Text");
+    writeString(kCapabilities, L"ApplicationDescription", L"A fast, simple, open source text editor");
+    writeString(L"Software\\RegisteredApplications", L"Moreno Text", kCapabilities);
 }
 
 // Returns a note for the user when Windows will not let us make Moreno Text the default (empty when all is well).
@@ -162,6 +167,7 @@ std::wstring applyExtension(const std::wstring& ext, bool wanted) {
     if (wanted) {
         writeString(classKey(dot + L"\\OpenWithProgids"), kProgId, L"");
         writeString(supported, dot.c_str(), L"");
+        writeString(std::wstring(kCapabilities) + L"\\FileAssociations", dot.c_str(), kProgId);
         State s = inspect(ext);
         if (s.windowsChoice && !s.isDefault) return L"." + ext + L" is set to " + s.description + L" in Windows; choose Moreno Text under Default apps.";
         std::wstring current;
@@ -174,6 +180,7 @@ std::wstring applyExtension(const std::wstring& ext, bool wanted) {
     }
     deleteValue(classKey(dot + L"\\OpenWithProgids"), kProgId);
     deleteValue(supported, dot.c_str());
+    deleteValue(std::wstring(kCapabilities) + L"\\FileAssociations", dot.c_str());
     std::wstring current;
     if (readString(HKEY_CURRENT_USER, extKey, nullptr, current) && current == kProgId) {
         std::wstring before;
@@ -259,7 +266,7 @@ std::string apply(std::vector<Entry>& entries) {
     return notes.empty() ? summary : summary + " " + narrow(notes);
 }
 
-void openDefaultAppsSettings() { ShellExecuteW(nullptr, L"open", L"ms-settings:defaultapps", nullptr, nullptr, SW_SHOWNORMAL); }
+void openDefaultAppsSettings() { ShellExecuteW(nullptr, L"open", L"ms-settings:defaultapps?registeredAppUser=Moreno%20Text", nullptr, nullptr, SW_SHOWNORMAL); }
 
 }  // namespace FileAssociations
 

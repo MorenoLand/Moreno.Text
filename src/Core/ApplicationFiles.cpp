@@ -103,6 +103,7 @@ void Application::applyLiveSettings() {
     minimapVisible_ = settings.get<bool>("minimap_visible", minimapVisible_);
     autoIndent_ = settings.get<bool>("auto_indent", true);
     matchBrackets_ = settings.get<bool>("match_brackets", true);
+    matchTags_ = settings.get<bool>("match_tags", true);
     matchSelection_ = settings.get<bool>("match_selection", true);
     int wantedFont = std::clamp(settings.get<int>("font_size", fontSize_), 8, 48);
     if (wantedFont != fontSize_) changeFontSize(wantedFont - fontSize_);

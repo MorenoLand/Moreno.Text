@@ -224,6 +224,7 @@ public:
     void toggleMaximize();
     void toggleBoldText();
     void openSettingsFile();
+    void openSettingsSplit();
     void openKeyBindingsFile();
     void importVimSettings(bool neovim);
     void swapLineUp();
@@ -413,6 +414,8 @@ public:
     bool snippetActive() const { return snippetActive_; }
     void endSnippet() { snippetActive_ = false; }
     void openColorSchemePicker();
+    void openUiThemePicker();
+    void updateUiThemeResults(const std::string& pattern);
     void customizeColorScheme();
     void applyUiThemeSetting();
     void setUiTheme(const std::string& value);
@@ -462,7 +465,7 @@ private:
     void queueSublimeMacro(const nlohmann::json& commands);
     void loadMacro();
     void indexFindResults();
-    bool autoIndent_ = true, matchBrackets_ = true, matchSelection_ = true;
+    bool autoIndent_ = true, matchBrackets_ = true, matchTags_ = true, matchSelection_ = true;
     std::map<std::string, std::filesystem::file_time_type> knownFileTimes_;
     uint32_t lastExternalPoll_ = 0;
     size_t matchingBracketOf(size_t at) const;
@@ -719,7 +722,7 @@ private:
     FindState find_;
     int findFocus_ = 0;
     GotoState goto_;
-    enum GotoMode { Files, Symbols, Lines, Words, ProjectSymbols, Builds, ColorSchemes, Snippets, PasteHistory, Encodings, Projects, PackageFiles, SpellSuggest, Dictionaries } gotoMode_ = Files;
+    enum GotoMode { Files, Symbols, Lines, Words, ProjectSymbols, Builds, ColorSchemes, Snippets, PasteHistory, Encodings, Projects, PackageFiles, SpellSuggest, Dictionaries, UiThemes } gotoMode_ = Files;
     void updateGotoResults();
     CommandPaletteState commandPalette_;
     std::string pluginStatusText_;
@@ -811,6 +814,11 @@ private:
     void firePluginWindowEvent(const char* event);
     // pre-warmed spare window (see ApplicationWarm.cpp)
     bool warmIdle_ = false;
+    // One main window takes files from later launches (`moreno_text file`, double-clicks in Explorer) instead of each opening a window.
+    bool primaryInstance_ = false;
+    uint32_t openRequestPollAt_ = 0;
+    bool forwardToRunningInstance(int argc, char** argv);   // true when another window took the files and this process should exit
+    void pollOpenRequests();
     bool showWindowPending_ = true;
     unsigned long warmOwnerPid_ = 0;
     uint32_t warmLastPoll_ = 0, warmLastOwnerCheck_ = 0, warmNextSpareCheck_ = 0;

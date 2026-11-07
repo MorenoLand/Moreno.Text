@@ -233,6 +233,7 @@ void Application::registerCommandHandlers() {
     plain("swap_case", [this] { convertCaseSwap(); });
     plain("sort_selection", [this] { permuteSelections(0); });
     plain("select_color_scheme", [this] { openColorSchemePicker(); });
+    plain("select_theme", [this] { openUiThemePicker(); });
     plain("customize_color_scheme", [this] { customizeColorScheme(); });
     plain("new_plugin", [this] { newPlugin(); });
     plain("new_snippet", [this] { newSnippet(); });

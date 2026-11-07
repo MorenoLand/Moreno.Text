@@ -383,7 +383,76 @@ static void startupTick(const char* label) {
 
 Application& Application::instance() { static Application app; return app; }
 
+// A launch with no arguments, or with file/folder arguments, is an ordinary window. The first one becomes the primary and holds a
+// named mutex; later launches with files drop a request file in OpenRequests and exit, and the primary opens them as tabs.
+bool Application::forwardToRunningInstance(int argc, char** argv) {
+#ifdef _WIN32
+    if (argc > 1 && argv[1][0] == '-') return false;   // --warm, --detached-tab, --selftest and the like are never forwarded
+    initPaths();
+    static HANDLE mutex = CreateMutexW(nullptr, FALSE, L"Local\\MorenoText.PrimaryWindow");
+    bool taken = mutex && GetLastError() == ERROR_ALREADY_EXISTS;
+    fs::path inbox = fs::path(paths_.localDir) / "OpenRequests";
+    std::error_code ec;
+    if (!taken) {
+        primaryInstance_ = mutex != nullptr;
+        fs::create_directories(inbox, ec);
+        for (auto& entry : fs::directory_iterator(inbox, ec)) fs::remove(entry.path(), ec);   // leftovers from a crashed run
+        return false;
+    }
+    std::string files;
+    for (int i = 1; i < argc; ++i) {
+        fs::path p = fs::absolute(argv[i], ec);
+        if (!ec && fs::is_regular_file(p, ec)) files += p.string() + "\n";
+    }
+    if (files.empty()) return false;   // a folder or a missing path: let this process open its own window
+    fs::create_directories(inbox, ec);
+    fs::path request = inbox / (std::to_string(GetCurrentProcessId()) + "_" + std::to_string(GetTickCount64()) + ".req");
+    fs::path partial = request; partial += ".tmp";
+    { std::ofstream out(partial, std::ios::binary); out << files; if (!out) return false; }
+    fs::rename(partial, request, ec);
+    if (ec) return false;
+    AllowSetForegroundWindow(ASFW_ANY);   // lets the primary come to the front for the click that launched this process
+    return true;
+#else
+    (void)argc; (void)argv;
+    return false;
+#endif
+}
+
+void Application::pollOpenRequests() {
+#ifdef _WIN32
+    if (!primaryInstance_) return;
+    uint32_t now = SDL_GetTicks();
+    if (now - openRequestPollAt_ < 150) return;
+    openRequestPollAt_ = now;
+    std::error_code ec;
+    fs::path inbox = fs::path(paths_.localDir) / "OpenRequests";
+    std::vector<fs::path> requests;
+    for (auto& entry : fs::directory_iterator(inbox, ec))
+        if (entry.path().extension() == ".req") requests.push_back(entry.path());
+    if (requests.empty()) return;
+    std::sort(requests.begin(), requests.end());
+    bool opened = false;
+    for (auto& request : requests) {
+        std::ifstream in(request, std::ios::binary);
+        std::string line;
+        while (std::getline(in, line)) {
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            if (!line.empty() && fs::is_regular_file(line, ec)) { openFile(line); opened = true; }
+        }
+        in.close();
+        fs::remove(request, ec);
+    }
+    if (opened && window_) {
+        if (SDL_GetWindowFlags(window_) & SDL_WINDOW_MINIMIZED) SDL_RestoreWindow(window_);
+        SDL_RaiseWindow(window_);
+        if (nativeWindowHandle_) SetForegroundWindow(reinterpret_cast<HWND>(nativeWindowHandle_));
+    }
+#endif
+}
+
 int Application::run(int argc, char** argv) {
+    if (forwardToRunningInstance(argc, argv)) return 0;
     if (!init(argc, argv)) {
         PluginHostPaths pluginPaths{paths_.exeDir, paths_.dataDir, paths_.packagesDir, paths_.installedPackagesDir, paths_.cacheDir, paths_.libDir};
         PluginHost::stop(pluginPaths);
@@ -405,7 +474,7 @@ int Application::run(int argc, char** argv) {
         }
         static int frames = 0;
         if (frames < 3) startupTick("frame start");
-        handleEvents(); update(); render();
+        handleEvents(); pollOpenRequests(); update(); render();
         if (showWindowPending_ && window_) { SDL_ShowWindow(window_); showWindowPending_ = false; }  // shown once the first frame is drawn, so it never appears blank
         if (frames < 3) { startupTick("frame done"); ++frames; }
         if (pluginHostStartPending_) {
@@ -526,6 +595,7 @@ bool Application::init(int argc, char** argv) {
         loadSpellSetting();
         autoIndent_ = settings.get<bool>("auto_indent", true);
         matchBrackets_ = settings.get<bool>("match_brackets", true);
+        matchTags_ = settings.get<bool>("match_tags", true);
         matchSelection_ = settings.get<bool>("match_selection", true);
     }
     // load color scheme
@@ -3072,6 +3142,8 @@ static const ExtraPaletteCommand extraPaletteCommands[] = {
     {"Spell Check: Add Word to Dictionary","",[](Application& a){ a.addWordToDictionary(); }},
     {"Spell Check: Choose Dictionary","",[](Application& a){ a.openDictionaryPicker(); }},
     {"UI: Select Color Scheme","",[](Application& a){ a.openColorSchemePicker(); }},
+    {"Preferences: Settings","",[](Application& a){ a.openSettingsSplit(); }},
+    {"UI: Select Theme","",[](Application& a){ a.openUiThemePicker(); }},
     {"UI: Customize Color Scheme","",[](Application& a){ a.customizeColorScheme(); }},
     {"View: Increase Font Size","Ctrl+=",[](Application& a){ a.changeFontSize(1); }},
     {"View: Decrease Font Size","Ctrl+-",[](Application& a){ a.changeFontSize(-1); }},
@@ -3276,6 +3348,9 @@ void Application::updateGotoResults() {
     } else if (q[0] == '=') {
         gotoMode_ = ColorSchemes;
         updateColorSchemeResults(q.substr(1));
+    } else if (q[0] == '&') {
+        gotoMode_ = UiThemes;
+        updateUiThemeResults(q.substr(1));
     } else if (q[0] == '!') {
         gotoMode_ = Builds;
         updateBuildPickerResults(q.substr(1));
@@ -3611,6 +3686,35 @@ void Application::closeAllPopups() {
 void Application::openSettingsFile() {
     std::string settingsPath = SettingsManager::instance().path();
     if (!settingsPath.empty() && fs::exists(settingsPath)) openFile(settingsPath);
+}
+
+// Settings: the documented defaults on the left (regenerated every time, edits are discarded), the user's file on the right.
+void Application::openSettingsSplit() {
+    std::string user = SettingsManager::instance().path();
+    if (user.empty() || !fs::exists(user)) return;
+    fs::path defaults = fs::path(paths_.cacheDir) / "Preferences (Default).sublime-settings";
+    std::error_code ec;
+    fs::create_directories(defaults.parent_path(), ec);
+    {
+        std::ofstream out(defaults, std::ios::binary);
+        out << "// Moreno Text default settings. Edits here are discarded.\n"
+               "// Copy a setting into your user settings (right) to change it.\n{\n"
+               "\t\"font_face\": \"Consolas\",\n\t\"font_size\": 12,\n\t\"font_bold\": false,\n\t\"sidebar_font_size\": 11,\n\t\"tab_font_size\": 12,\n"
+               "\t\"tab_size\": 2,\n\t\"translate_tabs_to_spaces\": true,\n\t\"auto_indent\": true,\n\t\"word_wrap\": false,\n\t\"wrap_width\": 0,\n"
+               "\t\"line_numbers\": true,\n\t\"highlight_line\": true,\n\t\"match_brackets\": true,\n\t\"match_tags\": true,\n\t\"match_selection\": true,\n"
+               "\t\"auto_match_enabled\": true,\n\t\"scroll_past_end\": true,\n\t\"draw_white_space\": \"selection\",\n"
+               "\t\"minimap_visible\": true,\n\t\"sidebar_visible\": false,\n"
+               "\t\"hot_exit\": true,\n\t\"remember_open_files\": true,\n\t\"save_on_focus_lost\": false,\n"
+               "\t\"trim_trailing_white_space_on_save\": false,\n\t\"ensure_newline_at_eof_on_save\": false,\n"
+               "\t\"default_encoding\": \"UTF-8\",\n\t\"fallback_encoding\": \"Western (Windows 1252)\",\n\t\"default_line_ending\": \"system\",\n"
+               "\t\"spell_check\": false,\n\t\"dictionary\": \"\",\n"
+               "\t\"color_scheme\": \"\",\n\t\"theme\": \"Default.sublime-theme\"\n}\n";
+    }
+    setLayoutColumns(2);
+    focusGroup(0);
+    openFile(defaults.string());
+    focusGroup(1);
+    openFile(user);
 }
 
 void Application::openKeyBindingsFile() {
@@ -4003,6 +4107,12 @@ void Application::handleEvents() {
                         std::string path = goto_.data[goto_.selected];
                         goto_.active = false;
                         applyColorScheme(path);
+                        continue;
+                    }
+                    if (gotoMode_ == UiThemes && goto_.selected < (int)goto_.data.size()) {
+                        std::string value = goto_.data[goto_.selected];
+                        goto_.active = false;
+                        setUiTheme(value);
                         continue;
                     }
                     if (gotoMode_ == Builds && goto_.selected < (int)goto_.data.size()) {
