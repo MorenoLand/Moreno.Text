@@ -100,6 +100,72 @@ int Application::runSelfTest(const std::string& resultPath) {
     transposeCharacters();
     expect("transpose", "ba");
 
+    // Line commands work on selected blocks and on every caret.
+    fresh("a\nb\nc", 2);
+    swapLineUp();
+    expect("swap line up", "b\na\nc");
+    swapLineDown();
+    expect("swap line down", "a\nb\nc");
+    fresh("a\nb\nc", 4);
+    swapLineUp();
+    expect("swap last line up keeps its newline", "a\nc\nb");
+    fresh("a\nb\nc\nd", 0);
+    selections_[0] = SelRange(0, 3);
+    swapLineDown();
+    expect("swap a two-line block down", "c\na\nb\nd");
+    fresh("ab\ncd", 1);
+    duplicateLine();
+    expect("duplicate line", "ab\nab\ncd");
+    fresh("hello", 0);
+    selections_[0] = SelRange(1, 3);
+    duplicateLine();
+    expect("duplicate selection", "helello");
+    fresh("a\nb\nc\nd", 0);
+    selections_[0] = SelRange(0, 0); selections_.emplace_back(4);
+    deleteLine();
+    expect("delete line at two carets", "b\nd");
+    fresh("a\nb\nc", 4);
+    deleteLine();
+    expect("delete last line takes the newline before it", "a\nb");
+    fresh("a\nb\nc\nd", 0);
+    selections_[0] = SelRange(0, 5);
+    deleteLine();
+    expect("delete every line of a selection", "d");
+    fresh("a\n   b\nc", 0);
+    joinLines();
+    expect("join lines", "a b\nc");
+    fresh("a\nb\nc\nd", 0);
+    selections_[0] = SelRange(0, 5);
+    joinLines();
+    expect("join a selection of lines", "a b c\nd");
+
+    autoPair_ = true; autoIndent_ = true;
+    fresh("don", 3);
+    handleAutoPair("'");
+    expect("an apostrophe after a word does not pair", "don'");
+    fresh("", 0);
+    handleAutoPair("(");
+    expect("an opening bracket pairs", "()");
+    {
+        int savedTab = tabSize_; bool savedTabs = useTabs_;
+        tabSize_ = 4; useTabs_ = false;
+        fresh("{\n    ", 6);
+        handleAutoPair("}");
+        expect("a closing bracket dedents its line", "{\n}");
+        tabSize_ = savedTab; useTabs_ = savedTabs;
+    }
+    fresh("a\n  \nb", 4);
+    insertNewline();
+    expect("Enter on a whitespace-only line empties it", "a\n\n  \nb");
+
+    fresh("<div><p>hi</p></div>", 8);
+    expandSelectionToTag();
+    check("expand to tag: contents", selections_[0].min() == 8 && selections_[0].max() == 10, std::to_string(selections_[0].min()) + "-" + std::to_string(selections_[0].max()));
+    expandSelectionToTag();
+    check("expand to tag: whole element", selections_[0].min() == 5 && selections_[0].max() == 14, std::to_string(selections_[0].min()) + "-" + std::to_string(selections_[0].max()));
+    expandSelectionToTag();
+    check("expand to tag: parent element", selections_[0].min() == 0 && selections_[0].max() == 20);
+
     fresh("a\nb\nc", 0);
     foldByLevel(1);
     unfoldAll();

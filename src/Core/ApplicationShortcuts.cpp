@@ -14,6 +14,9 @@ bool Application::handleCommandShortcut(SDL_Keycode sym, Uint16 mod) {
     if ((mod & KMOD_ALT) && shift && sym == SDLK_w) { wrapSelectionWithTag(); return true; }
     if ((mod & KMOD_ALT) && shift && sym == SDLK_p) { openRecentProjectPicker(); return true; }
     if ((mod & KMOD_ALT) && shift && sym >= SDLK_1 && sym <= SDLK_4) { setLayoutColumns(static_cast<size_t>(sym - SDLK_1 + 1)); return true; }
+    if ((mod & KMOD_ALT) && shift && !ctrl && sym == SDLK_5) { setLayoutGrid(2, 2); return true; }
+    if ((mod & KMOD_ALT) && shift && !ctrl && sym == SDLK_8) { setLayoutGrid(1, 2); return true; }
+    if ((mod & KMOD_ALT) && shift && !ctrl && sym == SDLK_9) { setLayoutGrid(1, 3); return true; }
     if (ctrl && shift && !(mod & KMOD_ALT) && sym >= SDLK_1 && sym <= SDLK_4) { moveFileToGroup(static_cast<size_t>(sym - SDLK_1)); return true; }
     if (ctrl && !shift && !(mod & KMOD_ALT) && sym >= SDLK_1 && sym <= SDLK_4) { focusGroup(static_cast<size_t>(sym - SDLK_1)); return true; }
     if (selections_.size() > 1 && !ctrl && !(mod & KMOD_ALT) && (sym == SDLK_LEFT || sym == SDLK_RIGHT || sym == SDLK_UP || sym == SDLK_DOWN || sym == SDLK_HOME || sym == SDLK_END) && !acActive_) { moveAllCursors(sym, shift); return true; }
@@ -38,6 +41,8 @@ bool Application::handleCommandShortcut(SDL_Keycode sym, Uint16 mod) {
     if ((mod & KMOD_ALT) && !ctrl && !shift && sym == SDLK_o) { switchHeaderImplementation(); return true; }
     if (ctrl && !shift && sym == SDLK_e) { useSelectionForFind(); return true; }
     if (ctrl && shift && sym == SDLK_e) { useSelectionForReplace(); return true; }
+    if (ctrl && shift && sym == SDLK_PAGEDOWN) { moveActiveTab(1); return true; }
+    if (ctrl && shift && sym == SDLK_PAGEUP) { moveActiveTab(-1); return true; }
     if (ctrl && sym == SDLK_PAGEDOWN) { nextTab(); return true; }
     if (ctrl && sym == SDLK_PAGEUP) { previousTab(); return true; }
     if (ctrl && sym == SDLK_TAB) { { if (shift) previousTab(); else nextTab(); } return true; }
@@ -48,10 +53,17 @@ bool Application::handleCommandShortcut(SDL_Keycode sym, Uint16 mod) {
     if (ctrl && !shift && sym == SDLK_m) { jumpToMatchingBracket(); return true; }
     if (ctrl && !shift && sym == SDLK_SPACE) { showCompletions(); return true; }
     if (ctrl && sym == SDLK_d) { expandSelectionToWord(); return true; }
+    if (ctrl && !(mod & KMOD_ALT) && sym == SDLK_i) { commandFind(); return true; }   // the find panel already matches as you type
+    if (ctrl && !shift && !(mod & KMOD_ALT) && sym == SDLK_j) { joinLines(); return true; }
+    if (ctrl && !shift && sym == SDLK_INSERT) { copySelectionOrLine(); return true; }
+    if (shift && !ctrl && sym == SDLK_INSERT) { pasteClipboard(false); return true; }
+    if (shift && !ctrl && sym == SDLK_DELETE && selections_.size() == 1) { cutSelectionOrLine(); return true; }
+    if (ctrl && shift && !(mod & KMOD_ALT) && sym == SDLK_z) { doRedo(); return true; }
     if (ctrl && shift && sym == SDLK_l) { splitSelectionIntoLines(); return true; }
     if (ctrl && sym == SDLK_l) { expandSelectionToLine(); return true; }
     if (ctrl && shift && sym == SDLK_m) { expandSelectionToBrackets(); return true; }
     if (ctrl && shift && sym == SDLK_SPACE) { expandSelectionToScope(); return true; }
+    if (ctrl && shift && !(mod & KMOD_ALT) && sym == SDLK_a) { expandSelectionToTag(); return true; }
     if (ctrl && shift && sym == SDLK_f) { commandFindInFiles(); return true; }
     if (ctrl && shift && sym == SDLK_n) { newWindow(); return true; }
     if (ctrl && shift && sym == SDLK_RETURN) { insertLineBefore(); return true; }

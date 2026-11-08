@@ -1,4 +1,4 @@
-#include "Core/Application.h"
+﻿#include "Core/Application.h"
 #include "Renderer/FontAtlas.h"
 #include "Renderer/GLRenderer.h"
 #include "UI/Titlebar.h"
@@ -96,6 +96,77 @@ static size_t nextUtf8Boundary(std::string_view text, size_t i) {
     else if (c >= 0xE0) step = 3;
     else if (c >= 0xC0) step = 2;
     return std::min(text.size(), i + step);
+}
+
+static size_t prevUtf8(std::string_view text, size_t i) {
+    if (i == 0) return 0;
+    --i;
+    while (i > 0 && (static_cast<unsigned char>(text[i]) & 0xC0) == 0x80) --i;
+    return i;
+}
+
+static bool isWordByte(char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_' || static_cast<unsigned char>(c) >= 0x80; }
+static bool isBlankByte(char c) { return c == ' ' || c == '\t'; }
+
+static size_t textWordRight(std::string_view t, size_t pos) {
+    size_t n = t.size();
+    while (pos < n && isBlankByte(t[pos])) ++pos;
+    if (pos >= n) return n;
+    if (t[pos] == '\r' || t[pos] == '\n') { if (t[pos] == '\r' && pos + 1 < n && t[pos + 1] == '\n') ++pos; return pos + 1; }
+    bool word = isWordByte(t[pos]);
+    while (pos < n && !isBlankByte(t[pos]) && t[pos] != '\n' && t[pos] != '\r' && isWordByte(t[pos]) == word) ++pos;
+    return pos;
+}
+
+static size_t textWordLeft(std::string_view t, size_t pos) {
+    while (pos > 0 && isBlankByte(t[pos - 1])) --pos;
+    if (pos == 0) return 0;
+    if (t[pos - 1] == '\n' || t[pos - 1] == '\r') { --pos; if (t[pos] == '\n' && pos > 0 && t[pos - 1] == '\r') --pos; return pos; }
+    bool word = isWordByte(t[pos - 1]);
+    while (pos > 0 && !isBlankByte(t[pos - 1]) && t[pos - 1] != '\n' && t[pos - 1] != '\r' && isWordByte(t[pos - 1]) == word) --pos;
+    return pos;
+}
+
+static size_t subwordRight(std::string_view t, size_t pos) {
+    size_t n = t.size();
+    auto up = [&](size_t i) { return std::isupper(static_cast<unsigned char>(t[i])) != 0; };
+    auto lo = [&](size_t i) { return std::islower(static_cast<unsigned char>(t[i])) != 0; };
+    auto dg = [&](size_t i) { return std::isdigit(static_cast<unsigned char>(t[i])) != 0; };
+    while (pos < n && isBlankByte(t[pos])) ++pos;
+    if (pos >= n) return n;
+    if (t[pos] == '\r' || t[pos] == '\n') return textWordRight(t, pos);
+    if (!isWordByte(t[pos])) return textWordRight(t, pos);
+    while (pos < n && t[pos] == '_') ++pos;
+    if (pos >= n) return n;
+    if (up(pos)) {
+        size_t j = pos;
+        while (j < n && up(j)) ++j;
+        if (j - pos > 1) { if (j < n && lo(j)) --j; }
+        else while (j < n && lo(j)) ++j;
+        return j;
+    }
+    size_t j = pos;
+    if (lo(pos)) while (j < n && lo(j)) ++j;
+    else if (dg(pos)) while (j < n && dg(j)) ++j;
+    else while (j < n && isWordByte(t[j]) && !up(j) && t[j] != '_') ++j;
+    return std::max(j, pos + 1);
+}
+
+static size_t subwordLeft(std::string_view t, size_t pos) {
+    auto up = [&](size_t i) { return std::isupper(static_cast<unsigned char>(t[i])) != 0; };
+    auto lo = [&](size_t i) { return std::islower(static_cast<unsigned char>(t[i])) != 0; };
+    auto dg = [&](size_t i) { return std::isdigit(static_cast<unsigned char>(t[i])) != 0; };
+    while (pos > 0 && isBlankByte(t[pos - 1])) --pos;
+    if (pos == 0) return 0;
+    if (!isWordByte(t[pos - 1]) || t[pos - 1] == '\n') return textWordLeft(t, pos);
+    while (pos > 0 && t[pos - 1] == '_') --pos;
+    if (pos == 0) return 0;
+    size_t j = pos;
+    if (lo(j - 1)) { while (j > 0 && lo(j - 1)) --j; if (j > 0 && up(j - 1)) --j; }
+    else if (up(j - 1)) { while (j > 0 && up(j - 1)) --j; }
+    else if (dg(j - 1)) { while (j > 0 && dg(j - 1)) --j; }
+    else while (j > 0 && isWordByte(t[j - 1]) && t[j - 1] != '_' && !up(j - 1) && !lo(j - 1) && !dg(j - 1)) --j;
+    return std::min(j, pos - 1);
 }
 
 static size_t byteOffsetForRenderedX(FontAtlas& font, std::string_view line, float x) {
@@ -474,7 +545,7 @@ int Application::run(int argc, char** argv) {
         }
         static int frames = 0;
         if (frames < 3) startupTick("frame start");
-        handleEvents(); pollOpenRequests(); update(); render();
+        handleEvents(); pollOpenRequests(); autoScrollSelectionDrag(); update(); render();
         if (showWindowPending_ && window_) { SDL_ShowWindow(window_); showWindowPending_ = false; }  // shown once the first frame is drawn, so it never appears blank
         if (frames < 3) { startupTick("frame done"); ++frames; }
         if (pluginHostStartPending_) {
@@ -582,6 +653,7 @@ bool Application::init(int argc, char** argv) {
         }
         settings.save();
         tabSize_ = settings.get<int>("tab_size", 2);
+        sidebarWidth_ = static_cast<float>(std::clamp(settings.get<int>("sidebar_width", 200), 120, 1600));
         fontSize_ = std::clamp(settings.get<int>("font_size", 16), 8, 48);
         sidebarFontSize_ = std::clamp(settings.get<int>("sidebar_font_size", std::max(7, fontSize_ - 1)), 7, 44);
         tabFontSize_ = std::clamp(settings.get<int>("tab_font_size", 12), 7, 32);
@@ -596,6 +668,7 @@ bool Application::init(int argc, char** argv) {
         autoIndent_ = settings.get<bool>("auto_indent", true);
         matchBrackets_ = settings.get<bool>("match_brackets", true);
         matchTags_ = settings.get<bool>("match_tags", true);
+        loadCaretSettings();
         matchSelection_ = settings.get<bool>("match_selection", true);
     }
     // load color scheme
@@ -1134,13 +1207,20 @@ std::string Application::selectedTextOrLine() const {
     return textBuffer.substr(ls, le - ls);
 }
 
+bool Application::anySelection() const {
+    for (auto& s : selections_) if (s.hasSelection()) return true;
+    return false;
+}
+
 void Application::copySelectionOrLine() {
+    if (!copyEmpty_ && !anySelection()) return;
     std::string text = selectedTextOrLine();
     if (!text.empty()) { SDL_SetClipboardText(text.c_str()); rememberClipboardText(text); }
 }
 
 void Application::cutSelectionOrLine() {
     if (binaryView_) return;
+    if (!copyEmpty_ && !anySelection()) return;
     copySelectionOrLine();
     if (selections_.size() > 1) { bool any = false; for (auto& s : selections_) any = any || s.hasSelection(); if (any) { deleteMulti(false); return; } }
     pushUndo();
@@ -1206,15 +1286,87 @@ void Application::ensureCursorVisible() {
     computeMaxLineWidth();
     float hScrollbarH = (!wordWrap_ && editorW > 0.f && maxLineWidth_ > editorW) ? 12.f : 0.f;
     float visibleBottom = (float)wh - sbH - findPanelH - hScrollbarH;
+    if (!wordWrap_ && editorW > 0.f) {
+        size_t ls = lineStartForLine(curLine), cur = std::min(selections_[0].cursor, textBuffer.size());
+        float cx = cur > ls ? fontAtlas().measureText(std::string_view(textBuffer.data() + ls, cur - ls)) : 0.f;
+        float pad = 24.f;
+        if (cx < scrollX_ + pad) scrollX_ = std::max(0.f, cx - pad * 3.f);
+        else if (cx > scrollX_ + editorW - pad) scrollX_ = cx - editorW + pad * 3.f;
+        float maxScrollX = std::max(0.f, maxLineWidth_ - editorW);
+        if (scrollX_ > maxScrollX) scrollX_ = maxScrollX;
+        if (scrollX_ < 0.f) scrollX_ = 0.f;
+    }
     float cursorY = textOriginY + curLine * lineStep - scrollY_;
-    if (cursorY < textOriginY) scrollY_ -= (textOriginY - cursorY);
-    else if (cursorY + lineStep > visibleBottom) scrollY_ += (cursorY + lineStep - visibleBottom);
+    float ctxPad = std::min((float)scrollContextLines_ * lineStep, std::max(0.f, (visibleBottom - textOriginY) / 2.f - lineStep));
+    if (cursorY - ctxPad < textOriginY) scrollY_ -= (textOriginY - (cursorY - ctxPad));
+    else if (cursorY + lineStep + ctxPad > visibleBottom) scrollY_ += (cursorY + lineStep + ctxPad - visibleBottom);
     float viewH = std::max(1.f, visibleBottom - textOriginY);
     float contentH = (float)totalLines() * lineStep;
     float scrollPad = scrollPastEnd_ ? lineStep * 5.f : 0.f;
     float maxScroll = contentH + scrollPad > viewH ? contentH + scrollPad - viewH : 0.f;
     if (scrollY_ > maxScroll) scrollY_ = maxScroll;
     if (scrollY_ < 0) scrollY_ = 0;
+}
+
+void Application::loadCaretSettings() {
+    auto& settings = SettingsManager::instance();
+    caretStyle_ = settings.get<std::string>("caret_style", "smooth");
+    caretWide_ = settings.get<bool>("wide_caret", false);
+    caretBlock_ = settings.get<bool>("block_caret", false);
+    caretBlinkMs_ = std::clamp(settings.get<int>("caret_blink_interval", 500), 50, 5000);
+    hidePointerTyping_ = settings.get<bool>("hide_pointer_while_typing", false);
+    selBorder_ = settings.get<bool>("selection_border", false);
+    copyEmpty_ = settings.get<bool>("copy_with_empty_selection", true);
+    moveToLimit_ = settings.get<bool>("move_to_limit_on_up_down", false);
+    relNums_ = settings.get<bool>("relative_line_numbers", false);
+    scrollContextLines_ = std::clamp(settings.get<int>("scroll_context_lines", 0), 0, 50);
+}
+
+// Dragging a selection past the edge of the text keeps scrolling, even while the mouse is held still.
+void Application::autoScrollSelectionDrag() {
+    if (!selecting_ || boxSelActive_ || binaryView_ || selections_.empty()) return;
+    int ww, wh; SDL_GetWindowSize(window_, &ww, &wh);
+    float top = titlebar_->height() + tabBarH_, bottom = (float)wh - statusbar_->height();
+    float left = (sidebarVisible_ ? sidebarWidth_ : 0.f) + gutter_->width() + 8.f, right = (float)ww - (minimapVisible_ ? minimap_->width() : 10.f);
+    float mx = (float)mouseX_, my = (float)mouseY_;
+    float dy = my < top ? my - top : (my > bottom ? my - bottom : 0.f);
+    float dx = mx < left ? mx - left : (mx > right ? mx - right : 0.f);
+    if (dy == 0.f && dx == 0.f) return;
+    float lineStep = fontAtlas().lineHeight();
+    float maxY = std::max(0.f, (float)totalLines() * lineStep - (bottom - top) + (scrollPastEnd_ ? lineStep * 5.f : 0.f));
+    scrollY_ = std::clamp(scrollY_ + dy * 0.25f, 0.f, maxY);
+    if (!wordWrap_) {
+        computeMaxLineWidth();
+        scrollX_ = std::clamp(scrollX_ + dx * 0.25f, 0.f, std::max(0.f, maxLineWidth_ - (right - left)));
+    }
+    size_t pos = textPosAtMouse(std::clamp(mx, left, right - 1.f), std::clamp(my, top, bottom - 1.f));
+    if (clickUnit_ == 1) selections_[0].cursor = pos;
+    else if (pos < clickLo_) { selections_[0].anchor = clickHi_; selections_[0].cursor = pos; }
+    else { selections_[0].anchor = clickLo_; selections_[0].cursor = std::max(pos, clickHi_); }
+}
+
+void Application::moveActiveTab(int delta) {
+    if (activeTab_ >= tabs_.size()) return;
+    long target = (long)activeTab_ + delta;
+    if (target < 0 || target >= (long)tabs_.size()) return;
+    size_t a = activeTab_, b = (size_t)target;
+    std::swap(tabs_[a], tabs_[b]);
+    for (auto& g : editorGroups_) { if (g.tab == a) g.tab = b; else if (g.tab == b) g.tab = a; }
+    selectedTabs_.clear();
+    activeTab_ = b;
+    tabScrollEnsured_ = (size_t)-1;   // scroll the strip to the tab's new place
+}
+
+size_t Application::textPosAtMouse(float mx, float my) {
+    int ww, wh; SDL_GetWindowSize(window_, &ww, &wh);
+    float tbH = titlebar_->height() + tabBarH_;
+    float textX = (sidebarVisible_ ? sidebarWidth_ : 0.f) + gutter_->width() + 8.f;
+    float lineStep = fontAtlas().lineHeight();
+    float clickY = my + scrollY_ - (tbH + fontAtlas().ascent() + 5.0f);
+    size_t line = clickY > 0.f ? (size_t)std::floor(clickY / lineStep) : 0;
+    if (line >= totalLines()) line = totalLines() - 1;
+    size_t ls = lineStartForLine(line), le = lineEnd(ls);
+    return ls + byteOffsetForRenderedX(fontAtlas(), std::string_view(textBuffer.data() + ls, le - ls), mx - textX + scrollX_);
 }
 
 void Application::findAllMatches() {
@@ -1726,16 +1878,15 @@ void Application::drawSidebar(FontAtlas& font, float windowH, float titlebarH, f
     float viewH = windowH - statusbarH - titlebarH - 26.f - hScrollH;
     float maxScroll = std::max(0.f, sidebarContentH_ - viewH);
     if (sidebarScrollY_ > maxScroll) sidebarScrollY_ = maxScroll;
-    addSolidRect(v, 0.f, titlebarH, sidebarWidth_ - 1.f, titlebarH + 20.f, UIC(0.095f, 0.105f, 0.125f), 1.f);
-    addSolidRect(v, 0.f, titlebarH + 19.f, sidebarWidth_ - 1.f, titlebarH + 20.f, UIC(0.17f, 0.19f, 0.22f), 1.f);
-    textDraws.push_back({"FOLDERS", 10.f, titlebarH + 3.f, sidebarScale, 0.78f, 0.80f, 0.84f});
+    // Flat like Sublime's side bar: a dim FOLDERS label, no header band, no bar under the root folder
+    textDraws.push_back({"FOLDERS", 12.f, titlebarH + 4.f, sidebarScale * 0.82f, 0.46f, 0.48f, 0.52f});
+    auto rowAt = [&](float rowY) { return !sidebarResizing_ && mouseX_ >= 0 && mouseX_ < sidebarWidth_ - 1.f && mouseY_ >= rowY - 3.f && mouseY_ < rowY + rowH - 3.f; };
     auto drawRootHeader = [&](SidebarNode& rt) {
         if (!rt.name.empty() && y + rowH >= titlebarH + 20.f && y <= windowH - statusbarH) {
-            addSolidRect(v, 0.f, y - 3.f, sidebarWidth_ - 1.f, y + rowH - 3.f, UIC(0.14f, 0.155f, 0.18f), 1.f);
-            addSolidRect(v, 0.f, y + rowH - 4.f, sidebarWidth_ - 1.f, y + rowH - 3.f, UIC(0.20f, 0.22f, 0.26f), 1.f);
+            if (rowAt(y)) addSolidRect(v, 0.f, y - 3.f, sidebarWidth_ - 1.f, y + rowH - 3.f, UIC(0.13f, 0.145f, 0.17f), 1.f);
             addDisclosure(8.f - sidebarScrollX_, y, rt.expanded);
             addFolderIcon(20.f - sidebarScrollX_, y);
-            textDraws.push_back({rt.name, 38.f - sidebarScrollX_, y + 4.f, sidebarScale, 0.88f, 0.88f, 0.91f});
+            textDraws.push_back({rt.name, 38.f - sidebarScrollX_, y + 4.f, sidebarScale, 0.93f, 0.93f, 0.95f});
         }
         y += rowH;
     };
@@ -1746,10 +1897,8 @@ void Application::drawSidebar(FontAtlas& font, float windowH, float titlebarH, f
             if (visible) {
                 float x = 8.f + node.depth * 14.f - sidebarScrollX_;
                 bool active = !node.folder && !openFilePath_.empty() && fs::absolute(node.path).string() == fs::absolute(openFilePath_).string();
-                if (active) {
-                    addSolidRect(v, 0.f, rowY - 3.f, sidebarWidth_ - 1.f, rowY + rowH - 3.f, UIC(0.18f, 0.22f, 0.31f), 1.f);
-                    addSolidRect(v, 0.f, rowY - 3.f, 3.f, rowY + rowH - 3.f, 0.35f, 0.58f, 0.88f, 1.f);
-                }
+                if (active) addSolidRect(v, 0.f, rowY - 3.f, sidebarWidth_ - 1.f, rowY + rowH - 3.f, UIC(0.18f, 0.20f, 0.25f), 1.f);
+                else if (rowAt(rowY)) addSolidRect(v, 0.f, rowY - 3.f, sidebarWidth_ - 1.f, rowY + rowH - 3.f, UIC(0.13f, 0.145f, 0.17f), 1.f);
                 float ir = 0.48f, ig = 0.52f, ib = 0.56f;
                 std::string ext = node.extension;
                 int iconKind = 0;
@@ -1774,16 +1923,9 @@ void Application::drawSidebar(FontAtlas& font, float windowH, float titlebarH, f
                     addFolderIcon(x + 12.f, rowY);
                     labelX = x + 29.f;
                 } else {
-                    float glyphX = x + 12.f;
-                    if (!node.name.empty() && node.name[0] == '.') {
-                        addFileIcon(glyphX, rowY, ir, ig, ib, 0);
-                        labelX = glyphX + 15.f;
-                    } else {
-                        const char* glyph = iconKind == 0 ? "*" : iconKind == 1 ? "#" : iconKind == 2 ? "</>" : iconKind == 3 ? "*" : iconKind == 4 ? "{}" : "/*";
-                        float glyphScale = (iconKind == 0 || iconKind == 3) ? sidebarScale * 1.55f : iconKind == 2 ? sidebarScale * 1.1f : sidebarScale * 1.25f;
-                        textDraws.push_back({glyph, glyphX, rowY, glyphScale, ir, ig, ib});
-                        labelX = glyphX + font.measureText(glyph) * glyphScale + 5.f;
-                    }
+                    float glyphX = x + 12.f;   // drawn page icons, not text glyphs, so every row lines up
+                    addFileIcon(glyphX, rowY, ir, ig, ib, (!node.name.empty() && node.name[0] == '.') ? 0 : iconKind);
+                    labelX = glyphX + 17.f;
                 }
                 float b = active ? 0.94f : 0.73f;
                 float nr = b, ng = b, nb = b + 0.03f;
@@ -1807,8 +1949,8 @@ void Application::drawSidebar(FontAtlas& font, float windowH, float titlebarH, f
         float thumbY = titlebarH + (sidebarScrollY_ / maxScroll) * (viewH - thumbH);
         float trackLeft = sidebarWidth_ - 8.f;
         float thumbX = trackLeft + 2.f;
-        addSolidRect(v, trackLeft, titlebarH, sidebarWidth_ - 1.f, titlebarH + viewH, UIC(0.105f, 0.105f, 0.125f), 1.f);
-        addSolidRect(v, thumbX, thumbY, thumbX + 4.f, thumbY + thumbH, UIC(0.37f, 0.37f, 0.37f), 1.f);
+        (void)trackLeft;   // no track fill: just a slim thumb, so the divider stays easy to see and grab
+        addSolidRect(v, thumbX + 1.f, thumbY, thumbX + 4.f, thumbY + thumbH, UIC(0.30f, 0.31f, 0.34f), 1.f);
     }
     glEnable(GL_SCISSOR_TEST); GLRenderer::scissor(0, (int)(statusbarH + hScrollH), (int)sidebarWidth_, (int)(windowH - titlebarH - statusbarH - hScrollH));
     if (!v.empty()) {
@@ -1837,7 +1979,7 @@ void Application::drawSidebar(FontAtlas& font, float windowH, float titlebarH, f
 bool Application::handleSidebarEvent(const SDL_Event& e, float windowH, float titlebarH, float statusbarH) {
     if (!sidebarVisible_) return false;
     if (e.type == SDL_MOUSEMOTION) {
-        bool overDivider = std::abs((float)e.motion.x - sidebarWidth_) <= 4.f && e.motion.y >= titlebarH && e.motion.y <= windowH - statusbarH;
+        bool overDivider = (sidebarResizing_ || ((float)e.motion.x >= sidebarWidth_ - 3.f && (float)e.motion.x <= sidebarWidth_ + 5.f)) && e.motion.y >= titlebarH && e.motion.y <= windowH - statusbarH;
         SDL_SetCursor(overDivider && sidebarResizeCursor_ ? sidebarResizeCursor_ : SDL_GetDefaultCursor());
     }
     bool showHScroll = sidebarContentW_ > sidebarWidth_ - 8.f;
@@ -1904,7 +2046,27 @@ bool Application::handleSidebarEvent(const SDL_Event& e, float windowH, float ti
         sidebarHScrollbarDragStartScrollX_ = sidebarScrollX_;
         return true;
     }
-    if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == 1 && sidebarContentH_ > viewH && e.button.x >= sidebarWidth_ - 8 && e.button.x <= sidebarWidth_ && e.button.y >= titlebarH && e.button.y <= windowH - statusbarH) {
+    // The divider wins over the scroll bar thumb that sits beside it, and the grab area is wider than the 1px line
+    if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == 1 && e.button.x >= sidebarWidth_ - 3 && e.button.x <= sidebarWidth_ + 5 && e.button.y >= titlebarH && e.button.y <= windowH - statusbarH) {
+        sidebarResizing_ = true;
+        SDL_CaptureMouse(SDL_TRUE);   // keep getting motion and the release even when the pointer leaves the window
+        return true;
+    }
+    if (e.type == SDL_MOUSEBUTTONUP && e.button.button == 1 && sidebarResizing_) {
+        sidebarResizing_ = false;
+        SDL_CaptureMouse(SDL_FALSE);
+        auto& settings = SettingsManager::instance();
+        settings.set("sidebar_width", static_cast<int>(sidebarWidth_));
+        settings.save();
+        return true;
+    }
+    if (e.type == SDL_MOUSEMOTION && sidebarResizing_) {
+        int winW = 0, winH = 0;
+        SDL_GetWindowSize(window_, &winW, &winH);
+        sidebarWidth_ = std::clamp((float)e.motion.x, 120.f, std::max(420.f, winW * 0.7f));
+        return true;
+    }
+    if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == 1 && sidebarContentH_ > viewH && e.button.x >= sidebarWidth_ - 8 && e.button.x < sidebarWidth_ - 3 && e.button.y >= titlebarH && e.button.y <= windowH - statusbarH) {
         float thumbY = 0.f, thumbH = viewH;
         sidebarThumb(thumbY, thumbH);
         float my = (float)e.button.y;
@@ -1914,13 +2076,6 @@ bool Application::handleSidebarEvent(const SDL_Event& e, float windowH, float ti
             sidebarScrollbarDragStartScrollY_ = sidebarScrollY_;
             return true;
         }
-    }
-    if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == 1 && e.button.x >= sidebarWidth_ - 4 && e.button.x <= sidebarWidth_ + 4 && e.button.y >= titlebarH && e.button.y <= windowH - statusbarH) {
-        sidebarResizing_ = true; return true;
-    }
-    if (e.type == SDL_MOUSEBUTTONUP && e.button.button == 1) { sidebarResizing_ = false; return false; }
-    if (e.type == SDL_MOUSEMOTION && sidebarResizing_) {
-        sidebarWidth_ = std::clamp((float)e.motion.x, 140.f, 420.f); return true;
     }
     if (e.type == SDL_MOUSEMOTION && sidebarContextOpen_) {
         float mx = (float)e.motion.x, my = (float)e.motion.y, itemH = 24.f, popW = 260.f;
@@ -2644,6 +2799,21 @@ void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
     float maxTabScroll = totalTabsW > visibleW ? totalTabsW - visibleW : 0.f;
     if (tabScrollX_ > maxTabScroll) tabScrollX_ = maxTabScroll;
     if (tabScrollX_ < 0.f) tabScrollX_ = 0.f;
+    if (tabScrollEnsured_ != activeTab_ && activeTab_ < tabs_.size()) {   // bring a newly active tab into the strip
+        tabScrollEnsured_ = activeTab_;
+        float off = 0.f, aw = 0.f;
+        for (size_t i = 0; i < tabs_.size(); ++i) {
+            if (tabs_[i].preview) continue;
+            float w = tabWidthForLabel(tabs_[i].fileName.empty() ? "untitled" : tabs_[i].fileName);
+            if (i == activeTab_) { aw = w; break; }
+            off += w;
+        }
+        if (aw > 0.f) {
+            if (off < tabScrollX_) tabScrollX_ = off;
+            else if (off + aw > tabScrollX_ + visibleW) tabScrollX_ = off + aw - visibleW;
+            tabScrollX_ = std::clamp(tabScrollX_, 0.f, maxTabScroll);
+        }
+    }
     float tx = tabAreaX - tabScrollX_;
     struct TabDrawLabel { size_t index; float x; std::string text; };
     std::vector<TabDrawLabel> labels;
@@ -2725,8 +2895,15 @@ void Application::drawTabBar(FontAtlas& font, float windowW, float titlebarH) {
     if (hasOverflow) {
         float leftBright = tabScrollX_ > 0.f ? 0.78f : 0.38f;
         float rightBright = tabScrollX_ < maxTabScroll ? 0.78f : 0.38f;
-        font.drawTextScaled("<", scrollAreaX + 7.f, controlY, tabScale, leftBright, leftBright, leftBright + 0.03f, 1.f);
-        font.drawTextScaled(">", scrollAreaX + scrollBtnW + 7.f, controlY, tabScale, rightBright, rightBright, rightBright + 0.03f, 1.f);
+        float cy = barY + tabBarH_ * 0.5f + 1.f, lcx = scrollAreaX + scrollBtnW * 0.5f, rcx = scrollAreaX + scrollBtnW * 1.5f;
+        solidVerts_.insert(solidVerts_.end(), {
+            lcx + 3.f, cy - 5.f, 0,0, leftBright, leftBright, leftBright + 0.03f, 1.f,
+            lcx + 3.f, cy + 5.f, 0,0, leftBright, leftBright, leftBright + 0.03f, 1.f,
+            lcx - 3.f, cy,       0,0, leftBright, leftBright, leftBright + 0.03f, 1.f,
+            rcx - 3.f, cy - 5.f, 0,0, rightBright, rightBright, rightBright + 0.03f, 1.f,
+            rcx - 3.f, cy + 5.f, 0,0, rightBright, rightBright, rightBright + 0.03f, 1.f,
+            rcx + 3.f, cy,       0,0, rightBright, rightBright, rightBright + 0.03f, 1.f});
+        flushTabSolids();
     }
     bool allFilesHover = mouseX_ >= (int)menuX && mouseX_ < (int)windowW && mouseY_ >= (int)barY && mouseY_ < (int)(barY + tabBarH_);
     ar(menuX + 3.f, barY + 5.f, windowW - 3.f, barY + tabBarH_ - 5.f,
@@ -2794,15 +2971,16 @@ bool Application::handleTabBarEvent(const SDL_Event& e, float windowW, float tit
     constexpr float allFilesW = 28.f;
     float menuX = std::max(tabStripInset, windowW - allFilesW);
     float initialVisibleW = std::max(0.f, menuX - tabStripInset);
-    constexpr float tabTextPadL = 12.f;
-    constexpr float tabActionPadR = 14.f;
+    constexpr float tabTextPadL = 10.f;   // must match drawTabBar, or hit tests drift further off with every tab
+    constexpr float tabActionPadR = 8.f;
     constexpr float tabActionW = 26.f;
-    constexpr float tabTextGap = 10.f;
+    constexpr float tabTextGap = 8.f;
     auto tabWidthForLabel = [&](const std::string& label) {
         return std::max(uiFontAtlas().measureText(label) * tabScale + tabTextPadL + tabTextGap + tabActionW + tabActionPadR, 58.f);
     };
     float totalTabsW = 0.f;
     for (auto& tab : tabs_) {
+        if (tab.preview) continue;
         std::string label = tab.fileName.empty() ? "untitled" : tab.fileName;
         totalTabsW += tabWidthForLabel(label);
     }
@@ -2886,6 +3064,7 @@ bool Application::handleTabBarEvent(const SDL_Event& e, float windowW, float tit
         float localInitialVisibleW = std::max(0.f, localMenuX - tabStripInset);
         float localTotalTabsW = 0.f;
         for (auto& tab : tabs_) {
+            if (tab.preview) continue;
             std::string label = tab.fileName.empty() ? "untitled" : tab.fileName;
             localTotalTabsW += tabWidthForLabel(label);
         }
@@ -2895,6 +3074,7 @@ bool Application::handleTabBarEvent(const SDL_Event& e, float windowW, float tit
             float tx = localTabAreaX - tabScrollX_;
             tabHoverIndex_ = (size_t)-1;
             for (size_t i = 0; i < tabs_.size(); ++i) {
+                if (tabs_[i].preview) continue;
                 std::string label = tabs_[i].fileName.empty() ? "untitled" : tabs_[i].fileName;
                 float tw = tabWidthForLabel(label);
                 if (mx >= tx && mx < tx + tw) { tabHoverIndex_ = i; break; }
@@ -2975,6 +3155,7 @@ bool Application::handleTabBarEvent(const SDL_Event& e, float windowW, float tit
         if (mx < tabAreaX || mx >= menuX) return false;
         float tx = tabAreaX - tabScrollX_;
         for (size_t i = 0; i < tabs_.size(); ++i) {
+            if (tabs_[i].preview) continue;
             std::string label = tabs_[i].fileName.empty() ? "untitled" : tabs_[i].fileName;
             float tw = tabWidthForLabel(label);
             if (mx >= tx && mx < tx + tw) {
@@ -3096,6 +3277,8 @@ static const ExtraPaletteCommand extraPaletteCommands[] = {
     {"Next Result","F4",[](Application& a){ a.nextResult(); }},
     {"Previous Result","Shift+F4",[](Application& a){ a.previousResult(); }},
     {"Expand Selection to Line","Ctrl+L",[](Application& a){ a.expandSelectionToLine(); }},
+    {"Invert Selection","",[](Application& a){ a.invertSelection(); }},
+    {"Expand Selection to Tag","Ctrl+Shift+A",[](Application& a){ a.expandSelectionToTag(); }},
     {"Expand Selection to Brackets","Ctrl+Shift+M",[](Application& a){ a.expandSelectionToBrackets(); }},
     {"Expand Selection to Indentation","",[](Application& a){ a.expandSelectionToIndentation(); }},
     {"Expand Selection to Scope","Ctrl+Shift+Space",[](Application& a){ a.expandSelectionToScope(); }},
@@ -3397,30 +3580,39 @@ void Application::updateGotoResults() {
 void Application::updateAutocomplete() {
     acItems_.clear(); acInsert_.clear(); acActive_ = false;
     if (acPrefix_.size() < 2) return;
-    std::unordered_set<std::string> seen;
-    seen.insert(acPrefix_);
+    std::unordered_map<std::string, size_t> nearest;   // word -> distance of its closest occurrence to the caret
+    size_t caret = std::min(selections_[0].cursor, textBuffer.size());
+    size_t from = caret > 400000 ? caret - 400000 : 0, to = std::min(textBuffer.size(), caret + 400000);   // keeps typing quick in huge files
     std::string word;
-    for (size_t i = 0; i < textBuffer.size(); ++i) {
-        char c = textBuffer[i];
-        if (isalnum(c) || c == '_') word += c;
-        else {
-            if (word.size() >= acPrefix_.size() && word != acPrefix_) {
-                bool match = true;
-                for (size_t j = 0; j < acPrefix_.size() && match; ++j)
-                    if (tolower(word[j]) != tolower(acPrefix_[j])) match = false;
-                if (match && seen.insert(word).second) acItems_.push_back(word);
+    size_t wordStart = from;
+    auto consider = [&]() {
+        if (word.size() >= acPrefix_.size() && word != acPrefix_) {
+            bool match = true;
+            for (size_t j = 0; j < acPrefix_.size() && match; ++j)
+                if (tolower(static_cast<unsigned char>(word[j])) != tolower(static_cast<unsigned char>(acPrefix_[j]))) match = false;
+            if (match && !(wordStart <= caret && caret <= wordStart + word.size())) {   // not the word being typed
+                size_t dist = wordStart > caret ? wordStart - caret : caret - wordStart;
+                auto it = nearest.find(word);
+                if (it == nearest.end()) nearest.emplace(word, dist); else it->second = std::min(it->second, dist);
             }
-            word.clear();
         }
+    };
+    for (size_t i = from; i < to; ++i) {
+        char c = textBuffer[i];
+        if (isalnum(static_cast<unsigned char>(c)) || c == '_') { if (word.empty()) wordStart = i; word += c; }
+        else { consider(); word.clear(); }
     }
-    if (word.size() >= acPrefix_.size() && word != acPrefix_) {
-        bool match = true;
-        for (size_t j = 0; j < acPrefix_.size() && match; ++j)
-            if (tolower(word[j]) != tolower(acPrefix_[j])) match = false;
-        if (match && seen.insert(word).second) acItems_.push_back(word);
-    }
+    consider();
+    std::vector<std::pair<std::string, size_t>> ranked(nearest.begin(), nearest.end());
+    auto caseHit = [&](const std::string& w) { return w.compare(0, acPrefix_.size(), acPrefix_) == 0; };
+    std::sort(ranked.begin(), ranked.end(), [&](const auto& a, const auto& b) {
+        bool ca = caseHit(a.first), cb = caseHit(b.first);
+        if (ca != cb) return ca;                                   // a match in the typed case wins
+        if (a.second != b.second) return a.second < b.second;      // then the one nearest the caret
+        return a.first < b.first;
+    });
+    for (auto& r : ranked) { acItems_.push_back(r.first); if (acItems_.size() >= 10) break; }
     if (!acItems_.empty()) { acActive_ = true; acSelected_ = 0; }
-    if (acItems_.size() > 10) acItems_.resize(10);
     acInsert_.assign(acItems_.size(), std::string());
     requestPluginCompletions();
 }
@@ -3454,69 +3646,162 @@ void Application::acceptAutocomplete() {
 
 // ── line operations ──
 
+namespace {
+
+size_t lineStartOf(const std::string& t, size_t p) {
+    p = std::min(p, t.size());
+    while (p > 0 && t[p - 1] != '\n') --p;
+    return p;
+}
+
+size_t lineEndOf(const std::string& t, size_t p) {
+    p = std::min(p, t.size());
+    while (p < t.size() && t[p] != '\n') ++p;
+    return p;
+}
+
+// The whole lines a selection touches, as a [begin, end) byte range that includes the last line's newline.
+// A selection that stops exactly at the start of a line does not take that line.
+std::pair<size_t, size_t> wholeLines(const std::string& t, const SelRange& s) {
+    size_t a = s.min(), b = s.max();
+    if (b > a && b > 0 && t[b - 1] == '\n') --b;
+    size_t end = lineEndOf(t, b);
+    if (end < t.size()) ++end;
+    return {lineStartOf(t, a), end};
+}
+
+// Moves the lines the first selection covers up or down by swapping them with the neighbouring line.
+void swapLines(std::string& t, SelRange& s, bool up) {
+    size_t a = s.min(), b = s.max();
+    if (b > a && b > 0 && t[b - 1] == '\n') --b;
+    size_t blockStart = lineStartOf(t, a), blockEnd = lineEndOf(t, b);   // blockEnd leaves out the newline
+    long d = 0;
+    if (up) {
+        if (blockStart == 0) return;
+        size_t prevStart = lineStartOf(t, blockStart - 1), prevEnd = blockStart - 1;
+        std::string prev = t.substr(prevStart, prevEnd - prevStart), block = t.substr(blockStart, blockEnd - blockStart);
+        t.replace(prevStart, blockEnd - prevStart, block + "\n" + prev);
+        d = -static_cast<long>(prev.size() + 1);
+    } else {
+        if (blockEnd >= t.size()) return;
+        size_t nextStart = blockEnd + 1, nextEnd = lineEndOf(t, nextStart);
+        std::string next = t.substr(nextStart, nextEnd - nextStart), block = t.substr(blockStart, blockEnd - blockStart);
+        t.replace(blockStart, nextEnd - blockStart, next + "\n" + block);
+        d = static_cast<long>(next.size() + 1);
+    }
+    s.anchor = static_cast<size_t>(static_cast<long>(s.anchor) + d);
+    s.cursor = static_cast<size_t>(static_cast<long>(s.cursor) + d);
+}
+
+}  // namespace
+
 void Application::swapLineUp() {
-    size_t cl = lineOfPos(selections_[0].cursor);
-    if (cl == 0) return;
+    if (binaryView_ || selections_.empty()) return;
     pushUndo();
-    size_t ls = lineStartForLine(cl), le = lineEnd(ls);
-    if (le < textBuffer.size()) ++le;
-    size_t prevLs = lineStartForLine(cl - 1);
-    std::string cur = textBuffer.substr(ls, le - ls);
-    std::string prev = textBuffer.substr(prevLs, ls - prevLs);
-    textBuffer.replace(prevLs, le - prevLs, cur + prev);
-    selections_[0].anchor = selections_[0].cursor = prevLs + (selections_[0].cursor - ls);
-    invalidateLineIndex(); dirty_ = true; syntaxDirty_ = true; indentsDirty_ = true;
+    swapLines(textBuffer, selections_[0], true);
+    invalidateLineIndex(); dirty_ = true; syntaxDirty_ = true; indentsDirty_ = true; ensureCursorVisible();
 }
 
 void Application::swapLineDown() {
-    size_t cl = lineOfPos(selections_[0].cursor);
-    if (cl >= totalLines() - 1) return;
+    if (binaryView_ || selections_.empty()) return;
     pushUndo();
-    size_t ls = lineStartForLine(cl), le = lineEnd(ls);
-    size_t nextLs = le < textBuffer.size() ? le + 1 : le;
-    size_t nextLe = lineEnd(nextLs);
-    if (nextLe < textBuffer.size()) ++nextLe;
-    std::string cur = textBuffer.substr(ls, nextLs - ls);
-    std::string next = textBuffer.substr(nextLs, nextLe - nextLs);
-    textBuffer.replace(ls, nextLe - ls, next + cur);
-    size_t offset = next.size();
-    selections_[0].anchor = selections_[0].cursor = ls + offset + (selections_[0].cursor - ls);
-    invalidateLineIndex(); dirty_ = true; syntaxDirty_ = true; indentsDirty_ = true;
+    swapLines(textBuffer, selections_[0], false);
+    invalidateLineIndex(); dirty_ = true; syntaxDirty_ = true; indentsDirty_ = true; ensureCursorVisible();
 }
 
+// With a selection, copies the selected text right after it and selects the copy; with none, duplicates the line below. Works for every caret.
 void Application::duplicateLine() {
+    if (binaryView_ || selections_.empty()) return;
     pushUndo();
-    size_t cl = lineOfPos(selections_[0].cursor);
-    size_t ls = lineStartForLine(cl), le = lineEnd(ls);
-    std::string line = textBuffer.substr(ls, le - ls);
-    std::string ins = "\n" + line;
-    textBuffer.insert(le, ins);
-    selections_[0].anchor = selections_[0].cursor = le + 1 + (selections_[0].cursor - ls);
-    invalidateLineIndex(); dirty_ = true; syntaxDirty_ = true; indentsDirty_ = true;
+    std::vector<SelRange> sels = selections_;
+    std::sort(sels.begin(), sels.end(), [](const SelRange& a, const SelRange& b) { return a.min() < b.min(); });
+    struct Op { size_t at; std::string text; bool selected; size_t caretOffset; };
+    std::vector<Op> ops;
+    for (auto& s : sels) {
+        if (s.hasSelection()) {
+            std::string txt = textBuffer.substr(s.min(), s.max() - s.min());
+            ops.push_back({s.max(), txt, true, 0});
+        } else {
+            size_t ls = lineStartOf(textBuffer, s.cursor), le = lineEndOf(textBuffer, s.cursor);
+            ops.push_back({le, "\n" + textBuffer.substr(ls, le - ls), false, 1 + (s.cursor - ls)});
+        }
+    }
+    std::vector<SelRange> out;
+    size_t shiftAcc = 0;
+    for (auto& op : ops) {
+        size_t at = op.at + shiftAcc;
+        if (op.selected) out.emplace_back(at, at + op.text.size());
+        else out.emplace_back(at + op.caretOffset);
+        shiftAcc += op.text.size();
+    }
+    for (size_t i = ops.size(); i-- > 0;) textBuffer.insert(ops[i].at, ops[i].text);
+    selections_ = out;
+    invalidateLineIndex(); dirty_ = true; syntaxDirty_ = true; indentsDirty_ = true; maxLineWidthDirty_ = true; ensureCursorVisible();
 }
 
+// Removes every line any caret or selection touches.
 void Application::deleteLine() {
-    if (binaryView_) return;
+    if (binaryView_ || selections_.empty()) return;
     pushUndo();
-    size_t cl = lineOfPos(selections_[0].cursor);
-    size_t ls = lineStartForLine(cl), le = lineEnd(ls);
-    if (le < textBuffer.size()) ++le;
-    textBuffer.erase(ls, le - ls);
-    selections_[0].anchor = selections_[0].cursor = std::min(ls, textBuffer.size());
-    invalidateLineIndex(); dirty_ = true; syntaxDirty_ = true; indentsDirty_ = true;
+    std::vector<std::pair<size_t, size_t>> ranges;
+    for (auto& s : selections_) ranges.push_back(wholeLines(textBuffer, s));
+    std::sort(ranges.begin(), ranges.end());
+    std::vector<std::pair<size_t, size_t>> merged;
+    for (auto& r : ranges) {
+        if (!merged.empty() && r.first <= merged.back().second) merged.back().second = std::max(merged.back().second, r.second);
+        else merged.push_back(r);
+    }
+    for (auto& r : merged) if (r.second >= textBuffer.size() && r.first > 0 && textBuffer.back() != '\n') --r.first;   // the last line takes the newline before it
+    std::vector<SelRange> out;
+    size_t removed = 0;
+    for (auto& r : merged) { out.emplace_back(r.first - removed); removed += r.second - r.first; }
+    for (size_t i = merged.size(); i-- > 0;) textBuffer.erase(merged[i].first, merged[i].second - merged[i].first);
+    for (auto& s : out) s.anchor = s.cursor = std::min(s.cursor, textBuffer.size());
+    selections_ = out;
+    invalidateLineIndex(); dirty_ = true; syntaxDirty_ = true; indentsDirty_ = true; maxLineWidthDirty_ = true; ensureCursorVisible();
 }
 
+// Joins each caret's line with the next one, or all the lines a selection spans, separated by a single space.
 void Application::joinLines() {
-    size_t cl = lineOfPos(selections_[0].cursor);
-    if (cl >= totalLines() - 1) return;
+    if (binaryView_ || selections_.empty()) return;
+    std::vector<SelRange> sels = selections_;
+    std::sort(sels.begin(), sels.end(), [](const SelRange& a, const SelRange& b) { return a.min() < b.min(); });
+    struct Job { size_t first, last; };   // the stretch from the end of the first line to the end of the last line
+    std::vector<Job> jobs;
+    for (auto& s : sels) {
+        size_t first = lineEndOf(textBuffer, s.min()), last = lineEndOf(textBuffer, s.max());
+        if (first >= textBuffer.size()) continue;
+        if (last == first) last = lineEndOf(textBuffer, first + 1);
+        if (!jobs.empty() && first <= jobs.back().last) { jobs.back().last = std::max(jobs.back().last, last); continue; }
+        jobs.push_back({first, last});
+    }
+    if (jobs.empty()) return;
     pushUndo();
-    size_t le = lineEnd(selections_[0].cursor);
-    if (le >= textBuffer.size()) return;
-    textBuffer.erase(le, 1);
-    while (le < textBuffer.size() && (textBuffer[le] == ' ' || textBuffer[le] == '\t'))
-        textBuffer.erase(le, 1);
-    textBuffer.insert(le, 1, ' ');
-    invalidateLineIndex(); dirty_ = true; syntaxDirty_ = true; indentsDirty_ = true;
+    std::vector<std::string> joinedText;
+    std::vector<size_t> joinPoint;
+    for (auto& j : jobs) {
+        std::string region = textBuffer.substr(j.first, j.last - j.first), joined;
+        size_t i = 0, at = 0; bool seen = false;
+        while (i < region.size()) {
+            if (region[i] != '\n') { joined += region[i++]; continue; }
+            size_t k = i + 1;
+            while (k < region.size() && (region[k] == ' ' || region[k] == '\t' || region[k] == '\r')) ++k;
+            while (!joined.empty() && (joined.back() == ' ' || joined.back() == '\t' || joined.back() == '\r')) joined.pop_back();
+            if (!seen) { at = joined.size(); seen = true; }
+            if (k < region.size() && region[k] != '\n') joined += ' ';
+            i = k;
+        }
+        joinedText.push_back(joined); joinPoint.push_back(at);
+    }
+    std::vector<SelRange> out;
+    long shiftAcc = 0;
+    for (size_t n = 0; n < jobs.size(); ++n) {
+        out.emplace_back(static_cast<size_t>(static_cast<long>(jobs[n].first + joinPoint[n]) + shiftAcc));
+        shiftAcc += static_cast<long>(joinedText[n].size()) - static_cast<long>(jobs[n].last - jobs[n].first);
+    }
+    for (size_t n = jobs.size(); n-- > 0;) textBuffer.replace(jobs[n].first, jobs[n].last - jobs[n].first, joinedText[n]);
+    selections_ = out;
+    invalidateLineIndex(); dirty_ = true; syntaxDirty_ = true; indentsDirty_ = true; maxLineWidthDirty_ = true; ensureCursorVisible();
 }
 
 // ── comment toggle ──
@@ -3644,7 +3929,7 @@ void Application::convertCaseSwap() {
 // ── auto pair ──
 
 void Application::handleAutoPair(const char* text) {
-    if (!autoPair_ || text[1] != 0) { insertText(text); return; }
+    if (!autoPair_ || text[1] != 0 || selections_.size() > 1) { insertText(text); return; }
     char c = text[0];
     auto& sel = selections_[0];
     static const struct { char open, close; } pairs[] = {{'(',')'},{'[',']'},{'{','}'},{'"','"'},{'\'','\''}};
@@ -3653,6 +3938,26 @@ void Application::handleAutoPair(const char* text) {
     if (!close && (c == ')' || c == ']' || c == '}') && !sel.hasSelection() && sel.cursor < textBuffer.size() && textBuffer[sel.cursor] == c) {
         sel.anchor = sel.cursor = sel.cursor + 1;
         return;
+    }
+    if (!close && (c == ')' || c == ']' || c == '}') && autoIndent_ && !sel.hasSelection() && !binaryView_) {
+        // A closing bracket typed on an indented, otherwise empty line steps that line back one indent level.
+        size_t ls = lineStart(sel.cursor), le = lineEnd(sel.cursor), p = sel.cursor;
+        bool blankBefore = p > ls, blankAfter = true;
+        for (size_t i = ls; i < p; ++i) if (textBuffer[i] != ' ' && textBuffer[i] != '\t') { blankBefore = false; break; }
+        for (size_t i = p; i < le; ++i) if (textBuffer[i] != ' ' && textBuffer[i] != '\t') { blankAfter = false; break; }
+        if (blankBefore && blankAfter) {
+            size_t cut = 0;
+            if (textBuffer[p - 1] == '\t') cut = 1;
+            else { size_t spaces = 0; while (spaces < p - ls && textBuffer[p - 1 - spaces] == ' ') ++spaces; cut = std::min<size_t>(spaces, (size_t)std::max(1, tabSize_)); }
+            if (cut) {
+                pushUndo();
+                textBuffer.erase(p - cut, cut);
+                invalidateLineIndex();
+                sel.anchor = sel.cursor = p - cut;
+                dirty_ = true; syntaxDirty_ = true; indentsDirty_ = true; maxLineWidthDirty_ = true;
+            }
+        }
+        insertText(text); return;
     }
     if (!close) { insertText(text); return; }
     if (sel.hasSelection()) {
@@ -3668,6 +3973,10 @@ void Application::handleAutoPair(const char* text) {
         sel.anchor = sel.cursor = sel.cursor + 1;
         return;
     }
+    auto wordByte = [](char ch) { return std::isalnum(static_cast<unsigned char>(ch)) || ch == '_' || static_cast<unsigned char>(ch) >= 0x80; };
+    bool wordAfter = sel.cursor < textBuffer.size() && wordByte(textBuffer[sel.cursor]);
+    bool wordBefore = sel.cursor > 0 && wordByte(textBuffer[sel.cursor - 1]);
+    if (wordAfter || (c == close && wordBefore) || (c == '\'' && wordBefore) || (c == '"' && sel.cursor > 0 && textBuffer[sel.cursor - 1] == c)) { insertText(text); return; }   // don't, 5", "" + "
     std::string ins; ins += c; ins += close;
     insertText(ins);
     selections_[0].anchor = selections_[0].cursor = selections_[0].cursor - 1;
@@ -3890,7 +4199,11 @@ void Application::handleEvents() {
                 continue;
             }
         }
-        if (e.type == SDL_TEXTINPUT) cursorLastInputTicks_ = SDL_GetTicks();
+        if (e.type == SDL_TEXTINPUT) {
+            cursorLastInputTicks_ = SDL_GetTicks();
+            if (hidePointerTyping_ && !pointerHidden_) { SDL_ShowCursor(SDL_DISABLE); pointerHidden_ = true; }
+        }
+        if (pointerHidden_ && (e.type == SDL_MOUSEMOTION || e.type == SDL_MOUSEBUTTONDOWN)) { SDL_ShowCursor(SDL_ENABLE); pointerHidden_ = false; }
         if (inputDrag_ && e.type == SDL_MOUSEMOTION) {   // dragging inside an input box extends its selection
             auto measure = [&](const std::string& s) { return fontAtlas().measureText(s); };
             float x = (float)e.motion.x - inputDragX_;
@@ -4558,6 +4871,62 @@ void Application::handleEvents() {
                 continue;
             }
         }
+        if (editorContextOpen_ && (e.type == SDL_MOUSEMOTION || e.type == SDL_MOUSEBUTTONDOWN)) {
+            float mx = e.type == SDL_MOUSEMOTION ? (float)e.motion.x : (float)e.button.x;
+            float my = e.type == SDL_MOUSEMOTION ? (float)e.motion.y : (float)e.button.y;
+            float itemH = 24.f, popW = 260.f, popH = 4.f + editorContextItems_.size() * itemH;
+            bool inside = mx >= editorContextX_ && mx <= editorContextX_ + popW && my >= editorContextY_ && my <= editorContextY_ + popH;
+            int idx = inside ? (int)((my - editorContextY_ - 2.f) / itemH) : -1;
+            if (idx >= (int)editorContextItems_.size() || (idx >= 0 && editorContextItems_[idx].separator)) idx = -1;
+            if (e.type == SDL_MOUSEMOTION) { editorContextHover_ = idx; continue; }
+            editorContextOpen_ = false;
+            if (idx >= 0) {
+                switch (editorContextItems_[idx].action) {
+                    case 0: cutSelectionOrLine(); break;
+                    case 1: copySelectionOrLine(); break;
+                    case 2: pasteClipboard(false); break;
+                    case 3: commandSelectAll(); break;
+                    case 4: gotoDefinition(); break;
+                    case 5: toggleLineComment(); break;
+                    case 6: reindent(); break;
+                }
+            }
+            continue;
+        }
+        if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == 3 && !commandPalette_.active && !goto_.active) {
+            float tbH = titlebar_->height() + tabBarH_, sbH = statusbar_->height();
+            float sbOff = sidebarVisible_ ? sidebarWidth_ : 0.f;
+            float gutterW = sbOff + gutter_->width(), textX = gutterW + 8.f;
+            float mx = (float)e.button.x, my = (float)e.button.y;
+            if (my > tbH && my < wh - sbH && mx >= gutterW) {
+                float lineStep = fontAtlas().lineHeight();
+                float clickY = my + scrollY_ - (tbH + fontAtlas().ascent() + 5.0f);
+                size_t clickLine = clickY > 0.f ? (size_t)std::floor(clickY / lineStep) : 0;
+                if (clickLine >= totalLines()) clickLine = totalLines() - 1;
+                size_t ls = lineStartForLine(clickLine), le = lineEnd(ls);
+                size_t pos = ls + byteOffsetForRenderedX(fontAtlas(), std::string_view(textBuffer.data() + ls, le - ls), mx - textX + scrollX_);
+                bool inSel = false;
+                for (auto& s : selections_) if (s.hasSelection() && pos >= s.min() && pos <= s.max()) inSel = true;
+                if (!inSel) { selections_.clear(); selections_.emplace_back(pos); }
+                editorContextItems_.clear();
+                editorContextItems_.push_back({"Cut", 0});
+                editorContextItems_.push_back({"Copy", 1});
+                editorContextItems_.push_back({"Paste", 2});
+                editorContextItems_.push_back({"", -1, true});
+                editorContextItems_.push_back({"Select All", 3});
+                editorContextItems_.push_back({"", -1, true});
+                editorContextItems_.push_back({"Go to Definition", 4});
+                editorContextItems_.push_back({"Toggle Comment", 5});
+                editorContextItems_.push_back({"Reindent Lines", 6});
+                float popH = 4.f + editorContextItems_.size() * 24.f;
+                editorContextX_ = std::min(mx, (float)ww - 262.f);
+                editorContextY_ = std::min(my, (float)wh - popH - 2.f);
+                editorContextHover_ = -1;
+                editorContextOpen_ = true;
+                tabDropdownOpen_ = false; tabContextOpen_ = false; sidebarContextOpen_ = false; statusPopup_ = StatusPopup::None; acActive_ = false;
+                continue;
+            }
+        }
         if (handleSidebarEvent(e, (float)wh, titlebar_->height() + tabBarH_, statusbar_->height())) continue;
         if (e.type == SDL_WINDOWEVENT && (e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED || e.window.event == SDL_WINDOWEVENT_RESIZED)) {
             SDL_GetWindowSize(window_, &ww, &wh); resizeRendererForWindow(window_); titlebar_->layout(ww); render();
@@ -4614,7 +4983,9 @@ void Application::handleEvents() {
             float editorRight = mmX - (!drawMinimap ? 10.f : 0.f);
             bool overText = e.motion.x >= (int)editorLeft && e.motion.x < (int)editorRight && e.motion.y >= (int)tbH && e.motion.y < wh - (int)(sbH + findPanelH);
             bool overlayActive = pluginQuickPanel_.active || pluginInputPanel_.active || commandPalette_.active || goto_.active || (acActive_ && !acItems_.empty());
-            SDL_SetCursor(!overlayActive && overText && textCursor_ ? textCursor_ : SDL_GetDefaultCursor());
+            bool onBars = scrollbarDragging_ || horizontalScrollbarDragging_ || minimapDragging_ || scrollbarHovered_ ||
+                (!wordWrap_ && e.motion.y >= wh - (int)(sbH + findPanelH) - 12 && e.motion.y < wh - (int)(sbH + findPanelH) && maxLineWidth_ > editorRight - editorLeft);
+            SDL_SetCursor(!overlayActive && overText && !onBars && textCursor_ ? textCursor_ : SDL_GetDefaultCursor());
             float editorW = editorRight - editorLeft;
             computeMaxLineWidth();
             float maxScrollX = (!wordWrap_ && editorW > 0.f) ? std::max(0.f, maxLineWidth_ - editorW) : 0.f;
@@ -4645,6 +5016,10 @@ void Application::handleEvents() {
                 float scale = minimapH > vpH ? maxScroll / (minimapH - vpH) : 0.f;
                 scrollY_ = minimapDragStartScrollY_ + ((float)e.motion.y - minimapDragStartY_) * scale;
                 clampScroll();
+                continue;
+            }
+            if (dragTextPending_) {
+                if (std::abs(e.motion.x - dragStartX_) + std::abs(e.motion.y - dragStartY_) > 4) dragTextActive_ = true;
                 continue;
             }
             if (selecting_) {
@@ -4689,7 +5064,18 @@ void Application::handleEvents() {
                 size_t ls = lineStartForLine(clickLine), le = lineEnd(ls);
                 std::string_view lt(textBuffer.data() + ls, le - ls);
                 size_t col = byteOffsetForRenderedX(fontAtlas(), lt, (float)e.motion.x - textX + scrollX_);
-                selections_[0].cursor = ls + col;
+                size_t pos = ls + col;
+                if (clickUnit_ == 1) selections_[0].cursor = pos;
+                else {
+                    size_t a = pos, b = pos;
+                    if (clickUnit_ == 2) {
+                        auto wc = [](char c) { return std::isalnum((unsigned char)c) || c == '_'; };
+                        while (a > ls && wc(textBuffer[a - 1])) --a;
+                        while (b < le && wc(textBuffer[b])) ++b;
+                    } else { a = ls; b = le < textBuffer.size() ? le + 1 : le; }
+                    if (pos < clickLo_) { selections_[0].anchor = clickHi_; selections_[0].cursor = a; }
+                    else { selections_[0].anchor = clickLo_; selections_[0].cursor = std::max(b, clickHi_); }
+                }
                 ensureCursorVisible();
                 continue;
             }
@@ -4705,6 +5091,11 @@ void Application::handleEvents() {
             }
         }
         else if (e.type == SDL_MOUSEWHEEL) {
+            if (tabsVisible_ && mouseY_ >= (int)titlebar_->height() && mouseY_ < (int)(titlebar_->height() + tabBarH_)) {
+                float d = e.wheel.x != 0 ? (float)e.wheel.x : -(float)e.wheel.y;
+                tabScrollX_ = std::max(0.f, tabScrollX_ + d * 60.f);   // the upper end is clamped when the bar is drawn
+                continue;
+            }
             if (statusPopup_ == StatusPopup::Syntax) {
                 popupScroll_ -= e.wheel.y;
                 int maxScroll = std::max(0, syntaxLangCount - 18);
@@ -4954,6 +5345,13 @@ void Application::handleEvents() {
                 std::string_view lt(textBuffer.data() + ls, le - ls);
                 size_t col = byteOffsetForRenderedX(fontAtlas(), lt, mx - textX + scrollX_);
                 size_t clickPos = ls + col;
+                if (e.button.clicks == 1 && !(mod & (KMOD_CTRL | KMOD_ALT | KMOD_SHIFT)) && selections_.size() == 1 && selections_[0].hasSelection() &&
+                    clickPos > selections_[0].min() && clickPos < selections_[0].max() && !binaryView_) {
+                    dragTextPending_ = true; dragTextActive_ = false;
+                    dragSelA_ = selections_[0].min(); dragSelB_ = selections_[0].max();
+                    dragStartX_ = (int)mx; dragStartY_ = (int)my;
+                    continue;
+                }
                 if (mod & KMOD_CTRL) { selections_.emplace_back(clickPos); }
                 else if (mod & KMOD_ALT) {
                     boxSelActive_ = true;
@@ -4965,6 +5363,19 @@ void Application::handleEvents() {
                 else if (mod & KMOD_SHIFT) selections_[0].cursor = clickPos;
                 else { selections_.clear(); selections_.emplace_back(clickPos); }
                 if (e.button.clicks >= 2 && !(mod & (KMOD_CTRL | KMOD_ALT | KMOD_SHIFT)) && openFindResultAtCursor()) { selecting_ = false; continue; }
+                clickUnit_ = 1;
+                if (e.button.clicks >= 2 && !(mod & (KMOD_ALT | KMOD_SHIFT))) {
+                    auto& s = selections_.back();
+                    size_t a = clickPos, b = clickPos;
+                    if (e.button.clicks == 2) {
+                        auto wc = [](char c) { return std::isalnum((unsigned char)c) || c == '_'; };
+                        while (a > ls && wc(textBuffer[a - 1])) --a;
+                        while (b < le && wc(textBuffer[b])) ++b;
+                        clickUnit_ = 2;
+                    } else { a = ls; b = le < textBuffer.size() ? le + 1 : le; clickUnit_ = 3; }
+                    s.anchor = a; s.cursor = b;
+                    clickLo_ = a; clickHi_ = b;
+                }
                 selecting_ = true;
                 acActive_ = false;
                 desiredCursorX_ = -1.f;
@@ -4984,6 +5395,30 @@ void Application::handleEvents() {
                 if (rel < 0.f) rel = 0.f;
                 if (rel > 1.f) rel = 1.f;
                 scrollY_ = rel * maxScroll;
+            }
+            if (dragTextPending_) {
+                size_t pos = textPosAtMouse((float)e.button.x, (float)e.button.y);
+                size_t a = dragSelA_, b = dragSelB_;
+                bool copy = (SDL_GetModState() & KMOD_CTRL) != 0;
+                dragTextPending_ = false;
+                if (dragTextActive_ && (pos < a || pos > b) && b <= textBuffer.size()) {
+                    std::string moved = textBuffer.substr(a, b - a);
+                    pushUndo();
+                    size_t np = pos;
+                    if (!copy) {
+                        selections_.clear(); selections_.emplace_back(a, b);
+                        deleteSelection();
+                        if (pos > b) np = pos - (b - a);
+                    }
+                    selections_.clear(); selections_.emplace_back(np);
+                    insertText(moved);
+                    selections_[0].anchor = np; selections_[0].cursor = np + moved.size();
+                    ensureCursorVisible();
+                } else {
+                    selections_.clear(); selections_.emplace_back(pos);
+                }
+                dragTextActive_ = false;
+                continue;
             }
             selecting_ = false;
             boxSelActive_ = false;
@@ -5142,6 +5577,13 @@ void Application::handleEvents() {
                     size_t pos = sel.cursor; auto it = textBuffer.begin() + pos; --it;
                     while (it != textBuffer.begin() && (*it & 0xC0) == 0x80) --it;
                     size_t ds = it - textBuffer.begin();
+                    if (!useTabs_ && tabSize_ > 1 && textBuffer[ds] == ' ') {   // inside leading spaces, back up to the previous tab stop
+                        size_t ls = lineStart(pos), col = pos - ls;
+                        bool leading = true;
+                        for (size_t i = ls; i < pos; ++i) if (textBuffer[i] != ' ') { leading = false; break; }
+                        size_t step = col % (size_t)tabSize_;
+                        if (leading && col > 1) { if (step == 0) step = (size_t)tabSize_; ds = pos - std::min(step, col); }
+                    }
                     // auto-pair backspace
                     if (autoPair_ && pos < textBuffer.size()) {
                         char prev = textBuffer[ds], next = textBuffer[pos];
@@ -5178,23 +5620,23 @@ void Application::handleEvents() {
                 else pressTab(shift);
             }
             else if (sym == SDLK_LEFT) {
-                if (ctrl) {
-                    size_t pos = sel.cursor;
-                    if (pos > 0) { --pos; while (pos > 0 && (textBuffer[pos] == ' ' || textBuffer[pos] == '\t')) --pos;
-                        while (pos > 0 && (isalnum(textBuffer[pos-1]) || textBuffer[pos-1] == '_')) --pos; }
+                if (ctrl || (mod & KMOD_ALT)) {
+                    size_t pos = (mod & KMOD_ALT) && !ctrl ? subwordLeft(textBuffer, sel.cursor) : textWordLeft(textBuffer, sel.cursor);
                     if (shift) sel.cursor = pos; else sel.anchor = sel.cursor = pos;
-                } else { if (sel.cursor > 0) { if (shift) sel.cursor--; else sel.anchor = sel.cursor = sel.cursor - 1; } desiredCursorX_ = -1.f; }
+                } else if (!shift && sel.hasSelection()) { sel.anchor = sel.cursor = sel.min(); desiredCursorX_ = -1.f; }
+                else { if (sel.cursor > 0) { size_t p = prevUtf8(textBuffer, sel.cursor); if (shift) sel.cursor = p; else sel.anchor = sel.cursor = p; } desiredCursorX_ = -1.f; }
             }
             else if (sym == SDLK_RIGHT) {
-                if (ctrl) {
-                    size_t pos = sel.cursor;
-                    while (pos < textBuffer.size() && (textBuffer[pos] == ' ' || textBuffer[pos] == '\t')) ++pos;
-                    while (pos < textBuffer.size() && (isalnum(textBuffer[pos]) || textBuffer[pos] == '_')) ++pos;
+                if (ctrl || (mod & KMOD_ALT)) {
+                    size_t pos = (mod & KMOD_ALT) && !ctrl ? subwordRight(textBuffer, sel.cursor) : textWordRight(textBuffer, sel.cursor);
                     if (shift) sel.cursor = pos; else sel.anchor = sel.cursor = pos;
-                } else { if (sel.cursor < textBuffer.size()) { if (shift) sel.cursor++; else sel.anchor = sel.cursor = sel.cursor + 1; } desiredCursorX_ = -1.f; }
+                } else if (!shift && sel.hasSelection()) { sel.anchor = sel.cursor = sel.max(); desiredCursorX_ = -1.f; }
+                else { if (sel.cursor < textBuffer.size()) { size_t p = nextUtf8Boundary(textBuffer, sel.cursor); if (shift) sel.cursor = p; else sel.anchor = sel.cursor = p; } desiredCursorX_ = -1.f; }
             }
+            else if (sym == SDLK_INSERT && !ctrl && !shift) { overwrite_ = !overwrite_; }
             else if (sym == SDLK_UP) {
                 if (acActive_) { if (acSelected_ > 0) --acSelected_; }
+                else if (moveToLimit_ && lineOfPos(sel.cursor) == 0) { if (shift) sel.cursor = 0; else sel.anchor = sel.cursor = 0; }
                 else { size_t cl = lineOfPos(sel.cursor); if (cl > 0) {
                     size_t ls = lineStartForLine(cl - 1), le = lineEnd(ls);
                     std::string_view lt(textBuffer.data() + ls, le - ls);
@@ -5211,6 +5653,7 @@ void Application::handleEvents() {
             }
             else if (sym == SDLK_DOWN) {
                 if (acActive_) { if (acSelected_ < (int)acItems_.size() - 1) ++acSelected_; }
+                else if (moveToLimit_ && lineOfPos(sel.cursor) + 1 >= totalLines()) { size_t end = textBuffer.size(); if (shift) sel.cursor = end; else sel.anchor = sel.cursor = end; }
                 else { size_t cl = lineOfPos(sel.cursor); if (cl < totalLines() - 1) {
                     size_t nls = lineStartForLine(cl + 1), le = lineEnd(nls);
                     std::string_view lt(textBuffer.data() + nls, le - nls);
@@ -5257,7 +5700,16 @@ void Application::handleEvents() {
             if (dirty_) { syntaxDirty_ = true; indentsDirty_ = true; maxLineWidthDirty_ = true; }
             ensureCursorVisible();
         }
-        else if (e.type == SDL_TEXTINPUT) { handleAutoPair(e.text.text); }
+        else if (e.type == SDL_TEXTINPUT) {
+            if (overwrite_ && !binaryView_ && selections_.size() == 1 && !selections_[0].hasSelection() &&
+                selections_[0].cursor < textBuffer.size() && textBuffer[selections_[0].cursor] != '\n' && textBuffer[selections_[0].cursor] != '\r') {
+                pushUndo();
+                selections_[0].anchor = selections_[0].cursor;
+                selections_[0].cursor = nextUtf8Boundary(textBuffer, selections_[0].cursor);
+                deleteSelection();
+            }
+            handleAutoPair(e.text.text);
+        }
     }
 }
 
@@ -5698,7 +6150,7 @@ void Application::render() {
     size_t lastRenderLine = lineCount > 0 ? std::min(lineCount - 1, (size_t)((scrollY_ + (fwh - sbH - findPanelH - tbH)) / lineStep) + 3) : 0;
     float firstVisibleY = textOriginY + firstVisibleLine * lineStep - scrollY_;
     bool externalPopupWindow = useExternalPopupWindow();
-    deferPopupDraw_ = externalPopupWindow && (titlebar_->isMenuOpen() || tabDropdownOpen_ || tabContextOpen_ || sidebarContextOpen_ ||
+    deferPopupDraw_ = externalPopupWindow && (titlebar_->isMenuOpen() || tabDropdownOpen_ || tabContextOpen_ || sidebarContextOpen_ || editorContextOpen_ ||
         statusPopup_ != StatusPopup::None ||
         (acActive_ && !acItems_.empty()));
     if (activeTab_ < tabs_.size()) {
@@ -5823,6 +6275,7 @@ void Application::render() {
     auto editorBg = syntax_->backgroundColor();
     addSolid(activePaneLeft, tbH, editorRight, editorBottom, editorBg.r, editorBg.g, editorBg.b, 1.f);
     flushSolid();
+    gutter_->setRelative(relNums_);
     gutter_->draw(fontAtlas(), lineCount, currentLine, firstVisibleLine, activePaneLeft, firstVisibleY, lineStep, fwh - sbH, tbH);
     drawModificationMarkers(gutterRight, textOriginY, lineStep, tbH, editorBottom);
     drawPluginGutterIcons(gutterRight, textOriginY, lineStep, tbH, editorBottom, firstRenderLine, lastRenderLine);
@@ -5870,6 +6323,7 @@ void Application::render() {
         if (lb < firstRenderLine || la > lastRenderLine) continue;
         la = std::max(la, firstRenderLine);
         lb = std::min(lb, lastRenderLine);
+        float prevSx = 0.f, prevEx = 0.f;
         for (size_t ln = la; ln <= lb; ++ln) {
             if (isFolded(ln)) continue;
             size_t ls = lineStartForLine(ln), le = lineEnd(ls);
@@ -5883,6 +6337,16 @@ void Application::render() {
             float sx = drawTextX + fontAtlas().measureText(std::string_view(textBuffer.data() + ls, ss - ls));
             float ex = drawTextX + fontAtlas().measureText(std::string_view(textBuffer.data() + ls, se - ls));
             addSolid(sx, sy, ex, sy + lineStep, accentColor_.r, accentColor_.g, accentColor_.b, 0.35f);
+            if (selBorder_) {
+                auto edge = [&](float x0, float x1, float y) { if (x1 > x0) addSolid(x0, y, x1, y + 1.f, accentColor_.r, accentColor_.g, accentColor_.b, 0.9f); };
+                float ey = sy + lineStep - 1.f;
+                addSolid(sx, sy, sx + 1.f, sy + lineStep, accentColor_.r, accentColor_.g, accentColor_.b, 0.9f);
+                addSolid(ex - 1.f, sy, ex, sy + lineStep, accentColor_.r, accentColor_.g, accentColor_.b, 0.9f);
+                if (ln == la || ln == startLine) edge(sx, ex, sy);
+                else { edge(sx, std::min(ex, prevSx), sy); edge(std::max(sx, prevEx), ex, sy); edge(prevSx, std::min(prevEx, sx), sy); edge(std::max(prevSx, ex), prevEx, sy); }
+                if (ln == endLine) edge(sx, ex, ey);
+                prevSx = sx; prevEx = ex;
+            }
         }
     }
 
@@ -6039,14 +6503,29 @@ void Application::render() {
     }
 
     uint32_t cursorNowMs = SDL_GetTicks();
-    bool cursorVisible = (cursorNowMs - cursorLastInputTicks_ < 1000u) || (((cursorNowMs / 500u) % 2u) == 0u);
+    uint32_t blinkMs = (uint32_t)caretBlinkMs_;
+    float caretAlpha = 1.f;
+    bool cursorVisible = true;
+    if (caretStyle_ == "solid") cursorVisible = true;
+    else if (caretStyle_ == "blink") cursorVisible = (cursorNowMs - cursorLastInputTicks_ < 1000u) || (((cursorNowMs / blinkMs) % 2u) == 0u);
+    else {   // smooth and phase fade in and out; the caret stays solid while typing
+        if (cursorNowMs - cursorLastInputTicks_ >= 1000u) {
+            float phase = (float)(cursorNowMs % (blinkMs * 2u)) / (float)(blinkMs * 2u);
+            caretAlpha = 0.5f + 0.5f * std::cos(phase * 6.2831853f);
+        }
+    }
     if (cursorVisible) for (auto& s : selections_) {
         size_t cl = lineOfPos(s.cursor), ls = lineStartForLine(cl);
         float cx = drawTextX + fontAtlas().measureText(std::string_view(textBuffer.data()+ls, s.cursor-ls));
         float cy = textOriginY + cl * lineStep - scrollY_;
         if (cy + lineStep < tbH || cy > editorBottom) continue;
         float ct = cy, cb = cy + fontAtlas().ascent() - fontAtlas().descent();
-        addSolid(cx, ct, cx + 2.5f, cb, 0.82f, 0.98f, 1.0f, 1.f);
+        float cw = caretWide_ ? 4.f : 2.5f;
+        if (caretBlock_ || overwrite_) {
+            float adv = s.cursor < textBuffer.size() && textBuffer[s.cursor] != '\n' ? (float)fontAtlas().getGlyph((uint8_t)textBuffer[s.cursor]).advance : fontAtlas().measureText(" ");
+            cw = std::max(adv, 4.f);
+            addSolid(cx, ct, cx + cw, cb, 0.82f, 0.98f, 1.0f, 0.55f * caretAlpha);
+        } else addSolid(cx, ct, cx + cw, cb, 0.82f, 0.98f, 1.0f, caretAlpha);
     }
     if (autoScrollActive_) {
         float x = autoScrollAnchorX_, y = autoScrollAnchorY_;
@@ -6127,6 +6606,13 @@ void Application::render() {
         ThemeColor sbFg = ThemeEngine::instance().fgColor(), sbBg = ThemeEngine::instance().bgColor();
         float mixT = scrollbarDragging_ ? 0.45f : (scrollbarHovered_ ? 0.35f : 0.25f);
         ar(thumbX, thumbY, thumbX + thumbW, thumbY + thumbH, sbBg.r + (sbFg.r - sbBg.r) * mixT, sbBg.g + (sbFg.g - sbBg.g) * mixT, sbBg.b + (sbFg.b - sbBg.b) * mixT, 1.f);
+        if (find_.active && !find_.matches.empty() && find_.matches.size() <= 2000 && totalLines() > 0) {
+            float marks = (float)totalLines();
+            for (size_t m : find_.matches) {
+                float my = tbH + ((float)lineOfPos(m) + 0.5f) / marks * viewH;
+                ar(sbX + 1.f, my - 1.f, sbX + scrollbarW - 1.f, my + 1.f, accentColor_.r, accentColor_.g, accentColor_.b, 0.9f);
+            }
+        }
         if (!sv.empty()) { GLRenderer::setDrawMode(2); glBindVertexArray(gl_vao()); glBindBuffer(GL_ARRAY_BUFFER, gl_vbo()); glBufferData(GL_ARRAY_BUFFER, sv.size()*sizeof(float), sv.data(), GL_DYNAMIC_DRAW); glBindTexture(GL_TEXTURE_2D, 0); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(sv.size()/8)); glBindVertexArray(0); GLRenderer::setDrawMode(0); }
     }
     if (horizontalScrollbarVisible) {
@@ -6676,7 +7162,7 @@ void Application::render() {
     }
     bool hasPopup = false;
     float mainX = 0.f, mainY = 0.f, mainW = 0.f, mainH = 0.f;
-    enum class PopupKind { None, Menu, TabDropdown, TabContext, SidebarContext, Status, Autocomplete } popupKind = PopupKind::None;
+    enum class PopupKind { None, Menu, TabDropdown, TabContext, SidebarContext, EditorContext, Status, Autocomplete } popupKind = PopupKind::None;
     if (titlebar_->isMenuOpen()) {
         titlebar_->getMenuPopupBounds(uiFontAtlas(), mainX, mainY, mainW, mainH);
         popupKind = PopupKind::Menu; hasPopup = true;
@@ -6689,6 +7175,10 @@ void Application::render() {
         int itemCount = tabContextIndex_ != activeTab_ ? 14 : 13;
         mainW = tabContextMenuWidth(fontAtlas()); mainH = 4.f + itemCount * 24.f;
         popupKind = PopupKind::TabContext; hasPopup = true;
+    } else if (editorContextOpen_) {
+        mainX = editorContextX_; mainY = editorContextY_;
+        mainW = 260.f; mainH = 4.f + editorContextItems_.size() * 24.f;
+        popupKind = PopupKind::EditorContext; hasPopup = true;
     } else if (sidebarContextOpen_) {
         mainX = sidebarContextX_; mainY = sidebarContextY_;
         mainW = 260.f; mainH = 4.f + sidebarContextItems_.size() * 24.f;
@@ -6766,6 +7256,16 @@ void Application::render() {
             flush(cv);
             for (int i = 0; i < (int)sidebarContextItems_.size(); ++i)
                 if (!sidebarContextItems_[i].separator) fontAtlas().drawText(sidebarContextItems_[i].label, 10.f, 6.f + i * itemH, 0.78f, 0.78f, 0.82f, 1.f);
+        } else if (popupKind == PopupKind::EditorContext) {
+            std::vector<float> cv; float itemH = 24.f;
+            drawRect(cv, 0, 0, mainW, mainH, UIC(0.17f, 0.17f, 0.20f), 0.98f);
+            for (int i = 0; i < (int)editorContextItems_.size(); ++i)
+                if (editorContextItems_[i].separator) drawRect(cv, 8.f, 13.f + i * itemH, mainW - 8.f, 14.f + i * itemH, UIC(0.3f, 0.3f, 0.33f), 1.f);
+            if (editorContextHover_ >= 0 && editorContextHover_ < (int)editorContextItems_.size())
+                drawRect(cv, 2, 2 + editorContextHover_ * itemH, mainW - 2, 2 + (editorContextHover_ + 1) * itemH, UIC(0.25f, 0.30f, 0.45f), 1.f);
+            flush(cv);
+            for (int i = 0; i < (int)editorContextItems_.size(); ++i)
+                if (!editorContextItems_[i].separator) fontAtlas().drawText(editorContextItems_[i].label, 10.f, 6.f + i * itemH, 0.78f, 0.78f, 0.82f, 1.f);
         } else if (popupKind == PopupKind::Status) {
             int itemCount = (statusPopup_ == StatusPopup::Indent) ? 8 : std::min(syntaxLangCount, 18);
             std::vector<float> pv;

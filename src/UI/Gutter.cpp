@@ -48,7 +48,9 @@ void Gutter::draw(FontAtlas& font, size_t totalLines, size_t currentLine,
     for (size_t line = firstVisibleLine; line < totalLines; ++line) {
         if (y - font.ascent() > windowH) break;
         if (y + font.descent() >= titlebarH) {
-            std::string num = std::to_string(line + 1);
+            size_t shown = line + 1;
+            if (relative_ && line != currentLine) shown = line > currentLine ? line - currentLine : currentLine - line;
+            std::string num = std::to_string(shown);
             float numW = font.measureText(num);
             float nx = borderX - padding_ - numW;
             bool isCurrent = (line == currentLine);

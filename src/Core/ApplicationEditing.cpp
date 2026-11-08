@@ -310,6 +310,8 @@ void Application::insertNewline() {
     std::string lang = syntax_->languageName();
     for (auto& c : lang) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     bool colonOpens = lang == "python" || lang == "yaml";
+    bool markup = lang.find("html") != std::string::npos || lang.find("xml") != std::string::npos || lang.find("php") != std::string::npos ||
+                  lang.find("vue") != std::string::npos || lang.find("svg") != std::string::npos || lang.find("jsx") != std::string::npos || lang.find("tsx") != std::string::npos;
     std::string unit = useTabs_ ? "\t" : std::string(static_cast<size_t>(tabSize_), ' ');
     std::vector<SelRange> sels = selections_;
     std::sort(sels.begin(), sels.end(), [](const SelRange& a, const SelRange& b) { return a.min() < b.min(); });
@@ -319,6 +321,12 @@ void Application::insertNewline() {
     for (const SelRange& sel : sels) {
         size_t a = static_cast<size_t>(static_cast<long>(sel.min()) + shift), b = static_cast<size_t>(static_cast<long>(sel.max()) + shift);
         size_t ls = lineStart(a);
+        bool blankLine = false;   // Enter on a line holding only whitespace empties that line (trim_automatic_white_space)
+        if (a == b) {
+            size_t le = lineEnd(a), i = ls;
+            while (i < le && (textBuffer[i] == ' ' || textBuffer[i] == '\t')) ++i;
+            blankLine = i == le && le > ls;
+        }
         size_t indentEnd = ls;
         while (indentEnd < a && (textBuffer[indentEnd] == ' ' || textBuffer[indentEnd] == '\t')) ++indentEnd;
         std::string indent = textBuffer.substr(ls, indentEnd - ls);
@@ -327,6 +335,8 @@ void Application::insertNewline() {
         char next = b < textBuffer.size() ? textBuffer[b] : 0;
         bool opener = prev == '{' || prev == '(' || prev == '[' || (colonOpens && prev == ':');
         bool pair = (prev == '{' && next == '}') || (prev == '(' && next == ')') || (prev == '[' && next == ']');
+        if (markup && prev == '>' && next == '<' && b + 1 < textBuffer.size() && textBuffer[b + 1] == '/' && textBuffer[a - 1] != '/') { opener = true; pair = true; }
+        if (blankLine) { b = lineEnd(a); a = ls; }
         std::string text;
         size_t cursorOffset;
         if (opener && pair) { text = "\n" + indent + unit + "\n" + indent; cursorOffset = 1 + indent.size() + unit.size(); }

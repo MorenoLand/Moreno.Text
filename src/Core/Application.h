@@ -213,8 +213,9 @@ public:
     void commandPaste() { pasteClipboard(false); }
     void commandPasteAndIndent() { pasteClipboard(true); }
     void commandSelectAll() { if (!selections_.empty()) { selections_[0].anchor = 0; selections_[0].cursor = textBuffer.size(); } }
-    void commandFind() { findEditorFocus_ = false; findPanelIsInFiles_ = false; find_.active = true; find_.replaceActive = false; find_.query.clear(); find_.matches.clear(); }
-    void commandReplace() { findEditorFocus_ = false; findPanelIsInFiles_ = false; find_.active = true; find_.replaceActive = true; find_.query.clear(); find_.matches.clear(); }
+    void commandFind() { findEditorFocus_ = false; findPanelIsInFiles_ = false; find_.active = true; find_.replaceActive = false; prefillFindQuery(); }
+    void commandReplace() { findEditorFocus_ = false; findPanelIsInFiles_ = false; find_.active = true; find_.replaceActive = true; prefillFindQuery(); }
+    void prefillFindQuery();
     void commandGotoAnything() { promptActive_ = false; goto_.active = true; goto_.query.clear(); goto_.selected = 0; goto_.items.clear(); }
     void commandPalette() { commandPalette_.active = true; commandPalette_.query.clear(); commandPalette_.cursor = commandPalette_.anchor = 0; commandPalette_.selected = 0; commandPalette_.scroll = 0; commandPalette_.hover = -1; updateCommandPalette(); }
     void toggleConsole();
@@ -248,6 +249,8 @@ public:
     void findPrevious();
     void findAllSelect();
     void commandFindInFiles();
+    void invertSelection();
+    void expandSelectionToTag();
     void expandSelectionToLine();
     void expandSelectionToWord();
     void expandSelectionToBrackets();
@@ -466,6 +469,12 @@ private:
     void loadMacro();
     void indexFindResults();
     bool autoIndent_ = true, matchBrackets_ = true, matchTags_ = true, matchSelection_ = true;
+    std::string caretStyle_ = "smooth";
+    bool selBorder_ = false, copyEmpty_ = true, overwrite_ = false, moveToLimit_ = false, relNums_ = false;
+    bool anySelection() const;
+    bool caretWide_ = false, caretBlock_ = false, hidePointerTyping_ = false, pointerHidden_ = false;
+    int caretBlinkMs_ = 500, scrollContextLines_ = 0;
+    void loadCaretSettings();
     std::map<std::string, std::filesystem::file_time_type> knownFileTimes_;
     uint32_t lastExternalPoll_ = 0;
     size_t matchingBracketOf(size_t at) const;
@@ -649,6 +658,14 @@ private:
     uint64_t largeFileWindowEndByte_ = 0;
     std::shared_ptr<FileBackedBuffer> largeFileBuffer_;
     bool selecting_ = false;
+    bool dragTextPending_ = false, dragTextActive_ = false;
+    size_t dragSelA_ = 0, dragSelB_ = 0;
+    int dragStartX_ = 0, dragStartY_ = 0;
+    size_t textPosAtMouse(float mx, float my);
+    void moveActiveTab(int delta);
+    void autoScrollSelectionDrag();
+    int clickUnit_ = 1;
+    size_t clickLo_ = 0, clickHi_ = 0;
     bool minimapDragging_ = false;
     bool minimapPendingJump_ = false;
     float minimapDragStartY_ = 0.f;
@@ -678,6 +695,7 @@ private:
     float autoScrollAnchorX_ = 0.f, autoScrollAnchorY_ = 0.f;
     uint32_t autoScrollLastTick_ = 0;
     float tabScrollX_ = 0.f;
+    size_t tabScrollEnsured_ = (size_t)-1;
     bool tabDropdownOpen_ = false;
     int tabDropdownHover_ = -1;
     bool tabContextOpen_ = false;
@@ -710,6 +728,10 @@ private:
     std::vector<std::string> projectRoots();
     void addFolderToProject(const std::string& path);
     void removeFolderFromProject(const std::string& path);
+    bool editorContextOpen_ = false;
+    int editorContextHover_ = -1;
+    float editorContextX_ = 0.f, editorContextY_ = 0.f;
+    std::vector<SidebarMenuItem> editorContextItems_;
     bool sidebarContextOpen_ = false;
     int sidebarContextHover_ = -1;
     float sidebarContextX_ = 0.f, sidebarContextY_ = 0.f;

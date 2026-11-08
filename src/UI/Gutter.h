@@ -9,7 +9,9 @@ public:
     void draw(FontAtlas& font, size_t totalLines, size_t currentLine,
               size_t firstVisibleLine, float originX, float originY, float lineStep, float windowH, float titlebarH);
     float width() const { return width_; }
+    void setRelative(bool relative) { relative_ = relative; }
 private:
+    bool relative_ = false;
     float width_ = 48.f;
     float padding_ = 8.f;
     static int digitCount(size_t n);

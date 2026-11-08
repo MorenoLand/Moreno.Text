@@ -73,6 +73,16 @@ void Application::quickSkipNext() {
     ensureCursorVisible();
 }
 
+// Opening Find with a one-line selection searches for it; otherwise the previous query stays, selected, ready to retype.
+void Application::prefillFindQuery() {
+    if (!selections_.empty() && selections_.size() == 1 && selections_[0].hasSelection()) {
+        std::string text = textBuffer.substr(selections_[0].min(), selections_[0].max() - selections_[0].min());
+        if (text.find('\n') == std::string::npos && text.size() < 500) find_.query = text;
+    }
+    find_.qAnc = 0; find_.qCur = find_.query.size();
+    findAllMatches();
+}
+
 void Application::useSelectionForFind() {
     std::string text = wordOrSelectionAtCursor();
     if (text.empty()) return;

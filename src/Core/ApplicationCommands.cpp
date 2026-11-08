@@ -176,6 +176,23 @@ void Application::findAllSelect() {
     ensureCursorVisible();
 }
 
+void Application::invertSelection() {
+    std::vector<std::pair<size_t, size_t>> picked;
+    for (auto& s : selections_) if (s.hasSelection()) picked.emplace_back(s.min(), s.max());
+    if (picked.empty()) { selections_.clear(); selections_.emplace_back(0, textBuffer.size()); ensureCursorVisible(); return; }
+    std::sort(picked.begin(), picked.end());
+    std::vector<SelRange> out;
+    size_t at = 0;
+    for (auto& r : picked) {
+        if (r.first > at) out.emplace_back(at, r.first);
+        at = std::max(at, r.second);
+    }
+    if (at < textBuffer.size()) out.emplace_back(at, textBuffer.size());
+    if (out.empty()) return;
+    selections_ = out;
+    ensureCursorVisible();
+}
+
 void Application::expandSelectionToLine() {
     for (auto& sel : selections_) {
         size_t a = lineStart(sel.min()), b = sel.max();

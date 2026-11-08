@@ -106,7 +106,50 @@ bool findTagPair(const std::string& t, size_t cursor, TagAt& here, TagAt& other)
     return false;
 }
 
+// The closing tag that pairs with the opening tag `open`.
+bool findClosing(const std::string& t, const TagAt& open, TagAt& close) {
+    size_t nlen = open.nameEnd - open.nameStart;
+    int depth = 0;
+    size_t end = std::min(t.size(), open.tagEnd + 40000);
+    for (size_t i = open.tagEnd; i < end; ++i) {
+        if (t[i] != '<') continue;
+        if (t.compare(i, 4, "<!--") == 0) { size_t e = t.find("-->", i + 4); if (e == std::string::npos) return false; i = e + 2; continue; }
+        TagAt tag = readTag(t, i);
+        if (!tag.valid || tag.selfClosing || tag.nameEnd - tag.nameStart != nlen || t.compare(tag.nameStart, nlen, t, open.nameStart, nlen) != 0) continue;
+        if (!tag.closing) ++depth;
+        else if (depth-- == 0) { close = tag; return true; }
+    }
+    return false;
+}
+
 }  // namespace
+
+void Application::expandSelectionToTag() {
+    if (selections_.empty() || binaryView_) return;
+    auto& sel = selections_[0];
+    const std::string& t = textBuffer;
+    size_t selMin = sel.min(), selMax = sel.max();
+    std::vector<std::string> pending;   // closing tags passed on the way back that still wait for their opener
+    size_t begin = selMin > 40000 ? selMin - 40000 : 0;
+    for (size_t i = std::min(selMin, t.size()); i-- > begin;) {
+        if (t[i] != '<') continue;
+        TagAt tag = readTag(t, i);
+        if (!tag.valid || tag.selfClosing) continue;
+        std::string name = t.substr(tag.nameStart, tag.nameEnd - tag.nameStart);
+        if (tag.closing) { pending.push_back(name); continue; }
+        if (voidElement(name)) continue;
+        if (!pending.empty() && pending.back() == name) { pending.pop_back(); continue; }
+        TagAt close;
+        if (!findClosing(t, tag, close)) continue;
+        size_t innerA = tag.tagEnd, innerB = close.nameStart - 2, outerA = i, outerB = close.tagEnd;
+        if (innerA > selMin || innerB < selMax) {
+            if (outerA <= selMin && outerB >= selMax && !(outerA == selMin && outerB == selMax)) { sel.anchor = outerA; sel.cursor = outerB; ensureCursorVisible(); return; }
+            continue;
+        }
+        if (!(innerA == selMin && innerB == selMax)) { sel.anchor = innerA; sel.cursor = innerB; ensureCursorVisible(); return; }
+        if (!(outerA == selMin && outerB == selMax)) { sel.anchor = outerA; sel.cursor = outerB; ensureCursorVisible(); return; }
+    }
+}
 
 void Application::drawEditorHighlights(float drawTextX, float textOriginY, float lineStep, float top, float bottom, size_t firstLine, size_t lastLine,
                                        float gutterRight, float editorRight) {

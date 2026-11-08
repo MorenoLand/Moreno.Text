@@ -127,6 +127,7 @@ void Application::registerCommandHandlers() {
     plain("indent", [this] { indentSelection(); });
     plain("unindent", [this] { unindentSelection(); });
     plain("reindent", [this] { reindent(); });
+    plain("invert_selection", [this] { invertSelection(); });
     withArgs("expand_selection", [=](const json& a) {
         std::string to = text(a, "to", "scope");
         if (to == "line") expandSelectionToLine();
