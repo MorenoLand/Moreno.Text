@@ -45,7 +45,7 @@ struct SelRange {
 };
 
 struct UndoStep {
-    std::string text;
+    std::shared_ptr<const std::string> text;
     size_t cursorPos;
     std::chrono::steady_clock::time_point time;
 };
@@ -142,6 +142,7 @@ struct TabBuffer {
     std::vector<SelRange> selections;
     float scrollY = 0.f;
     std::vector<UndoStep> undoStack, redoStack;
+    size_t savedHash = 0;
     std::set<std::pair<int,int>> foldedRegions;
     bool dirty = false;
     bool binaryView = false;
@@ -600,6 +601,11 @@ private:
     void detectSyntax();
     void updateGitBranch();
     void pushUndo();
+    void markSaved();
+    std::string undoStoreFile(const std::string& path) const;
+    void writeUndoStore(const TabBuffer& tab, const std::string& file) const;
+    bool readUndoStore(TabBuffer& tab, const std::string& file) const;
+    void restoreUndoFor(const std::string& path);
     void doUndo();
     void doRedo();
     void doReplace();
@@ -745,6 +751,8 @@ private:
     std::atomic<bool> sidebarWatchRunning_{false};
     std::atomic<bool> sidebarRefreshPending_{false};
     std::vector<UndoStep> undoStack_, redoStack_;
+    bool noSession_ = false;   // self-test runs must not write the session
+    size_t savedHash_ = 0;   // hash of the text as last saved or loaded; undo back to it clears the modified flag
     std::chrono::milliseconds undoWindow_{500};
     FindState find_;
     int findFocus_ = 0;

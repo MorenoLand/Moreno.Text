@@ -532,6 +532,7 @@ int Application::run(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) if (std::string(argv[i]) == "--file-associations") showFileAssociations();   // opens the dialog for installers and scripts
     for (int i = 1; i + 1 < argc; ++i) {
         if (std::string(argv[i]) == "--selftest") {
+            noSession_ = true;
             int code = runSelfTest(argv[i + 1]);
             shutdown();
             return code;
@@ -1014,6 +1015,8 @@ bool Application::loadSession() {
                     tab.selections.emplace_back(cur); tab.selections[0].anchor = anc;
                     if (item.contains("folds") && item["folds"].is_array())
                         for (auto& r : item["folds"]) if (r.is_array() && r.size() == 2) tab.foldedRegions.insert({r[0].get<int>(), r[1].get<int>()});
+                    tab.savedHash = std::hash<std::string>{}(tab.text);
+                    readUndoStore(tab, path.empty() ? (fs::path(paths_.localDir) / "hot" / (hotName + ".undo")).string() : undoStoreFile(path));
                     tabs_.push_back(std::move(tab));
                     if (!path.empty()) rememberRecentFile(path);
                     continue;
@@ -1057,6 +1060,8 @@ bool Application::loadSession() {
             tab.selections[0].anchor = std::min<size_t>(item.value("anchor", cursor), tab.text.size());
             if (item.contains("folds") && item["folds"].is_array())
                 for (auto& r : item["folds"]) if (r.is_array() && r.size() == 2) tab.foldedRegions.insert({r[0].get<int>(), r[1].get<int>()});
+            tab.savedHash = std::hash<std::string>{}(tab.text);
+            if (!tab.binaryView && !tab.largeFileGuarded) readUndoStore(tab, undoStoreFile(path));
             tabs_.push_back(std::move(tab));
             rememberRecentFile(path);
         }
@@ -1074,7 +1079,7 @@ bool Application::loadSession() {
 }
 
 void Application::saveSession(bool keepHot) {
-    if (warmIdle_) return;
+    if (warmIdle_ || noSession_) return;
     saveCurrentTab();
     try {
         fs::create_directories(paths_.localDir);
@@ -1109,6 +1114,10 @@ void Application::saveSession(bool keepHot) {
                 std::string hotName = "tab" + std::to_string(data["tabs"].size()) + ".txt";
                 std::ofstream hf(hotDir / hotName, std::ios::binary);
                 if (hf) { hf << tab.text; item["hot"] = hotName; item["name"] = tab.fileName; }
+            }
+            if (keepHot && plain && !tab.preview) {
+                if (!tab.filePath.empty()) writeUndoStore(tab, undoStoreFile(tab.filePath));
+                else if (item.contains("hot")) writeUndoStore(tab, (hotDir / (item["hot"].get<std::string>() + ".undo")).string());
             }
             if (i == activeTab_) data["active_tab"] = data["tabs"].size();
             data["tabs"].push_back(item);
@@ -1606,13 +1615,14 @@ void Application::openFile(const std::string& path, bool preview) {
     invalidateLineIndex();
     largeFileGuarded_ = tabs_[activeTab_].largeFileGuarded; largeFileSize_ = tabs_[activeTab_].largeFileSize; largeFileTotalLines_ = tabs_[activeTab_].largeFileTotalLines; largeFileWindowFirstLine_ = tabs_[activeTab_].largeFileWindowFirstLine; largeFileWindowStartByte_ = tabs_[activeTab_].largeFileWindowStartByte; largeFileWindowEndByte_ = tabs_[activeTab_].largeFileWindowEndByte; largeFileBuffer_ = tabs_[activeTab_].largeFileBuffer;
     dirty_ = false; binaryView_ = binaryView; selections_.clear(); selections_.emplace_back(0);
-    scrollY_ = 0; scrollX_ = 0; maxLineWidthDirty_ = true; undoStack_.clear(); redoStack_.clear(); foldedRegions_.clear(); detectSyntax(); updateGitBranch();
+    scrollY_ = 0; scrollX_ = 0; maxLineWidthDirty_ = true; undoStack_.clear(); redoStack_.clear(); foldedRegions_.clear(); markSaved(); if (!preview) restoreUndoFor(absPath); detectSyntax(); updateGitBranch();
     if (!preview) { rememberRecentFile(absPath); saveSession(); }
 }
 void Application::saveFile() {
     if (binaryView_) return;
     if (sendPluginViewWindowCommand("save")) {
         dirty_ = false;
+        markSaved();
         if (activeTab_ < tabs_.size()) {
             tabs_[activeTab_].text = textBuffer;
             tabs_[activeTab_].dirty = false;
@@ -1646,6 +1656,7 @@ void Application::saveFile() {
             largeFileWindowEndByte_ = largeFileWindowStartByte_ + static_cast<uint64_t>(textBuffer.size());
         }
         dirty_ = false;
+        markSaved();
         if (activeTab_ < tabs_.size()) {
             tabs_[activeTab_].text = textBuffer;
             tabs_[activeTab_].dirty = false;
@@ -1671,6 +1682,7 @@ void Application::saveFile() {
     firePluginEvent("on_post_save", true);
     if (openFilePath_ == SettingsManager::instance().path()) applyLiveSettings();
     dirty_ = false;
+    markSaved();
     rememberRecentFile(openFilePath_);
     saveSession();
     updateGitBranch();
@@ -1691,7 +1703,7 @@ void Application::saveAll() {
     for (auto& tab : tabs_) {
         if (tab.filePath.empty() || !tab.dirty) continue;
         std::ofstream f(tab.filePath, std::ios::binary);
-        if (f && !tab.largeFileGuarded && !tab.binaryView) { f << encodeForSave(tab.filePath, tab.text); f.close(); noteFileTime(tab.filePath); tab.dirty = false; rememberRecentFile(tab.filePath); }
+        if (f && !tab.largeFileGuarded && !tab.binaryView) { f << encodeForSave(tab.filePath, tab.text); f.close(); noteFileTime(tab.filePath); tab.dirty = false; tab.savedHash = std::hash<std::string>{}(tab.text); rememberRecentFile(tab.filePath); }
     }
     loadTab(activeTab_);
 }
@@ -1699,6 +1711,8 @@ void Application::revertFile() {
     if (openFilePath_.empty()) return;
     std::ifstream f(openFilePath_, std::ios::binary);
     if (!f) return;
+    std::string before = textBuffer;
+    size_t beforeCursor = selections_.empty() ? 0 : selections_[0].cursor;
     uintmax_t fileSize = 0;
     try { fileSize = fs::file_size(openFilePath_); } catch (...) {}
     constexpr uintmax_t guardedLoadLimit = 16ull * 1024ull * 1024ull;
@@ -1720,7 +1734,13 @@ void Application::revertFile() {
     binaryView_ = isBinaryData(textBuffer);
     if (binaryView_) { binaryFileSize_ = textBuffer.size(); binaryLoadedBytes_ = std::min<uintmax_t>(textBuffer.size(), 256ull * 1024ull); textBuffer = binaryHexText(std::string_view(textBuffer).substr(0, static_cast<size_t>(binaryLoadedBytes_))); largeFileGuarded_ = false; largeFileSize_ = 0; largeFileTotalLines_ = 0; largeFileWindowFirstLine_ = 0; largeFileWindowStartByte_ = 0; largeFileWindowEndByte_ = 0; largeFileBuffer_.reset(); }
     else { binaryFileSize_ = 0; binaryLoadedBytes_ = 0; }
-    invalidateLineIndex(); dirty_ = false; maxLineWidthDirty_ = true; syntaxDirty_ = true; indentsDirty_ = true; selections_.clear(); selections_.emplace_back(std::min(selections_.empty() ? 0 : selections_[0].cursor, textBuffer.size()));
+    invalidateLineIndex(); dirty_ = false; maxLineWidthDirty_ = true; syntaxDirty_ = true; indentsDirty_ = true; selections_.clear(); selections_.emplace_back(std::min(beforeCursor, textBuffer.size()));
+    // Reloading is itself an edit: keep the history so it can be undone.
+    if (!binaryView_ && !largeFileGuarded_ && before != textBuffer) {
+        undoStack_.push_back({std::make_shared<const std::string>(std::move(before)), beforeCursor, std::chrono::steady_clock::now() - std::chrono::hours(1)});
+        redoStack_.clear();
+    }
+    markSaved();
 }
 void Application::openFileDialog() {
 #ifdef _WIN32
@@ -1737,7 +1757,7 @@ void Application::newBuffer() {
     TabBuffer tab; tab.fileName = "untitled"; tab.selections.emplace_back(0);
     tabs_.push_back(std::move(tab)); activeTab_ = tabs_.size()-1;
     textBuffer.clear(); invalidateLineIndex(); openFilePath_.clear(); openFile_ = "untitled"; dirty_ = false; binaryView_ = false;
-    selections_.clear(); selections_.emplace_back(0); scrollY_ = 0; scrollX_ = 0; largeFileGuarded_ = false; largeFileSize_ = 0; largeFileTotalLines_ = 0; largeFileWindowFirstLine_ = 0; largeFileWindowStartByte_ = 0; largeFileWindowEndByte_ = 0; largeFileBuffer_.reset(); maxLineWidthDirty_ = true; undoStack_.clear(); redoStack_.clear(); foldedRegions_.clear(); detectSyntax(); saveSession();
+    selections_.clear(); selections_.emplace_back(0); scrollY_ = 0; scrollX_ = 0; largeFileGuarded_ = false; largeFileSize_ = 0; largeFileTotalLines_ = 0; largeFileWindowFirstLine_ = 0; largeFileWindowStartByte_ = 0; largeFileWindowEndByte_ = 0; largeFileBuffer_.reset(); maxLineWidthDirty_ = true; undoStack_.clear(); redoStack_.clear(); foldedRegions_.clear(); markSaved(); detectSyntax(); saveSession();
 }
 
 void Application::toggleFullscreen() {
@@ -2228,12 +2248,16 @@ void Application::pushUndo() {
     auto now = std::chrono::steady_clock::now();
     // Edits made in quick succession share one undo step: keep the snapshot taken before the first of them.
     if (!undoStack_.empty() && (now - undoStack_.back().time) < undoWindow_) { undoStack_.back().time = now; redoStack_.clear(); return; }
-    undoStack_.push_back({textBuffer, selections_[0].cursor, now});
+    undoStack_.push_back({std::make_shared<const std::string>(textBuffer), selections_[0].cursor, now});
     if (undoStack_.size() > 10000) undoStack_.erase(undoStack_.begin());
     redoStack_.clear();
 }
-void Application::doUndo() { if (binaryView_ || undoStack_.empty()) return; redoStack_.push_back({textBuffer, selections_[0].cursor, std::chrono::steady_clock::now()}); textBuffer = undoStack_.back().text; invalidateLineIndex(); selections_.clear(); selections_.emplace_back(undoStack_.back().cursorPos); undoStack_.pop_back(); dirty_ = true; }
-void Application::doRedo() { if (binaryView_ || redoStack_.empty()) return; undoStack_.push_back({textBuffer, selections_[0].cursor, std::chrono::steady_clock::now()}); textBuffer = redoStack_.back().text; invalidateLineIndex(); selections_.clear(); selections_.emplace_back(redoStack_.back().cursorPos); redoStack_.pop_back(); dirty_ = true; }
+void Application::markSaved() {
+    savedHash_ = std::hash<std::string>{}(textBuffer);
+    if (activeTab_ < tabs_.size()) tabs_[activeTab_].savedHash = savedHash_;
+}
+void Application::doUndo() { if (binaryView_ || undoStack_.empty()) return; redoStack_.push_back({std::make_shared<const std::string>(textBuffer), selections_[0].cursor, std::chrono::steady_clock::now()}); textBuffer = *undoStack_.back().text; invalidateLineIndex(); selections_.clear(); selections_.emplace_back(std::min(undoStack_.back().cursorPos, textBuffer.size())); undoStack_.pop_back(); dirty_ = std::hash<std::string>{}(textBuffer) != savedHash_; syntaxDirty_ = true; indentsDirty_ = true; maxLineWidthDirty_ = true; }
+void Application::doRedo() { if (binaryView_ || redoStack_.empty()) return; undoStack_.push_back({std::make_shared<const std::string>(textBuffer), selections_[0].cursor, std::chrono::steady_clock::now()}); textBuffer = *redoStack_.back().text; invalidateLineIndex(); selections_.clear(); selections_.emplace_back(std::min(redoStack_.back().cursorPos, textBuffer.size())); redoStack_.pop_back(); dirty_ = std::hash<std::string>{}(textBuffer) != savedHash_; syntaxDirty_ = true; indentsDirty_ = true; maxLineWidthDirty_ = true; }
 
 // ── folding ──
 
@@ -2490,7 +2514,7 @@ void Application::saveCurrentTab() {
     auto& tab = tabs_[activeTab_];
     tab.text = textBuffer; tab.filePath = openFilePath_; tab.fileName = openFile_;
     tab.selections = selections_; tab.scrollY = scrollY_;
-    tab.undoStack = std::move(undoStack_); tab.redoStack = std::move(redoStack_);
+    tab.undoStack = undoStack_; tab.redoStack = redoStack_; tab.savedHash = savedHash_;  // snapshots are shared, so this copies pointers only
     tab.foldedRegions = foldedRegions_; tab.dirty = dirty_; tab.binaryView = binaryView_; tab.binaryFileSize = binaryFileSize_; tab.binaryLoadedBytes = binaryLoadedBytes_; tab.largeFileGuarded = largeFileGuarded_; tab.largeFileSize = largeFileSize_; tab.largeFileTotalLines = largeFileTotalLines_; tab.largeFileWindowFirstLine = largeFileWindowFirstLine_; tab.largeFileWindowStartByte = largeFileWindowStartByte_; tab.largeFileWindowEndByte = largeFileWindowEndByte_; tab.largeFileBuffer = largeFileBuffer_; tab.desiredCursorX = desiredCursorX_;
     if (activeGroup_ < editorGroups_.size()) editorGroups_[activeGroup_].tab = activeTab_;
 }
@@ -2500,7 +2524,7 @@ void Application::loadTab(size_t index) {
     auto& tab = tabs_[index];
     textBuffer = tab.text; invalidateLineIndex(); openFilePath_ = tab.filePath; openFile_ = tab.fileName;
     selections_ = tab.selections; scrollY_ = tab.scrollY;
-    undoStack_ = std::move(tab.undoStack); redoStack_ = std::move(tab.redoStack);
+    undoStack_ = tab.undoStack; redoStack_ = tab.redoStack; savedHash_ = tab.savedHash;
     foldedRegions_ = tab.foldedRegions; dirty_ = tab.dirty; binaryView_ = tab.binaryView; binaryFileSize_ = tab.binaryFileSize; binaryLoadedBytes_ = tab.binaryLoadedBytes; desiredCursorX_ = tab.desiredCursorX;
     largeFileGuarded_ = tab.largeFileGuarded; largeFileSize_ = tab.largeFileSize; largeFileTotalLines_ = tab.largeFileTotalLines; largeFileWindowFirstLine_ = tab.largeFileWindowFirstLine; largeFileWindowStartByte_ = tab.largeFileWindowStartByte; largeFileWindowEndByte_ = tab.largeFileWindowEndByte; largeFileBuffer_ = tab.largeFileBuffer;
     activeTab_ = index; scrollX_ = 0; maxLineWidthDirty_ = true; detectSyntax(); updateGitBranch();
@@ -2575,6 +2599,9 @@ void Application::closeTabNow(size_t index) {
         firePluginEvent("on_close", eventKey, false);
     }
     if (!pluginTab && !tabs_[index].filePath.empty()) {
+        if (index == activeTab_) saveCurrentTab();
+        const auto& closing = tabs_[index];
+        if (!closing.preview && !closing.binaryView && !closing.largeFileGuarded) writeUndoStore(closing, undoStoreFile(closing.filePath));
         closedTabStack_.push_back(tabs_[index].filePath);
         if (closedTabStack_.size() > 10) closedTabStack_.erase(closedTabStack_.begin());
     }

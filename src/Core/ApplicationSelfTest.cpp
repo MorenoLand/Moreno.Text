@@ -11,6 +11,7 @@
 #include <fstream>
 #include <functional>
 #include <sstream>
+#include <thread>
 
 #ifdef None
 #undef None
@@ -413,6 +414,7 @@ int Application::runSelfTest(const std::string& resultPath) {
         fs::create_directories(dir, ec);
         fs::path file = dir / "r.txt";
         { std::ofstream f(file, std::ios::binary); f << "old"; }
+        fs::remove(undoStoreFile(file.string()), ec);
         openFile(file.string());
         noteFileTime(file.string());
         lastExternalPoll_ = SDL_GetTicks() - 2000;
@@ -420,6 +422,34 @@ int Application::runSelfTest(const std::string& resultPath) {
         fs::last_write_time(file, fs::last_write_time(file) + std::chrono::seconds(5));
         pollExternalChanges();
         expect("a file that changed on disk is reloaded", "new content");
+        selections_.clear(); selections_.emplace_back(textBuffer.size());
+        insertText("X");
+        std::this_thread::sleep_for(std::chrono::milliseconds(600));
+        insertText("Y");
+        saveFile();
+        expect("typing then saving keeps the text", "new contentXY");
+        doUndo();
+        expect("undo after save reverts the last step", "new contentX");
+        check("undoing past the saved text marks the buffer modified", dirty_);
+        doUndo();
+        expect("a second undo after save keeps going", "new content");
+        doRedo(); doRedo();
+        expect("redo after save restores the edits", "new contentXY");
+        check("returning to the saved text clears the modified flag", !dirty_);
+        {
+            saveCurrentTab();
+            const TabBuffer& t = tabs_[activeTab_];
+            std::string store = (dir / "u.undo").string();
+            writeUndoStore(t, store);
+            TabBuffer r; r.text = t.text;
+            check("undo history survives being written and read back", !t.undoStack.empty() && readUndoStore(r, store) && r.undoStack.size() == t.undoStack.size() && r.redoStack.size() == t.redoStack.size() && *r.undoStack.back().text == *t.undoStack.back().text && r.savedHash == t.savedHash);
+            r.text += "!";
+            check("history for text that has changed is ignored", !readUndoStore(r, store));
+        }
+        closeTabNow(activeTab_);
+        openFile(file.string());
+        doUndo();
+        expect("undo history survives closing and reopening the file", "new contentX");
         fs::remove_all(dir, ec);
     }
 
