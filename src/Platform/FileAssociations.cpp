@@ -164,6 +164,8 @@ std::wstring applyExtension(const std::wstring& ext, bool wanted) {
     std::wstring supported = classKey(std::wstring(kAppKey) + L"\\SupportedTypes");
     std::wstring previous = classKey(std::wstring(kProgId) + L"\\PreviousDefaults");
     std::wstring extKey = classKey(dot);
+    // Registering as a handler for a runnable type makes Windows ask which app to use instead of running it.
+    if (wanted && (ext == L"bat" || ext == L"cmd")) return L"." + ext + L" files are run by Windows, so Moreno Text is not registered for them.";
     if (wanted) {
         writeString(classKey(dot + L"\\OpenWithProgids"), kProgId, L"");
         writeString(supported, dot.c_str(), L"");
@@ -196,7 +198,7 @@ void notifyShell() { SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST | SHCNF_FLU
 
 const char* const kDefaultExtensions[] = {
     "txt", "text", "log", "md", "markdown", "ini", "cfg", "conf", "config", "cnf", "properties", "env", "json", "jsonc", "yml", "yaml", "toml", "xml",
-    "csv", "tsv", "sh", "bash", "zsh", "bat", "cmd", "ps1", "psm1", "py", "pyw", "js", "mjs", "cjs", "ts", "tsx", "jsx", "css", "scss", "sass", "less",
+    "csv", "tsv", "sh", "bash", "zsh", "ps1", "psm1", "py", "pyw", "js", "mjs", "cjs", "ts", "tsx", "jsx", "css", "scss", "sass", "less",
     "html", "htm", "c", "h", "cc", "cpp", "cxx", "hpp", "hxx", "cs", "java", "kt", "go", "rs", "rb", "php", "pl", "lua", "sql", "gradle", "cmake",
     "mk", "diff", "patch", "gitignore", "gitattributes", "editorconfig", "sublime-settings", "sublime-keymap", "sublime-commands", "sublime-menu",
     "sublime-syntax", "sublime-color-scheme", "sublime-theme", "tmlanguage", "tmtheme", "vue", "svelte", "swift", "r", "tex", "gd", "gs", "gs2", "gs2json",

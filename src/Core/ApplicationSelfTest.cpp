@@ -166,6 +166,19 @@ int Application::runSelfTest(const std::string& resultPath) {
     expandSelectionToTag();
     check("expand to tag: parent element", selections_[0].min() == 0 && selections_[0].max() == 20);
 
+    fresh("<div\n  a=\"1>\"\n  b=\"2\">x</div>", 8);
+    foldedRegions_.clear();
+    foldTagAttributes();
+    check("fold tag attributes folds the multi-line tag", foldedRegions_.size() == 1 && foldedRegions_.begin()->first == 0 && foldedRegions_.begin()->second == 2);
+    foldTagAttributes();
+    check("fold tag attributes toggles", foldedRegions_.empty());
+
+    fresh("ab\ncd\nef", 0);
+    bookmarks_ = {0, 2};
+    selectAllBookmarks();
+    check("select all bookmarks", selections_.size() == 2 && selections_[1].min() == 6 && selections_[1].max() == 8);
+    bookmarks_.clear();
+
     fresh("a\nb\nc", 0);
     foldByLevel(1);
     unfoldAll();

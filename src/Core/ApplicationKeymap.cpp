@@ -138,6 +138,8 @@ void Application::registerCommandHandlers() {
     plain("expand_selection_to_paragraph", [this] { expandSelectionToIndentation(); });
     plain("find_under_expand_skip", [this] { quickSkipNext(); });
     plain("close_tag", [this] { closeTag(); });
+    plain("fold_tag_attributes", [this] { foldTagAttributes(); });
+    plain("select_all_bookmarks", [this] { selectAllBookmarks(); });
     plain("toggle_record_macro", [this] { toggleMacroRecording(); });
     plain("run_macro", [this] { playMacro(); });
     withArgs("run_macro_file", [=](const json& a) { runMacroFile(text(a, "file", "")); });

@@ -124,6 +124,33 @@ bool findClosing(const std::string& t, const TagAt& open, TagAt& close) {
 
 }  // namespace
 
+// Ctrl+K Ctrl+T: fold the attribute lines of the multi-line tag around the caret.
+void Application::foldTagAttributes() {
+    if (selections_.empty() || binaryView_) return;
+    const std::string& t = textBuffer;
+    size_t pos = std::min(selections_[0].cursor, t.size());
+    size_t open = std::string::npos;
+    for (size_t i = pos; i-- > 0;) {
+        if (t[i] == '>') { if (i + 1 != pos) break; }
+        if (t[i] == '<') { open = i; break; }
+    }
+    if (open == std::string::npos) return;
+    size_t close = open; char quote = 0;
+    for (; close < t.size(); ++close) {
+        char c = t[close];
+        if (quote) { if (c == quote) quote = 0; }
+        else if (c == '"' || c == '\'') quote = c;
+        else if (c == '>') break;
+    }
+    if (close >= t.size()) return;
+    int a = static_cast<int>(lineOfPos(open)), b = static_cast<int>(lineOfPos(close));
+    if (b <= a) return;
+    auto it = std::find_if(foldedRegions_.begin(), foldedRegions_.end(), [a](const auto& r) { return r.first == a; });
+    if (it != foldedRegions_.end()) foldedRegions_.erase(it);
+    else foldedRegions_.insert({a, b});
+    selections_.clear(); selections_.emplace_back(lineEnd(open));
+}
+
 void Application::expandSelectionToTag() {
     if (selections_.empty() || binaryView_) return;
     auto& sel = selections_[0];

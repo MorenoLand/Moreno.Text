@@ -241,7 +241,10 @@ void Application::showCompletions() {
     while (s > 0 && isWordChar(textBuffer[s - 1])) --s;
     acPrefix_ = textBuffer.substr(s, pos - s);
     acPrefixStart_ = s;
+    bool was = autoCompleteOn_;
+    autoCompleteOn_ = true;   // Ctrl+Space asks for completions even when they do not pop up while typing
     updateAutocomplete();
+    autoCompleteOn_ = was;
 }
 
 void Application::setLayoutColumns(size_t columns) {

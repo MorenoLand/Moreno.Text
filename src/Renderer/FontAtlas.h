@@ -37,8 +37,9 @@ public:
     void drawTextScaledClipped(std::string_view text, float x, float y, float scale, float clipLeft, float clipRight, float r, float g, float b, float a);
     float measureText(std::string_view text);
     void resetMeasureCache() const { measureCache_.clear(); }
-    float lineHeight() const { return lineHeight_; }
-    float ascent() const { return ascent_; }
+    float lineHeight() const { return lineHeight_ + linePad_; }
+    float ascent() const { return ascent_ + linePad_ * 0.5f; }
+    void setLinePadding(float p) { linePad_ = p < 0.f ? 0.f : p; }
     float descent() const { return descent_; }
     GLuint atlasTexture() const { return atlasTex_; }
     float backingScale() const { return backingScale_; }
@@ -52,6 +53,7 @@ private:
     std::unordered_map<uint32_t, AtlasGlyph> glyphs_;
     float lineHeight_ = 0;
     float ascent_ = 0;
+    float linePad_ = 0;
     float descent_ = 0;
     GLuint atlasTex_ = 0;
     int atlasW_ = 1024, atlasH_ = 1024;

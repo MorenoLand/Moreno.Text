@@ -241,6 +241,7 @@ public:
     void convertCaseSwap();
     void toggleBookmark();
     void nextBookmark();
+    void selectAllBookmarks();
     void prevBookmark();
     void clearBookmarks();
     void indentSelection();
@@ -405,6 +406,7 @@ public:
     void openPasteHistory();
     void convertIdentifierCase(int style);
     void closeTag();
+    void foldTagAttributes();
     void reindent();
     void shuffleLines();
     void permuteSelections(int mode);
@@ -470,6 +472,9 @@ private:
     void indexFindResults();
     bool autoIndent_ = true, matchBrackets_ = true, matchTags_ = true, matchSelection_ = true;
     std::string caretStyle_ = "smooth";
+    bool fadeFold_ = true, autoCompleteOn_ = true, acPending_ = false;
+    int acDelayMs_ = 0;
+    Uint32 acDueAt_ = 0;
     bool selBorder_ = false, copyEmpty_ = true, overwrite_ = false, moveToLimit_ = false, relNums_ = false;
     bool anySelection() const;
     bool caretWide_ = false, caretBlock_ = false, hidePointerTyping_ = false, pointerHidden_ = false;
@@ -573,7 +578,7 @@ private:
     void saveRecentFiles() const;
     void rememberRecentFile(const std::string& path);
     bool loadSession();
-    void saveSession();
+    void saveSession(bool keepHot = false);
     void handleEvents();
     void update();
     void render();

@@ -545,7 +545,8 @@ int Application::run(int argc, char** argv) {
         }
         static int frames = 0;
         if (frames < 3) startupTick("frame start");
-        handleEvents(); pollOpenRequests(); autoScrollSelectionDrag(); update(); render();
+        handleEvents(); pollOpenRequests(); autoScrollSelectionDrag();
+        if (acPending_ && (Sint32)(SDL_GetTicks() - acDueAt_) >= 0) { acPending_ = false; updateAutocomplete(); } update(); render();
         if (showWindowPending_ && window_) { SDL_ShowWindow(window_); showWindowPending_ = false; }  // shown once the first frame is drawn, so it never appears blank
         if (frames < 3) { startupTick("frame done"); ++frames; }
         if (pluginHostStartPending_) {
@@ -887,8 +888,8 @@ bool Application::init(int argc, char** argv) {
         loadFolder(fs::absolute(argv[1], ec).string());
         sidebarVisible_ = true;
     } else if (argc > 1 && fs::exists(argv[1])) {
-        tabs_.clear();
-        selections_.clear();
+        // opening a file from outside keeps the previous session's tabs, as Sublime does
+        if (!loadSession()) { tabs_.clear(); selections_.clear(); }
         openFile(argv[1]);
     }
     else if (!loadSession()) newBuffer();
@@ -996,6 +997,28 @@ bool Application::loadSession() {
         for (auto& item : data["tabs"]) {
             if (!item.is_object()) continue;
             std::string path = item.value("path", "");
+            std::string hotName = item.value("hot", "");
+            if (!hotName.empty() && fs::path(hotName).filename() == fs::path(hotName)) {
+                std::ifstream hf(fs::path(paths_.localDir) / "hot" / hotName, std::ios::binary);
+                if (hf) {
+                    std::ostringstream hs; hs << hf.rdbuf();
+                    TabBuffer tab;
+                    tab.text = hs.str();
+                    tab.filePath = path;
+                    tab.fileName = path.empty() ? item.value("name", "untitled") : fs::path(path).filename().string();
+                    tab.dirty = true;
+                    tab.manualSyntaxName = item.value("manualSyntax", "");
+                    tab.scrollY = item.value("scrollY", 0.f);
+                    size_t cur = std::min<size_t>(item.value("cursor", 0ull), tab.text.size());
+                    size_t anc = std::min<size_t>(item.value("anchor", cur), tab.text.size());
+                    tab.selections.emplace_back(cur); tab.selections[0].anchor = anc;
+                    if (item.contains("folds") && item["folds"].is_array())
+                        for (auto& r : item["folds"]) if (r.is_array() && r.size() == 2) tab.foldedRegions.insert({r[0].get<int>(), r[1].get<int>()});
+                    tabs_.push_back(std::move(tab));
+                    if (!path.empty()) rememberRecentFile(path);
+                    continue;
+                }
+            }
             if (path.empty() || !fs::exists(path)) continue;
             std::ifstream tf(path, std::ios::binary);
             if (!tf) continue;
@@ -1031,6 +1054,9 @@ bool Application::loadSession() {
             size_t cursor = item.value("cursor", 0ull);
             if (cursor > tab.text.size()) cursor = tab.text.size();
             tab.selections.emplace_back(cursor);
+            tab.selections[0].anchor = std::min<size_t>(item.value("anchor", cursor), tab.text.size());
+            if (item.contains("folds") && item["folds"].is_array())
+                for (auto& r : item["folds"]) if (r.is_array() && r.size() == 2) tab.foldedRegions.insert({r[0].get<int>(), r[1].get<int>()});
             tabs_.push_back(std::move(tab));
             rememberRecentFile(path);
         }
@@ -1047,7 +1073,7 @@ bool Application::loadSession() {
     }
 }
 
-void Application::saveSession() {
+void Application::saveSession(bool keepHot) {
     if (warmIdle_) return;
     saveCurrentTab();
     try {
@@ -1057,15 +1083,33 @@ void Application::saveSession() {
         if (!sidebarRoot_.empty()) data["sidebar_root"] = sidebarRoot_;
         if (!extraFolders_.empty()) { data["extra_folders"] = nlohmann::json::array(); for (auto& extra : extraFolders_) data["extra_folders"].push_back(extra.path); }
         data["tabs"] = nlohmann::json::array();
+        // hot exit: unsaved edits and untitled buffers are kept beside the session and restored on launch
+        fs::path hotDir = fs::path(paths_.localDir) / "hot";
+        std::error_code hotEc;
+        if (keepHot) { fs::remove_all(hotDir, hotEc); fs::create_directories(hotDir, hotEc); }
         for (size_t i = 0; i < tabs_.size(); ++i) {
             auto& tab = tabs_[i];
-            if (tab.filePath.empty()) continue;
             if (tab.pluginOwned || tab.filePath.rfind("plugin://view/", 0) == 0) continue;
+            if (tab.preview && tab.filePath.empty()) continue;
+            constexpr size_t hotLimit = 8u * 1024u * 1024u;
+            bool plain = !tab.binaryView && !tab.largeFileGuarded;
+            bool wantsHot = keepHot && plain && !tab.preview && (tab.dirty || tab.filePath.empty()) && tab.text.size() <= hotLimit;
+            if (tab.filePath.empty() && !(wantsHot && !tab.text.empty())) continue;
             nlohmann::json item;
             item["path"] = tab.filePath;
             item["scrollY"] = tab.scrollY;
             item["cursor"] = tab.selections.empty() ? 0 : tab.selections[0].cursor;
+            item["anchor"] = tab.selections.empty() ? 0 : tab.selections[0].anchor;
             if (!tab.manualSyntaxName.empty()) item["manualSyntax"] = tab.manualSyntaxName;
+            if (!tab.foldedRegions.empty()) {
+                item["folds"] = nlohmann::json::array();
+                for (auto& r : tab.foldedRegions) item["folds"].push_back({r.first, r.second});
+            }
+            if (wantsHot) {
+                std::string hotName = "tab" + std::to_string(data["tabs"].size()) + ".txt";
+                std::ofstream hf(hotDir / hotName, std::ios::binary);
+                if (hf) { hf << tab.text; item["hot"] = hotName; item["name"] = tab.fileName; }
+            }
             if (i == activeTab_) data["active_tab"] = data["tabs"].size();
             data["tabs"].push_back(item);
         }
@@ -1168,7 +1212,8 @@ void Application::insertText(const std::string& text) {
     while (wStart > 0 && (isalnum(textBuffer[wStart-1]) || textBuffer[wStart-1] == '_')) --wStart;
     acPrefix_ = textBuffer.substr(wStart, newPos - wStart);
     acPrefixStart_ = wStart;
-    updateAutocomplete();
+    if (acDelayMs_ > 0) { acActive_ = false; acDueAt_ = SDL_GetTicks() + (Uint32)acDelayMs_; acPending_ = true; }
+    else updateAutocomplete();
 }
 void Application::insertAtCursor(const std::string& text) { insertText(text); }
 void Application::deleteSelection() {
@@ -1316,6 +1361,10 @@ void Application::loadCaretSettings() {
     caretBlinkMs_ = std::clamp(settings.get<int>("caret_blink_interval", 500), 50, 5000);
     hidePointerTyping_ = settings.get<bool>("hide_pointer_while_typing", false);
     selBorder_ = settings.get<bool>("selection_border", false);
+    fadeFold_ = settings.get<bool>("fade_fold_buttons", true);
+    autoCompleteOn_ = settings.get<bool>("auto_complete", true);
+    acDelayMs_ = std::max(0, settings.get<int>("auto_complete_delay", 0));
+    fontAtlas().setLinePadding(static_cast<float>(settings.get<int>("line_padding_top", 0) + settings.get<int>("line_padding_bottom", 0)));
     copyEmpty_ = settings.get<bool>("copy_with_empty_selection", true);
     moveToLimit_ = settings.get<bool>("move_to_limit_on_up_down", false);
     relNums_ = settings.get<bool>("relative_line_numbers", false);
@@ -3264,6 +3313,8 @@ static const ExtraPaletteCommand extraPaletteCommands[] = {
     {"Unfold","Ctrl+Shift+]",[](Application& a){ a.unfoldCurrent(); }},
     {"Fold All","Ctrl+K Ctrl+1",[](Application& a){ a.commandFoldAll(); }},
     {"Unfold All","Ctrl+K Ctrl+J",[](Application& a){ a.commandUnfoldAll(); }},
+    {"Fold Tag Attributes","Ctrl+K Ctrl+T",[](Application& a){ a.foldTagAttributes(); }},
+    {"Select All Bookmarks","Alt+F2",[](Application& a){ a.selectAllBookmarks(); }},
     {"Find Next","F3",[](Application& a){ a.findNext(); }},
     {"Find Previous","Shift+F3",[](Application& a){ a.findPrevious(); }},
     {"Find All","Alt+F3",[](Application& a){ a.findAllUnder(); }},
@@ -3579,7 +3630,7 @@ void Application::updateGotoResults() {
 
 void Application::updateAutocomplete() {
     acItems_.clear(); acInsert_.clear(); acActive_ = false;
-    if (acPrefix_.size() < 2) return;
+    if (!autoCompleteOn_ || acPrefix_.size() < 2) return;
     std::unordered_map<std::string, size_t> nearest;   // word -> distance of its closest occurrence to the caret
     size_t caret = std::min(selections_[0].cursor, textBuffer.size());
     size_t from = caret > 400000 ? caret - 400000 : 0, to = std::min(textBuffer.size(), caret + 400000);   // keeps typing quick in huge files
@@ -3880,6 +3931,19 @@ void Application::prevBookmark() {
     ensureCursorVisible();
 }
 void Application::clearBookmarks() { bookmarks_.clear(); }
+void Application::selectAllBookmarks() {
+    if (bookmarks_.empty()) return;
+    std::vector<SelRange> next;
+    for (int ln : bookmarks_) {
+        if (ln < 0 || static_cast<size_t>(ln) >= totalLines()) continue;
+        size_t s = lineStartForLine(ln), e = lineEnd(s);
+        SelRange sel(s); sel.anchor = s; sel.cursor = e;
+        next.push_back(sel);
+    }
+    if (next.empty()) return;
+    selections_ = std::move(next);
+    ensureCursorVisible();
+}
 
 // ── convert case ──
 
@@ -5491,7 +5555,7 @@ void Application::handleEvents() {
                 if (ctrl && sym == SDLK_b) { toggleSidebar(); continue; }
                 if (ctrl && sym == SDLK_z) { if (shift) revertAllModifications(); else revertHunk(); continue; }
                 if (ctrl && sym == SDLK_v) { openPasteHistory(); continue; }
-                if (ctrl && sym == SDLK_t) { closeTag(); continue; }
+                if (ctrl && sym == SDLK_t) { foldTagAttributes(); continue; }
                 if (ctrl && sym == SDLK_RIGHTBRACKET) { reindent(); continue; }
                 if (sym == SDLK_LEFT || sym == SDLK_RIGHT) { if (shift) moveFileToNeighboringGroup(sym == SDLK_RIGHT); else focusNeighboringGroup(sym == SDLK_RIGHT); continue; }
                 if (sym == SDLK_UP) { newGroup(); continue; }
@@ -5555,6 +5619,7 @@ void Application::handleEvents() {
             else if (ctrl && sym == SDLK_o) openFileDialog();
             else if (ctrl && sym == SDLK_F2) { toggleBookmark(); }
             else if (ctrl && shift && sym == SDLK_F2) { clearBookmarks(); }
+            else if (sym == SDLK_F2 && (mod & KMOD_ALT)) { selectAllBookmarks(); }
             else if (sym == SDLK_F2 && (mod & KMOD_SHIFT)) { prevBookmark(); }
             else if (sym == SDLK_F2 && !(mod & KMOD_CTRL)) { nextBookmark(); }
             else if (sym == SDLK_F11 && !(mod & KMOD_SHIFT)) { toggleFullscreen(); }
@@ -6480,10 +6545,13 @@ void Application::render() {
             fv.insert(fv.end(),{x0,y0,0,0,r,g,b,a, x1,y1,0,0,r,g,b,a, x2,y2,0,0,r,g,b,a});
         };
         float gy = textOriginY + firstRenderLine * lineStep - scrollY_;
+        float gutterEdge = activePaneLeft + gutter_->width();
+        bool gutterHot = mouseX_ >= (int)activePaneLeft && mouseX_ < (int)gutterEdge && mouseY_ >= (int)tbH && mouseY_ < (int)editorBottom;
         for (size_t ln = firstRenderLine; ln <= lastRenderLine && ln < totalLines(); ++ln) {
             if (isFolded(ln)) continue;
             if (gy + lineStep < tbH || gy > editorBottom) { gy += lineStep; continue; }
             bool foldable = isFoldableLine(ln) || isFoldStart(ln);
+            if (foldable && fadeFold_ && !gutterHot && !isFoldStart(ln)) foldable = false;   // fade_fold_buttons: arrows appear while the mouse is over the gutter
             if (foldable) {
                 float tx = 6.f, ty = gy + lineStep / 2.f - 4.f;
                 if (isFoldStart(ln)) tri(tx, ty, tx, ty + 8.f, tx + 7.f, ty + 4.f, 0.72f, 0.72f, 0.76f, 1.f);
@@ -7314,7 +7382,7 @@ void Application::shutdown() {
     if (pluginStartFuture_.valid()) pluginStartFuture_.wait();
     bool idleSpare = warmIdle_;
     removeWarmFiles();
-    saveSession();
+    saveSession(true);
     saveRecentFiles();
     if (window_ && !idleSpare) {
         int x = 0, y = 0, w = 0, h = 0;
