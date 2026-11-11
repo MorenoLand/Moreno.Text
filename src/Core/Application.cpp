@@ -5019,6 +5019,13 @@ void Application::handleEvents() {
             }
         }
         if (handleSidebarEvent(e, (float)wh, titlebar_->height() + tabBarH_, statusbar_->height())) continue;
+#ifdef _WIN32
+        // A native maximize (Win+Up, snapping to the top edge) would cover the taskbar on a borderless window; use the work area instead.
+        if (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_MAXIMIZED && e.window.windowID == SDL_GetWindowID(window_)) {
+            SDL_RestoreWindow(window_);
+            if (!borderlessMaximized_) toggleMaximize();
+        }
+#endif
         if (e.type == SDL_WINDOWEVENT && (e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED || e.window.event == SDL_WINDOWEVENT_RESIZED)) {
             SDL_GetWindowSize(window_, &ww, &wh); resizeRendererForWindow(window_); titlebar_->layout(ww); render();
         }
